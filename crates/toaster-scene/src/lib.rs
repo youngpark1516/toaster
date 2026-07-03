@@ -6,5 +6,5 @@ pub mod transform;
 
 pub use loader::load_scene;
 pub use material::Material;
-pub use object::Sphere;
-pub use scene::{CameraSettings, RenderSettings, Scene};
+pub use object::{Sphere, Triangle};
+pub use scene::{Background, CameraSettings, RenderSettings, Scene};

@@ -1,7 +1,7 @@
 use crate::{
     material::Material,
-    object::Sphere,
-    scene::{CameraSettings, RenderSettings, Scene},
+    object::{Sphere, Triangle},
+    scene::{Background, CameraSettings, RenderSettings, Scene},
 };
 use anyhow::{bail, Context, Result};
 use glam::Vec3;
@@ -33,6 +33,16 @@ struct RenderFile {
     #[serde(alias = "samples_per_pixel")]
     samples: u32,
     max_bounces: u32,
+    #[serde(default)]
+    background: BackgroundFile,
+}
+
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum BackgroundFile {
+    #[default]
+    Sky,
+    Black,
 }
 
 #[derive(Deserialize)]
@@ -48,6 +58,7 @@ enum MaterialData {
     Diffuse { albedo: Vec3 },
     Metal { albedo: Vec3, roughness: f32 },
     Dielectric { ior: f32 },
+    Emissive { color: Vec3, strength: f32 },
 }
 
 #[derive(Deserialize)]
@@ -56,6 +67,10 @@ enum ObjectFile {
     Sphere {
         center: Vec3,
         radius: f32,
+        material: String,
+    },
+    Triangle {
+        vertices: [Vec3; 3],
         material: String,
     },
 }
@@ -129,6 +144,16 @@ fn build_scene(file: SceneFile) -> Result<Scene> {
                 }
                 Material::Dielectric { ior }
             }
+            MaterialData::Emissive { color, strength } => {
+                validate_color(&material.name, "color", color)?;
+                if !strength.is_finite() || strength < 0.0 {
+                    bail!(
+                        "material '{}' strength must be finite and non-negative",
+                        material.name
+                    );
+                }
+                Material::Emissive { color, strength }
+            }
         };
 
         material_names.insert(material.name, materials.len());
@@ -136,6 +161,7 @@ fn build_scene(file: SceneFile) -> Result<Scene> {
     }
 
     let mut spheres = Vec::with_capacity(file.objects.len());
+    let mut triangles = Vec::with_capacity(file.objects.len());
     for object in file.objects {
         match object {
             ObjectFile::Sphere {
@@ -156,6 +182,22 @@ fn build_scene(file: SceneFile) -> Result<Scene> {
                     material_index,
                 });
             }
+            ObjectFile::Triangle { vertices, material } => {
+                if vertices.iter().any(|vertex| !vertex.is_finite()) {
+                    bail!("triangle vertices must be finite");
+                }
+                let edges = [vertices[1] - vertices[0], vertices[2] - vertices[0]];
+                if edges[0].cross(edges[1]).length_squared() <= f32::EPSILON {
+                    bail!("triangle vertices must not be collinear");
+                }
+                let material_index = material_names.get(&material).copied().with_context(|| {
+                    format!("triangle references unknown material '{material}'")
+                })?;
+                triangles.push(Triangle {
+                    vertices,
+                    material_index,
+                });
+            }
         }
     }
 
@@ -171,15 +213,24 @@ fn build_scene(file: SceneFile) -> Result<Scene> {
             height: file.render.height,
             samples: file.render.samples,
             max_bounces: file.render.max_bounces,
+            background: match file.render.background {
+                BackgroundFile::Sky => Background::Sky,
+                BackgroundFile::Black => Background::Black,
+            },
         },
         materials,
         spheres,
+        triangles,
     })
 }
 
 fn validate_albedo(name: &str, albedo: Vec3) -> Result<()> {
-    if !albedo.is_finite() || albedo.cmplt(Vec3::ZERO).any() || albedo.cmpgt(Vec3::ONE).any() {
-        bail!("material '{name}' albedo must be between 0 and 1");
+    validate_color(name, "albedo", albedo)
+}
+
+fn validate_color(name: &str, field: &str, color: Vec3) -> Result<()> {
+    if !color.is_finite() || color.cmplt(Vec3::ZERO).any() || color.cmpgt(Vec3::ONE).any() {
+        bail!("material '{name}' {field} must be between 0 and 1");
     }
     Ok(())
 }
@@ -251,6 +302,34 @@ mod tests {
             }
         );
         assert_eq!(scene.materials[2], Material::Dielectric { ior: 1.5 });
+    }
+
+    #[test]
+    fn accepts_emissive_material_triangle_and_black_background() {
+        let scene = parse(
+            r#"{
+            "camera":{"position":[0,0,1],"look_at":[0,0,0],"fov_degrees":45},
+            "render":{"width":1,"height":1,"samples":1,"max_bounces":1,"background":"black"},
+            "materials":[{"name":"light","type":"emissive","color":[1,0.8,0.6],"strength":5}],
+            "objects":[{
+                "type":"triangle",
+                "vertices":[[-1,-1,0],[1,-1,0],[0,1,0]],
+                "material":"light"
+            }]
+        }"#,
+        )
+        .unwrap();
+
+        assert_eq!(scene.render.background, Background::Black);
+        assert_eq!(scene.triangles.len(), 1);
+        assert_eq!(scene.triangles[0].material_index, 0);
+        assert_eq!(
+            scene.materials[0],
+            Material::Emissive {
+                color: Vec3::new(1.0, 0.8, 0.6),
+                strength: 5.0
+            }
+        );
     }
 
     #[test]

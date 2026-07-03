@@ -1,4 +1,7 @@
-use crate::{material::Material, object::Sphere};
+use crate::{
+    material::Material,
+    object::{Sphere, Triangle},
+};
 use glam::Vec3;
 
 #[derive(Clone, Debug)]
@@ -7,6 +10,7 @@ pub struct Scene {
     pub render: RenderSettings,
     pub materials: Vec<Material>,
     pub spheres: Vec<Sphere>,
+    pub triangles: Vec<Triangle>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -23,4 +27,12 @@ pub struct RenderSettings {
     pub height: u32,
     pub samples: u32,
     pub max_bounces: u32,
+    pub background: Background,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Background {
+    #[default]
+    Sky,
+    Black,
 }

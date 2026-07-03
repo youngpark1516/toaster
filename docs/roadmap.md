@@ -2,7 +2,11 @@
 
 ## Phase 1: CPU reference renderer
 
-Define rays, cameras, spheres, diffuse materials, sampling, accumulation, and PNG output. Favor clarity and tests over speed.
+Complete: rays, cameras, spheres, diffuse/metal/dielectric scattering, sampling, accumulation, and PNG output.
+
+## Phase 1.5: Emission and Cornell box
+
+Add emissive area lights and initial triangle intersections, then demonstrate indirect illumination and color bleeding in a Cornell box. Triangle support remains a simple linear scan until BVH work begins.
 
 ## Phase 2: GPU renderer
 
@@ -19,4 +23,3 @@ Import glTF meshes, add textures and environment lighting, then build reusable p
 ## Phase 5: Preview server
 
 Serve render status and images through a small browser-facing service without turning Toaster into a full editor.
-

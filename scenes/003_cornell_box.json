@@ -1,1 +1,44 @@
-{}
+{
+  "camera": {
+    "position": [0.0, 2.0, 7.0],
+    "look_at": [0.0, 2.0, -2.0],
+    "up": [0.0, 1.0, 0.0],
+    "fov_degrees": 40.0
+  },
+  "render": {
+    "width": 800,
+    "height": 800,
+    "samples": 64,
+    "max_bounces": 12,
+    "background": "black"
+  },
+  "materials": [
+    { "name": "white", "type": "diffuse", "albedo": [0.73, 0.73, 0.73] },
+    { "name": "red", "type": "diffuse", "albedo": [0.65, 0.05, 0.05] },
+    { "name": "green", "type": "diffuse", "albedo": [0.12, 0.45, 0.15] },
+    { "name": "light", "type": "emissive", "color": [1.0, 0.9, 0.7], "strength": 15.0 },
+    { "name": "metal", "type": "metal", "albedo": [0.8, 0.8, 0.85], "roughness": 0.08 }
+  ],
+  "objects": [
+    { "type": "triangle", "vertices": [[-2,0,0],[2,0,-4],[2,0,0]], "material": "white" },
+    { "type": "triangle", "vertices": [[-2,0,0],[-2,0,-4],[2,0,-4]], "material": "white" },
+
+    { "type": "triangle", "vertices": [[-2,4,0],[2,4,0],[2,4,-4]], "material": "white" },
+    { "type": "triangle", "vertices": [[-2,4,0],[2,4,-4],[-2,4,-4]], "material": "white" },
+
+    { "type": "triangle", "vertices": [[-2,0,-4],[-2,4,-4],[2,4,-4]], "material": "white" },
+    { "type": "triangle", "vertices": [[-2,0,-4],[2,4,-4],[2,0,-4]], "material": "white" },
+
+    { "type": "triangle", "vertices": [[-2,0,0],[-2,4,-4],[-2,0,-4]], "material": "red" },
+    { "type": "triangle", "vertices": [[-2,0,0],[-2,4,0],[-2,4,-4]], "material": "red" },
+
+    { "type": "triangle", "vertices": [[2,0,0],[2,0,-4],[2,4,-4]], "material": "green" },
+    { "type": "triangle", "vertices": [[2,0,0],[2,4,-4],[2,4,0]], "material": "green" },
+
+    { "type": "triangle", "vertices": [[-0.8,3.98,-1.3],[0.8,3.98,-2.7],[0.8,3.98,-1.3]], "material": "light" },
+    { "type": "triangle", "vertices": [[-0.8,3.98,-1.3],[-0.8,3.98,-2.7],[0.8,3.98,-2.7]], "material": "light" },
+
+    { "type": "sphere", "center": [-0.8,0.7,-2.5], "radius": 0.7, "material": "white" },
+    { "type": "sphere", "center": [0.9,0.7,-2.1], "radius": 0.7, "material": "metal" }
+  ]
+}

@@ -20,17 +20,17 @@ Install a recent stable Rust toolchain, then run:
 ```sh
 cargo check
 cargo run -p toaster-cli -- info
-cargo run -p toaster-cli -- cpu-render scenes/001_spheres.json --out out/test.png
+cargo run -p toaster-cli -- cpu-render scenes/003_cornell_box.json --out out/cornell.png
 ```
 
-The render commands are placeholders in this setup milestone and do not yet write images.
+The CPU renderer supports spheres, triangles, diffuse/metal/glass materials, and emissive area lights. Higher sample counts produce cleaner images but take longer in the current single-threaded reference renderer.
 
 ## Milestones
 
-1. CPU sphere path tracer
-2. `wgpu` compute renderer and image readback
-3. Triangle meshes and BVH acceleration
-4. glTF assets and procedural scenes
-5. Lightweight browser preview server
+1. ✅ CPU sphere path tracer and material scattering
+2. ✅ Emissive materials, initial triangles, and Cornell box
+3. `wgpu` compute renderer and image readback
+4. Triangle meshes and BVH acceleration
+5. glTF assets, procedural scenes, and browser preview
 
 See [the roadmap](docs/roadmap.md) and [architecture](docs/architecture.md) for more detail.

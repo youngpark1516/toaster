@@ -2,7 +2,7 @@ use crate::intersect::{intersect_scene, HitRecord};
 use glam::Vec3;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use toaster_core::{camera::Camera, image_buffer::ImageBuffer, ray::Ray};
-use toaster_scene::{Material, Scene};
+use toaster_scene::{Background, Material, Scene};
 
 const RENDER_SEED: u64 = 0x0054_4f41_5354_4552;
 
@@ -43,16 +43,25 @@ pub fn ray_color<R: Rng + ?Sized>(
         return Vec3::ZERO;
     }
 
-    if let Some(hit) = intersect_scene(ray, &scene.spheres, 0.001) {
-        if let Some(scatter) = scatter(ray, &hit, scene.materials[hit.material_index], rng) {
+    if let Some(hit) = intersect_scene(ray, scene, 0.001) {
+        let material = scene.materials[hit.material_index];
+        if let Material::Emissive { color, strength } = material {
+            return color * strength;
+        }
+        if let Some(scatter) = scatter(ray, &hit, material, rng) {
             return scatter.attenuation * ray_color(&scatter.ray, scene, rng, remaining_depth - 1);
         }
         return Vec3::ZERO;
     }
 
-    let direction = ray.direction.normalize();
-    let blend = 0.5 * (direction.y + 1.0);
-    Vec3::ONE.lerp(Vec3::new(0.35, 0.65, 1.0), blend)
+    match scene.render.background {
+        Background::Sky => {
+            let direction = ray.direction.normalize();
+            let blend = 0.5 * (direction.y + 1.0);
+            Vec3::ONE.lerp(Vec3::new(0.35, 0.65, 1.0), blend)
+        }
+        Background::Black => Vec3::ZERO,
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -108,6 +117,7 @@ fn scatter<R: Rng + ?Sized>(
                 attenuation,
             })
         }
+        Material::Emissive { .. } => None,
     }
 }
 
@@ -149,7 +159,7 @@ fn random_in_unit_sphere<R: Rng + ?Sized>(rng: &mut R) -> Vec3 {
 mod tests {
     use super::*;
     use rand::SeedableRng;
-    use toaster_scene::{CameraSettings, Material, RenderSettings, Sphere};
+    use toaster_scene::{Background, CameraSettings, Material, RenderSettings, Sphere};
 
     fn test_scene(albedo: Vec3) -> Scene {
         Scene {
@@ -164,6 +174,7 @@ mod tests {
                 height: 5,
                 samples: 1,
                 max_bounces: 4,
+                background: Background::Sky,
             },
             materials: vec![Material::Diffuse { albedo }],
             spheres: vec![Sphere {
@@ -171,6 +182,7 @@ mod tests {
                 radius: 0.7,
                 material_index: 0,
             }],
+            triangles: Vec::new(),
         }
     }
 
@@ -333,6 +345,27 @@ mod tests {
             assert!(scattered.ray.direction.is_finite());
             assert!((scattered.ray.direction.length() - 1.0).abs() < 1e-5);
         }
+    }
+
+    #[test]
+    fn emissive_hit_returns_emitted_radiance_without_scattering() {
+        let mut scene = test_scene(Vec3::ONE);
+        scene.materials[0] = Material::Emissive {
+            color: Vec3::new(1.0, 0.5, 0.25),
+            strength: 4.0,
+        };
+        let mut rng = StdRng::seed_from_u64(9);
+        let color = ray_color(&Ray::new(Vec3::ZERO, -Vec3::Z), &scene, &mut rng, 4);
+        assert!(color.abs_diff_eq(Vec3::new(4.0, 2.0, 1.0), 1e-6));
+    }
+
+    #[test]
+    fn black_background_returns_no_radiance() {
+        let mut scene = test_scene(Vec3::ONE);
+        scene.render.background = Background::Black;
+        let mut rng = StdRng::seed_from_u64(10);
+        let color = ray_color(&Ray::new(Vec3::ZERO, Vec3::Y), &scene, &mut rng, 4);
+        assert_eq!(color, Vec3::ZERO);
     }
 
     #[test]
