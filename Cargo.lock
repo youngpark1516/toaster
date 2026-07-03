@@ -1132,12 +1132,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "toaster-cpu",
+ "toaster-scene",
 ]
 
 [[package]]
 name = "toaster-core"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "glam",
  "image",
 ]
@@ -1146,6 +1149,7 @@ dependencies = [
 name = "toaster-cpu"
 version = "0.1.0"
 dependencies = [
+ "glam",
  "rand",
  "toaster-core",
  "toaster-scene",
