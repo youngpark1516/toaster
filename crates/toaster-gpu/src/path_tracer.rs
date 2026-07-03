@@ -1,0 +1,1 @@
+//! Compute path-tracing pipeline.

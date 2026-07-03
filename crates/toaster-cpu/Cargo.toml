@@ -1,0 +1,11 @@
+[package]
+name = "toaster-cpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rand.workspace = true
+toaster-core = { path = "../toaster-core" }
+toaster-scene = { path = "../toaster-scene" }
+

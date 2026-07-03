@@ -1,0 +1,9 @@
+[package]
+name = "toaster-bvh"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+glam.workspace = true
+

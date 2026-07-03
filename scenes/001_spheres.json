@@ -1,0 +1,23 @@
+{
+  "camera": {
+    "position": [0.0, 1.0, 5.0],
+    "look_at": [0.0, 0.5, 0.0],
+    "up": [0.0, 1.0, 0.0],
+    "vertical_fov_degrees": 45.0
+  },
+  "render": {
+    "width": 800,
+    "height": 450,
+    "samples_per_pixel": 16,
+    "max_bounces": 8
+  },
+  "materials": [
+    { "name": "red", "type": "diffuse", "albedo": [0.8, 0.1, 0.1] },
+    { "name": "ground", "type": "diffuse", "albedo": [0.6, 0.6, 0.6] }
+  ],
+  "objects": [
+    { "type": "sphere", "center": [0.0, 0.5, 0.0], "radius": 0.5, "material": "red" },
+    { "type": "sphere", "center": [0.0, -1000.0, 0.0], "radius": 1000.0, "material": "ground" }
+  ]
+}
+

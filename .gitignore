@@ -1,0 +1,17 @@
+/target/
+/out/*
+!/out/.gitkeep
+*.png
+*.exr
+*.hdr
+*.tmp
+*.swp
+*~
+.DS_Store
+.env
+.env.*
+!.env.example
+.cluster/
+cluster.local.*
+local.toml
+
