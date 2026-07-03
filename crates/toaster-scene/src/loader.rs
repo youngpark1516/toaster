@@ -38,15 +38,16 @@ struct RenderFile {
 #[derive(Deserialize)]
 struct MaterialFile {
     name: String,
-    #[serde(rename = "type")]
-    kind: MaterialKind,
-    albedo: Vec3,
+    #[serde(flatten)]
+    material: MaterialData,
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum MaterialKind {
-    Diffuse,
+#[serde(tag = "type", rename_all = "snake_case")]
+enum MaterialData {
+    Diffuse { albedo: Vec3 },
+    Metal { albedo: Vec3, roughness: f32 },
+    Dielectric { ior: f32 },
 }
 
 #[derive(Deserialize)]
@@ -100,23 +101,38 @@ fn build_scene(file: SceneFile) -> Result<Scene> {
     let mut material_names = HashMap::new();
     let mut materials = Vec::with_capacity(file.materials.len());
     for material in file.materials {
-        if !material.albedo.is_finite()
-            || material.albedo.cmplt(Vec3::ZERO).any()
-            || material.albedo.cmpgt(Vec3::ONE).any()
-        {
-            bail!(
-                "material '{}' albedo must be between 0 and 1",
-                material.name
-            );
-        }
         if material_names.contains_key(&material.name) {
             bail!("duplicate material name '{}'", material.name);
         }
-        let _kind = material.kind;
+
+        let runtime_material = match material.material {
+            MaterialData::Diffuse { albedo } => {
+                validate_albedo(&material.name, albedo)?;
+                Material::Diffuse { albedo }
+            }
+            MaterialData::Metal { albedo, roughness } => {
+                validate_albedo(&material.name, albedo)?;
+                if !roughness.is_finite() {
+                    bail!("material '{}' roughness must be finite", material.name);
+                }
+                Material::Metal {
+                    albedo,
+                    roughness: roughness.clamp(0.0, 1.0),
+                }
+            }
+            MaterialData::Dielectric { ior } => {
+                if !ior.is_finite() || ior <= 0.0 {
+                    bail!(
+                        "material '{}' ior must be finite and greater than zero",
+                        material.name
+                    );
+                }
+                Material::Dielectric { ior }
+            }
+        };
+
         material_names.insert(material.name, materials.len());
-        materials.push(Material {
-            albedo: material.albedo,
-        });
+        materials.push(runtime_material);
     }
 
     let mut spheres = Vec::with_capacity(file.objects.len());
@@ -161,6 +177,13 @@ fn build_scene(file: SceneFile) -> Result<Scene> {
     })
 }
 
+fn validate_albedo(name: &str, albedo: Vec3) -> Result<()> {
+    if !albedo.is_finite() || albedo.cmplt(Vec3::ZERO).any() || albedo.cmpgt(Vec3::ONE).any() {
+        bail!("material '{name}' albedo must be between 0 and 1");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +219,55 @@ mod tests {
         )
         .unwrap();
         assert_eq!(scene.camera.fov_degrees, 45.0);
+    }
+
+    #[test]
+    fn accepts_all_material_types_and_clamps_roughness() {
+        let scene = parse(
+            r#"{
+            "camera":{"position":[0,0,1],"look_at":[0,0,0],"fov_degrees":45},
+            "render":{"width":1,"height":1,"samples":1,"max_bounces":1},
+            "materials":[
+                {"name":"matte","type":"diffuse","albedo":[0.2,0.3,0.4]},
+                {"name":"metal","type":"metal","albedo":[0.8,0.8,0.8],"roughness":2.0},
+                {"name":"glass","type":"dielectric","ior":1.5}
+            ],
+            "objects":[]
+        }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            scene.materials[0],
+            Material::Diffuse {
+                albedo: Vec3::new(0.2, 0.3, 0.4)
+            }
+        );
+        assert_eq!(
+            scene.materials[1],
+            Material::Metal {
+                albedo: Vec3::splat(0.8),
+                roughness: 1.0
+            }
+        );
+        assert_eq!(scene.materials[2], Material::Dielectric { ior: 1.5 });
+    }
+
+    #[test]
+    fn rejects_invalid_material_parameters() {
+        for material in [
+            r#"{"name":"bad","type":"diffuse","albedo":[1.1,0,0]}"#,
+            r#"{"name":"bad","type":"dielectric","ior":0}"#,
+        ] {
+            let json = format!(
+                r#"{{
+                "camera":{{"position":[0,0,1],"look_at":[0,0,0],"fov_degrees":45}},
+                "render":{{"width":1,"height":1,"samples":1,"max_bounces":1}},
+                "materials":[{material}],"objects":[]
+            }}"#
+            );
+            assert!(parse(&json).is_err());
+        }
     }
 
     #[test]

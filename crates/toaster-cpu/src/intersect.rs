@@ -6,6 +6,7 @@ pub struct HitRecord {
     pub distance: f32,
     pub point: glam::Vec3,
     pub normal: glam::Vec3,
+    pub front_face: bool,
     pub material_index: usize,
 }
 
@@ -35,7 +36,8 @@ pub fn intersect_sphere(
 
     let point = ray.at(distance);
     let outward_normal = (point - sphere.center) / sphere.radius;
-    let normal = if ray.direction.dot(outward_normal) < 0.0 {
+    let front_face = ray.direction.dot(outward_normal) < 0.0;
+    let normal = if front_face {
         outward_normal
     } else {
         -outward_normal
@@ -44,6 +46,7 @@ pub fn intersect_sphere(
         distance,
         point,
         normal,
+        front_face,
         material_index: sphere.material_index,
     })
 }
@@ -91,6 +94,7 @@ mod tests {
         .unwrap();
         assert!((hit.distance - 1.5).abs() < 1e-6);
         assert_eq!(hit.normal, Vec3::Z);
+        assert!(hit.front_face);
         assert_eq!(hit.material_index, 3);
     }
 
@@ -101,6 +105,7 @@ mod tests {
             intersect_sphere(&ray, &sphere(Vec3::ZERO, 1.0, 0), 0.001, f32::INFINITY).unwrap();
         assert!((hit.distance - 1.0).abs() < 1e-6);
         assert_eq!(hit.normal, -Vec3::X);
+        assert!(!hit.front_face);
     }
 
     #[test]
