@@ -13,3 +13,5 @@ anyhow.workspace = true
 clap.workspace = true
 toaster-cpu = { path = "../toaster-cpu" }
 toaster-scene = { path = "../toaster-scene" }
+toaster-gpu = { path = "../toaster-gpu" }
+pollster = "0.4"

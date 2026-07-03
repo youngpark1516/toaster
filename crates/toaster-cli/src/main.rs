@@ -26,11 +26,13 @@ fn main() -> anyhow::Result<()> {
             println!("Rendered in {:.2?}", start.elapsed());
         }
         Command::GpuRender { scene_path, out } => {
-            println!(
-                "GPU render placeholder: {} -> {}",
-                scene_path.display(),
-                out.display()
-            );
+            pollster::block_on(toaster_gpu::create_gpu_context())?;
+            println!("GPU initialization succeeded.");
+            // println!(
+            //     "GPU render placeholder: {} -> {}",
+            //     scene_path.display(),
+            //     out.display()
+            // );
         }
         Command::Server { host, port } => {
             println!("Server placeholder: http://{host}:{port}");

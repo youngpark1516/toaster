@@ -1132,7 +1132,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "pollster",
  "toaster-cpu",
+ "toaster-gpu",
  "toaster-scene",
 ]
 
