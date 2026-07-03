@@ -1,10 +1,12 @@
 use crate::intersect::{intersect_scene, HitRecord};
+use crate::light::AreaLights;
 use glam::Vec3;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use toaster_core::{camera::Camera, image_buffer::ImageBuffer, ray::Ray};
 use toaster_scene::{Background, Material, Scene};
 
 const RENDER_SEED: u64 = 0x0054_4f41_5354_4552;
+const RAY_EPSILON: f32 = 0.001;
 
 pub fn render(scene: &Scene) -> ImageBuffer {
     let settings = scene.render;
@@ -16,6 +18,8 @@ pub fn render(scene: &Scene) -> ImageBuffer {
         settings.width as f32 / settings.height as f32,
     )
     .expect("scene loader validates camera settings");
+    let lights = AreaLights::collect(scene);
+    println!("Emissive area lights: {}", lights.len());
 
     let mut image = ImageBuffer::new(settings.width, settings.height);
     let mut rng = StdRng::seed_from_u64(RENDER_SEED);
@@ -25,7 +29,14 @@ pub fn render(scene: &Scene) -> ImageBuffer {
             for _ in 0..settings.samples {
                 let u = (x as f32 + rng.random::<f32>()) / settings.width as f32;
                 let v = 1.0 - (y as f32 + rng.random::<f32>()) / settings.height as f32;
-                color += ray_color(&camera.ray(u, v), scene, &mut rng, settings.max_bounces);
+                color += ray_color_inner(
+                    &camera.ray(u, v),
+                    scene,
+                    &lights,
+                    &mut rng,
+                    settings.max_bounces,
+                    true,
+                );
             }
             image.set_pixel(x, y, color / settings.samples as f32);
         }
@@ -39,17 +50,47 @@ pub fn ray_color<R: Rng + ?Sized>(
     rng: &mut R,
     remaining_depth: u32,
 ) -> Vec3 {
+    let lights = AreaLights::collect(scene);
+    ray_color_inner(ray, scene, &lights, rng, remaining_depth, true)
+}
+
+fn ray_color_inner<R: Rng + ?Sized>(
+    ray: &Ray,
+    scene: &Scene,
+    lights: &AreaLights,
+    rng: &mut R,
+    remaining_depth: u32,
+    include_emission: bool,
+) -> Vec3 {
     if remaining_depth == 0 {
         return Vec3::ZERO;
     }
 
-    if let Some(hit) = intersect_scene(ray, scene, 0.001) {
+    if let Some(hit) = intersect_scene(ray, scene, RAY_EPSILON) {
         let material = scene.materials[hit.material_index];
         if let Material::Emissive { color, strength } = material {
-            return color * strength;
+            return if include_emission {
+                color * strength
+            } else {
+                Vec3::ZERO
+            };
         }
         if let Some(scatter) = scatter(ray, &hit, material, rng) {
-            return scatter.attenuation * ray_color(&scatter.ray, scene, rng, remaining_depth - 1);
+            let next_include_emission = !matches!(material, Material::Diffuse { .. });
+            let indirect = scatter.attenuation
+                * ray_color_inner(
+                    &scatter.ray,
+                    scene,
+                    lights,
+                    rng,
+                    remaining_depth - 1,
+                    next_include_emission,
+                );
+            let direct = match material {
+                Material::Diffuse { albedo } => direct_light(&hit, albedo, scene, lights, rng),
+                _ => Vec3::ZERO,
+            };
+            return direct + indirect;
         }
         return Vec3::ZERO;
     }
@@ -62,6 +103,44 @@ pub fn ray_color<R: Rng + ?Sized>(
         }
         Background::Black => Vec3::ZERO,
     }
+}
+
+fn direct_light<R: Rng + ?Sized>(
+    hit: &HitRecord,
+    albedo: Vec3,
+    scene: &Scene,
+    lights: &AreaLights,
+    rng: &mut R,
+) -> Vec3 {
+    let Some(light) = lights.sample(rng) else {
+        return Vec3::ZERO;
+    };
+
+    let shadow_origin = hit.point + hit.normal * RAY_EPSILON;
+    let to_light = light.position - shadow_origin;
+    let distance_squared = to_light.length_squared();
+    if distance_squared <= RAY_EPSILON * RAY_EPSILON {
+        return Vec3::ZERO;
+    }
+
+    let distance = distance_squared.sqrt();
+    let direction = to_light / distance;
+    let surface_cosine = hit.normal.dot(direction).max(0.0);
+    let light_cosine = light.normal.dot(-direction).max(0.0);
+    if surface_cosine <= 0.0 || light_cosine <= 0.0 {
+        return Vec3::ZERO;
+    }
+
+    let shadow_ray = Ray::new(shadow_origin, direction);
+    if intersect_scene(&shadow_ray, scene, RAY_EPSILON)
+        .is_some_and(|blocker| blocker.distance < distance - 2.0 * RAY_EPSILON)
+    {
+        return Vec3::ZERO;
+    }
+
+    let diffuse_brdf = albedo / std::f32::consts::PI;
+    diffuse_brdf * light.emission * surface_cosine * light_cosine
+        / (distance_squared * light.pdf_area)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -159,7 +238,7 @@ fn random_in_unit_sphere<R: Rng + ?Sized>(rng: &mut R) -> Vec3 {
 mod tests {
     use super::*;
     use rand::SeedableRng;
-    use toaster_scene::{Background, CameraSettings, Material, RenderSettings, Sphere};
+    use toaster_scene::{Background, CameraSettings, Material, RenderSettings, Sphere, Triangle};
 
     fn test_scene(albedo: Vec3) -> Scene {
         Scene {
@@ -193,6 +272,61 @@ mod tests {
             normal,
             front_face,
             material_index: 0,
+        }
+    }
+
+    fn direct_light_scene(blocked: bool) -> Scene {
+        let mut triangles = vec![Triangle {
+            vertices: [
+                Vec3::new(-1.0, 2.0, -1.0),
+                Vec3::new(1.0, 2.0, -1.0),
+                Vec3::new(0.0, 2.0, 1.0),
+            ],
+            material_index: 1,
+        }];
+        if blocked {
+            triangles.extend([
+                Triangle {
+                    vertices: [
+                        Vec3::new(-3.0, 1.0, -3.0),
+                        Vec3::new(3.0, 1.0, 3.0),
+                        Vec3::new(3.0, 1.0, -3.0),
+                    ],
+                    material_index: 0,
+                },
+                Triangle {
+                    vertices: [
+                        Vec3::new(-3.0, 1.0, -3.0),
+                        Vec3::new(-3.0, 1.0, 3.0),
+                        Vec3::new(3.0, 1.0, 3.0),
+                    ],
+                    material_index: 0,
+                },
+            ]);
+        }
+        Scene {
+            camera: CameraSettings {
+                position: Vec3::Z,
+                look_at: Vec3::ZERO,
+                up: Vec3::Y,
+                fov_degrees: 45.0,
+            },
+            render: RenderSettings {
+                width: 1,
+                height: 1,
+                samples: 1,
+                max_bounces: 1,
+                background: Background::Black,
+            },
+            materials: vec![
+                Material::Diffuse { albedo: Vec3::ONE },
+                Material::Emissive {
+                    color: Vec3::ONE,
+                    strength: 5.0,
+                },
+            ],
+            spheres: Vec::new(),
+            triangles,
         }
     }
 
@@ -365,6 +499,36 @@ mod tests {
         scene.render.background = Background::Black;
         let mut rng = StdRng::seed_from_u64(10);
         let color = ray_color(&Ray::new(Vec3::ZERO, Vec3::Y), &scene, &mut rng, 4);
+        assert_eq!(color, Vec3::ZERO);
+    }
+
+    #[test]
+    fn direct_light_is_positive_when_visible() {
+        let scene = direct_light_scene(false);
+        let lights = AreaLights::collect(&scene);
+        let mut rng = StdRng::seed_from_u64(11);
+        let color = direct_light(
+            &test_hit(Vec3::Y, true),
+            Vec3::splat(0.5),
+            &scene,
+            &lights,
+            &mut rng,
+        );
+        assert!(color.cmpgt(Vec3::ZERO).all());
+    }
+
+    #[test]
+    fn shadow_ray_removes_blocked_direct_light() {
+        let scene = direct_light_scene(true);
+        let lights = AreaLights::collect(&scene);
+        let mut rng = StdRng::seed_from_u64(11);
+        let color = direct_light(
+            &test_hit(Vec3::Y, true),
+            Vec3::splat(0.5),
+            &scene,
+            &lights,
+            &mut rng,
+        );
         assert_eq!(color, Vec3::ZERO);
     }
 
