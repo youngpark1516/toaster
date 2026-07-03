@@ -12,6 +12,7 @@ fn main() -> anyhow::Result<()> {
             println!("Output: {}", out.display());
             println!("Resolution: {}x{}", scene.render.width, scene.render.height);
             println!("Samples: {}", scene.render.samples);
+            println!("Max bounces: {}", scene.render.max_bounces);
 
             let start = Instant::now();
             let image = toaster_cpu::render(&scene);
