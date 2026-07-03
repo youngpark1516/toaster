@@ -25,6 +25,23 @@ cargo run -p toaster-cli -- cpu-render scenes/003_cornell_box.json --out out/cor
 
 The CPU renderer supports spheres, triangles, diffuse/metal/glass materials, and emissive area lights. Higher sample counts produce cleaner images but take longer in the current single-threaded reference renderer.
 
+### Render setting overrides
+
+Scene render settings are used by default. Override any combination of resolution, samples, and path depth from the command line:
+
+```sh
+cargo run -p toaster-cli -- cpu-render scenes/003_cornell_box.json \
+  --out out/cornell.png \
+  --samples 512 \
+  --width 800 \
+  --height 800 \
+  --max-bounces 12
+
+# A faster preview that keeps the scene's max-bounces setting:
+cargo run -p toaster-cli -- cpu-render scenes/003_cornell_box.json \
+  --out out/cornell-preview.png --width 400 --height 400 --samples 32
+```
+
 ## Milestones
 
 1. ✅ CPU sphere path tracer and material scattering

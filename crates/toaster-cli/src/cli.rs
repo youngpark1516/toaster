@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -18,6 +18,8 @@ pub enum Command {
         scene_path: PathBuf,
         #[arg(long)]
         out: PathBuf,
+        #[command(flatten)]
+        overrides: RenderOverrides,
     },
     GpuRender {
         scene_path: PathBuf,
@@ -31,4 +33,53 @@ pub enum Command {
         port: u16,
     },
     Info,
+}
+
+#[derive(Clone, Copy, Debug, Default, Args)]
+pub struct RenderOverrides {
+    /// Override the scene's samples per pixel.
+    #[arg(long)]
+    pub samples: Option<u32>,
+    /// Override the scene's output width.
+    #[arg(long)]
+    pub width: Option<u32>,
+    /// Override the scene's output height.
+    #[arg(long)]
+    pub height: Option<u32>,
+    /// Override the scene's maximum path depth.
+    #[arg(long)]
+    pub max_bounces: Option<u32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_cpu_render_overrides() {
+        let cli = Cli::try_parse_from([
+            "toaster",
+            "cpu-render",
+            "scene.json",
+            "--out",
+            "image.png",
+            "--samples",
+            "512",
+            "--width",
+            "800",
+            "--height",
+            "600",
+            "--max-bounces",
+            "12",
+        ])
+        .unwrap();
+
+        let Command::CpuRender { overrides, .. } = cli.command else {
+            panic!("expected cpu-render command");
+        };
+        assert_eq!(overrides.samples, Some(512));
+        assert_eq!(overrides.width, Some(800));
+        assert_eq!(overrides.height, Some(600));
+        assert_eq!(overrides.max_bounces, Some(12));
+    }
 }
