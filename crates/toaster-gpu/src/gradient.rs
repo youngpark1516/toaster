@@ -40,7 +40,7 @@ pub async fn render_gradient(out_path: &Path) -> Result<()> {
     let bind_group = create_bind_group(&context.device, &bind_group_layout, &buffers);
     println!("Gradient bind group created.");
 
-    let shader = load_shader(&context.device);
+    let shader = load_shader(&context.device, "Gradient Shader", include_str!("../../../shaders/gpu_gradient.wgsl"));
     println!("Gradient shader loaded.");
 
     let pipeline = create_pipeline(&context.device, &shader, &bind_group_layout);

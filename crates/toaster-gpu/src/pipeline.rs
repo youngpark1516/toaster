@@ -49,8 +49,7 @@ pub fn create_bind_group(
     })
 }
 
-pub fn load_shader(device: &wgpu::Device) -> wgpu::ShaderModule {
-    let shader_source = include_str!("../../../shaders/gpu_gradient.wgsl");
+pub fn load_shader(device: &wgpu::Device, label: &str, shader_source: &str) -> wgpu::ShaderModule {
     device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Gradient Shader"),
         source: wgpu::ShaderSource::Wgsl(shader_source.into()),
