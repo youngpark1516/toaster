@@ -16,8 +16,7 @@ pub async fn create_gpu_context() -> Result<GpuContext> {
             compatible_surface: None,
             force_fallback_adapter: false,
         })
-        .await
-        .expect("Failed to find a suitable GPU adapter");
+        .await?;
 
     let info = adapter.get_info();
     println!("Using GPU: {} ({:?})", info.name, info.backend);
@@ -30,8 +29,7 @@ pub async fn create_gpu_context() -> Result<GpuContext> {
             memory_hints: wgpu::MemoryHints::Performance,
             trace: wgpu::Trace::Off,
         })
-        .await
-        .expect("Failed to create device");
+        .await?;
 
     Ok(GpuContext {
         instance,
