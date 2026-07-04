@@ -1,4 +1,4 @@
-use crate::buffers::{GradientBuffers};
+use crate::buffers::GradientBuffers;
 
 pub fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

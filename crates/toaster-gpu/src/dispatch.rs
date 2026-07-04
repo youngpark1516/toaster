@@ -7,11 +7,14 @@ pub fn dispatch_compute_2d(
     queue: &wgpu::Queue,
     pipeline: &wgpu::ComputePipeline,
     bind_group: &wgpu::BindGroup,
-    buffers: &GradientBuffers,
-    params: &RenderParams,
+    output: &wgpu::Buffer,
+    readback: &wgpu::Buffer,
+    output_size: u64,
+    width: u32,
+    height: u32,
 ) -> Result<()> {
-    let workgroups_x = params.width.div_ceil(8);
-    let workgroups_y = params.height.div_ceil(8);
+    let workgroups_x = width.div_ceil(8);
+    let workgroups_y = height.div_ceil(8);
 
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("Command Encoder"),
@@ -26,13 +29,7 @@ pub fn dispatch_compute_2d(
         pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
     }
 
-    encoder.copy_buffer_to_buffer(
-        &buffers.output,
-        0,
-        &buffers.readback,
-        0,
-        buffers.output_size,
-    );
+    encoder.copy_buffer_to_buffer(output, 0, readback, 0, output_size);
 
     queue.submit(Some(encoder.finish()));
 
