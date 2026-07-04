@@ -8,6 +8,7 @@ license.workspace = true
 anyhow.workspace = true
 bytemuck.workspace = true
 pollster.workspace = true
+image.workspace = true
 wgpu.workspace = true
 toaster-core = { path = "../toaster-core" }
 toaster-scene = { path = "../toaster-scene" }

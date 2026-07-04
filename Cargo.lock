@@ -1163,6 +1163,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytemuck",
+ "image",
  "pollster",
  "toaster-core",
  "toaster-scene",
