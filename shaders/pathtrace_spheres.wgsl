@@ -99,23 +99,26 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let idx: u32 = y * params.width + x;
-
     rng_state = pcg_hash(idx ^ (params.frame_index * 9781u));
+    let num_samples: u32 = params.samples;
+    var color: vec4<f32> = vec4f(0, 0, 0, 0); 
 
-    let u: f32 = f32(x) / f32(params.width);
-    let v: f32 = 1 - (f32(y) / f32(params.height));
+    for (var i: u32 = 0; i < num_samples; i++) {
 
-    let ray: Ray = Ray(
+        let u: f32 = f32(x) / f32(params.width) + random_f32();
+        let v: f32 = 1 - (f32(y) / f32(params.height)) + random_f32();
+
+        let ray: Ray = Ray(
         camera.origin.xyz,
         normalize(camera.lower_left_corner.xyz 
             + u * camera.horizontal.xyz
             + v *camera.vertical.xyz
             - camera.origin.xyz)
-    );
+        );
 
-    let color: vec4<f32> = vec4f(ray_color(ray), 1.0);
-
-    output[idx] = color;
+        color += vec4f(ray_color(ray), 1.0);
+    }
+    output[idx] = color / f32(num_samples);
 }
 
 fn hit_sphere(ray: Ray, sphere: Sphere) -> HitRecord {
@@ -208,11 +211,11 @@ fn ray_color(ray: Ray) -> vec3<f32> {
         var attenuation: vec3<f32> = vec3f(0, 0, 0);
         var temp_ray: Ray = Ray(
             record.point,
-            reflect(cur_ray.direction, record.normal)
+            normalize(reflect(cur_ray.direction, record.normal))
         );
 
         switch(material.kind) {
-            case 0 { // diffuse
+            case 0: { // diffuse
                 var direction: vec3<f32> = record.normal + random_unit_vector();
                 if dot(direction, direction) < 1e-8 {
                     direction = record.normal;
@@ -220,7 +223,7 @@ fn ray_color(ray: Ray) -> vec3<f32> {
                 temp_ray = Ray(record.point, normalize(direction));
                 attenuation = material.albedo.xyz;
             }
-            case 1 { // metal
+            case 1: { // metal
                 let reflected = reflect(cur_ray.direction, record.normal);
                 let roughness = clamp(material.params.x, 0.0, 1.0);
                 let direction = reflected + roughness * random_unit_vector();
@@ -233,15 +236,15 @@ fn ray_color(ray: Ray) -> vec3<f32> {
                 );
                 attenuation = material.albedo.xyz;
             }
-            case 2 { // dielectric
+            case 2: { // dielectric
                 let refraction_ratio: f32 = select(
                     material.params.y, 
-                    1 / material.params.y, 
+                    1.0 / material.params.y, 
                     record.front_face
                 );
                 let unit_direction: vec3<f32> = normalize(cur_ray.direction);
                 let cos_theta: f32 = min(1.0, dot(-1 * unit_direction, record.normal));
-                let sin_theta: f32 = sqrt(1 - (cos_theta * cos_theta));
+                let sin_theta: f32 = max(0.0, sqrt(1 - (cos_theta * cos_theta)));
                 let cannot_refract: bool = (refraction_ratio * sin_theta) > 1.0;
                 var direction: vec3<f32>;
                 if cannot_refract || reflectance(cos_theta, refraction_ratio) > random_f32() {
@@ -249,14 +252,14 @@ fn ray_color(ray: Ray) -> vec3<f32> {
                 } else {
                     direction = refract(unit_direction, record.normal, refraction_ratio);
                 }
-                temp_ray = Ray(record.point, direction);
+                temp_ray = Ray(record.point, normalize(direction));
                 attenuation = vec3f(1, 1, 1);
             }
-            case 3 { // emissive
+            case 3: { // emissive
                 radiance += throughput * material.albedo.xyz * material.params.z;
                 break_loop = true;
             }
-            default {
+            default: {
                 break_loop = true;
             }
         }
