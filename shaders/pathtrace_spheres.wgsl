@@ -23,12 +23,12 @@ struct Sphere {
     center_radius: vec4<f32>,
 
     material_index: u32,
-    _pad0: vec3<u32>,
+    _pad0: array<u32, 3>,
 };
 
 struct Material {
     kind: u32,
-    _pad0: vec4<f32>,
+    _pad0: array<u32, 3>,
 
     albedo: vec4<f32>,
 
@@ -68,8 +68,29 @@ var<storage, read> spheres: array<Sphere>;
 @group(0) @binding(4)
 var<storage, read> materials: array<Material>;
 
+var<private> rng_state: u32;
+
+fn pcg_hash(input: u32) -> u32 {
+    var state = input * 747796405u + 2891336453u;
+    let word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+fn random_f32() -> f32 {
+    rng_state = pcg_hash(rng_state);
+    return f32(rng_state) / 4294967295.0;
+}
+
+fn random_unit_vector() -> vec3<f32> {
+    let z = random_f32() * 2.0 - 1.0;
+    let a = random_f32() * 6.2831853;
+    let r = sqrt(1.0 - z * z);
+    return vec3<f32>(r * cos(a), r * sin(a), z);
+}
+
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    
     let x: u32 = gid.x;
     let y: u32 = gid.y;
 
@@ -79,23 +100,26 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let idx: u32 = y * params.width + x;
 
+    rng_state = pcg_hash(idx ^ (params.frame_index * 9781u));
+
     let u: f32 = f32(x) / f32(params.width);
     let v: f32 = 1 - (f32(y) / f32(params.height));
 
     let ray: Ray = Ray(
         camera.origin.xyz,
-        camera.lower_left_corner.xyz 
+        normalize(camera.lower_left_corner.xyz 
             + u * camera.horizontal.xyz
             + v *camera.vertical.xyz
-            - camera.origin.xyz
+            - camera.origin.xyz)
     );
 
-    let color: vec4<f32> = ray_color(ray);
+    let color: vec4<f32> = vec4f(ray_color(ray), 1.0);
 
     output[idx] = color;
 }
 
 fn hit_sphere(ray: Ray, sphere: Sphere) -> HitRecord {
+    let MIN_DISTANCE: f32 = 0.001;
     let no_hit: HitRecord = HitRecord(
         3.4028235e38f,
         vec3<f32>(0, 0, 0),
@@ -114,19 +138,19 @@ fn hit_sphere(ray: Ray, sphere: Sphere) -> HitRecord {
         return no_hit;
     }
 
-    let sqrt_disc = sqrt(discriminant);
+    let sqrt_disc: f32 = sqrt(discriminant);
     var distance: f32 = (-1 * half_b - sqrt_disc) / a;
 
-    if distance < 0 {
+    if distance < MIN_DISTANCE {
         distance = (-1 * half_b + sqrt_disc) / a;
 
-        if distance < 0 {
+        if distance < MIN_DISTANCE {
             return no_hit;
         }
     }
 
     let point: vec3<f32> = at(ray, distance);
-    let test_norm: vec3<f32>  = (point - sphere.center_radius.xyz);
+    let test_norm: vec3<f32>  = (point - sphere.center_radius.xyz) / sphere.center_radius.w;
     let front_face: bool = dot(ray.direction, test_norm) < 0.0;
 
     let normal: vec3<f32>  = select(-1 * test_norm, test_norm, front_face);
@@ -140,9 +164,8 @@ fn hit_sphere(ray: Ray, sphere: Sphere) -> HitRecord {
     );
 }
 
-fn ray_color(ray: Ray) -> vec4<f32> {
-    let MAX_DISTANCE: f32 = 10000; //ARBITRARY MAGIC NUMBER CHANGE LATER
-    let num_sphere: u32 = arrayLength(&spheres);
+fn calc_intersections(ray: Ray) -> HitRecord {
+    let num_sphere: u32 = params.sphere_count;
     var record: HitRecord = HitRecord(
         3.4028235e38f,
         vec3<f32>(0, 0, 0),
@@ -160,9 +183,110 @@ fn ray_color(ray: Ray) -> vec4<f32> {
         }
     }
 
-    if (record.distance > MAX_DISTANCE) {
-        return vec4f(0.5, 0.7, 1.0, 1.0);
+    return record;
+}
+
+fn ray_color(ray: Ray) -> vec3<f32> {
+    let MAX_DISTANCE: f32 = 10000; //ARBITRARY MAGIC NUMBER CHANGE LATER
+    let max_bounces: u32 = params.max_bounces;
+
+    var throughput: vec3<f32> = vec3f(1, 1, 1);
+    var cur_ray: Ray = ray;
+    var radiance: vec3<f32> = vec3f(0,0,0);
+    var break_loop: bool = false;
+
+    for (var i: u32 = 0; i < max_bounces; i++) {
+        let record: HitRecord = calc_intersections(cur_ray);
+
+        if (record.distance > MAX_DISTANCE) {
+            let lerp_t: f32 = (normalize(cur_ray.direction).y + 1.0) * 0.5;
+            radiance += throughput * mix(vec3f(1.0, 1.0, 1.0), vec3f(0.35, 0.65, 1.0), lerp_t);
+            break;
+        }
+
+        let material: Material = materials[record.material_index];
+        var attenuation: vec3<f32> = vec3f(0, 0, 0);
+        var temp_ray: Ray = Ray(
+            record.point,
+            reflect(cur_ray.direction, record.normal)
+        );
+
+        switch(material.kind) {
+            case 0 { // diffuse
+                var direction: vec3<f32> = record.normal + random_unit_vector();
+                if dot(direction, direction) < 1e-8 {
+                    direction = record.normal;
+                }
+                temp_ray = Ray(record.point, normalize(direction));
+                attenuation = material.albedo.xyz;
+            }
+            case 1 { // metal
+                let reflected = reflect(cur_ray.direction, record.normal);
+                let roughness = clamp(material.params.x, 0.0, 1.0);
+                let direction = reflected + roughness * random_unit_vector();
+                if dot(direction, record.normal) <= 0.0 {
+                    break_loop = true;
+                }
+                temp_ray = Ray(
+                    record.point,
+                    normalize(direction)
+                );
+                attenuation = material.albedo.xyz;
+            }
+            case 2 { // dielectric
+                let refraction_ratio: f32 = select(
+                    material.params.y, 
+                    1 / material.params.y, 
+                    record.front_face
+                );
+                let unit_direction: vec3<f32> = normalize(cur_ray.direction);
+                let cos_theta: f32 = min(1.0, dot(-1 * unit_direction, record.normal));
+                let sin_theta: f32 = sqrt(1 - (cos_theta * cos_theta));
+                let cannot_refract: bool = (refraction_ratio * sin_theta) > 1.0;
+                var direction: vec3<f32>;
+                if cannot_refract || reflectance(cos_theta, refraction_ratio) > random_f32() {
+                    direction = reflect(unit_direction, record.normal);
+                } else {
+                    direction = refract(unit_direction, record.normal, refraction_ratio);
+                }
+                temp_ray = Ray(record.point, direction);
+                attenuation = vec3f(1, 1, 1);
+            }
+            case 3 { // emissive
+                radiance += throughput * material.albedo.xyz * material.params.z;
+                break_loop = true;
+            }
+            default {
+                break_loop = true;
+            }
+        }
+
+        if break_loop {
+            break;
+        }
+
+        throughput = throughput * attenuation;
+        cur_ray = temp_ray;
+
     }
 
-    return vec4f((normalize(record.normal) + vec3f(1, 1, 1)) * 0.5, 1);
+    return radiance;
+}
+
+fn reflect(dir: vec3<f32>, norm: vec3<f32>) -> vec3 <f32> {
+    return dir - dot(norm, dir) * 2 * norm;
+}
+
+fn refract(dir: vec3<f32>, norm: vec3<f32>, ratio: f32) -> vec3<f32> {
+    let cos_theta: f32 = min(dot(-dir, norm), 1.0);
+    let perpendicular: vec3<f32> = ratio * (dir + cos_theta * norm);
+    let parallel: vec3<f32> = -sqrt(abs(1.0 - dot(perpendicular, perpendicular))) * norm;
+    return perpendicular + parallel;
+}
+
+fn reflectance(cosine: f32, refraction_ratio: f32) -> f32 {
+    var r0 = ((1.0 - refraction_ratio) / (1.0 + refraction_ratio));
+    r0 = r0 * r0;
+    var temp: f32 = (1.0 - cosine);
+    return r0 + (1.0 - r0) * temp * temp * temp * temp * temp;
 }
