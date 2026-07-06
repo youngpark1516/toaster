@@ -105,8 +105,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     for (var i: u32 = 0; i < num_samples; i++) {
 
-        let u: f32 = f32(x) / f32(params.width) + random_f32();
-        let v: f32 = 1 - (f32(y) / f32(params.height)) + random_f32();
+        let u: f32 = (f32(x) + random_f32()) / f32(params.width);
+        let v: f32 = 1 - ((f32(y) + random_f32()) / f32(params.height));
 
         let ray: Ray = Ray(
         camera.origin.xyz,
@@ -244,7 +244,7 @@ fn ray_color(ray: Ray) -> vec3<f32> {
                 );
                 let unit_direction: vec3<f32> = normalize(cur_ray.direction);
                 let cos_theta: f32 = min(1.0, dot(-1 * unit_direction, record.normal));
-                let sin_theta: f32 = max(0.0, sqrt(1 - (cos_theta * cos_theta)));
+                let sin_theta: f32 = sqrt(1 - (cos_theta * cos_theta));
                 let cannot_refract: bool = (refraction_ratio * sin_theta) > 1.0;
                 var direction: vec3<f32>;
                 if cannot_refract || reflectance(cos_theta, refraction_ratio) > random_f32() {
