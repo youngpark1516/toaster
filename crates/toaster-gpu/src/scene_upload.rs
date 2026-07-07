@@ -11,8 +11,8 @@ pub fn create_test_scene(width: u32, height: u32) -> SceneGpuData {
         params: GpuRenderParams {
             width,
             height,
-            samples: 1,
-            max_bounces: 1,
+            samples: 16,
+            max_bounces: 8,
             sphere_count: 1,
             material_count: 1,
             frame_index: 0,

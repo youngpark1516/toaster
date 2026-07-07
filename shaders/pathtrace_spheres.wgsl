@@ -84,7 +84,7 @@ fn random_f32() -> f32 {
 fn random_unit_vector() -> vec3<f32> {
     let z = random_f32() * 2.0 - 1.0;
     let a = random_f32() * 6.2831853;
-    let r = sqrt(1.0 - z * z);
+    let r = sqrt(max(0.0, 1.0 - z * z));
     return vec3<f32>(r * cos(a), r * sin(a), z);
 }
 
@@ -106,7 +106,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     for (var i: u32 = 0; i < num_samples; i++) {
 
         let u: f32 = (f32(x) + random_f32()) / f32(params.width);
-        let v: f32 = 1 - ((f32(y) + random_f32()) / f32(params.height));
+        let v: f32 = 1.0 - ((f32(y) + random_f32()) / f32(params.height));
 
         let ray: Ray = Ray(
         camera.origin.xyz,
@@ -142,7 +142,7 @@ fn hit_sphere(ray: Ray, sphere: Sphere) -> HitRecord {
     }
 
     let sqrt_disc: f32 = sqrt(discriminant);
-    var distance: f32 = (-1 * half_b - sqrt_disc) / a;
+    var distance: f32 = (-half_b - sqrt_disc) / a;
 
     if distance < MIN_DISTANCE {
         distance = (-1 * half_b + sqrt_disc) / a;
@@ -156,7 +156,7 @@ fn hit_sphere(ray: Ray, sphere: Sphere) -> HitRecord {
     let test_norm: vec3<f32>  = (point - sphere.center_radius.xyz) / sphere.center_radius.w;
     let front_face: bool = dot(ray.direction, test_norm) < 0.0;
 
-    let normal: vec3<f32>  = select(-1 * test_norm, test_norm, front_face);
+    let normal: vec3<f32> = select(-test_norm, test_norm, front_face);
 
     return HitRecord(
         distance,
@@ -211,7 +211,7 @@ fn ray_color(ray: Ray) -> vec3<f32> {
         var attenuation: vec3<f32> = vec3f(0, 0, 0);
         var temp_ray: Ray = Ray(
             record.point,
-            normalize(reflect(cur_ray.direction, record.normal))
+            normalize(reflect_vec(cur_ray.direction, record.normal))
         );
 
         switch(material.kind) {
@@ -224,7 +224,7 @@ fn ray_color(ray: Ray) -> vec3<f32> {
                 attenuation = material.albedo.xyz;
             }
             case 1: { // metal
-                let reflected = reflect(cur_ray.direction, record.normal);
+                let reflected = reflect_vec(cur_ray.direction, record.normal);
                 let roughness = clamp(material.params.x, 0.0, 1.0);
                 let direction = reflected + roughness * random_unit_vector();
                 if dot(direction, record.normal) <= 0.0 {
@@ -243,14 +243,14 @@ fn ray_color(ray: Ray) -> vec3<f32> {
                     record.front_face
                 );
                 let unit_direction: vec3<f32> = normalize(cur_ray.direction);
-                let cos_theta: f32 = min(1.0, dot(-1 * unit_direction, record.normal));
-                let sin_theta: f32 = sqrt(1 - (cos_theta * cos_theta));
+                let cos_theta: f32 = min(1.0, dot(-unit_direction, record.normal));
+                let sin_theta: f32 = sqrt(1.0 - (cos_theta * cos_theta));
                 let cannot_refract: bool = (refraction_ratio * sin_theta) > 1.0;
                 var direction: vec3<f32>;
                 if cannot_refract || reflectance(cos_theta, refraction_ratio) > random_f32() {
-                    direction = reflect(unit_direction, record.normal);
+                    direction = reflect_vec(unit_direction, record.normal);
                 } else {
-                    direction = refract(unit_direction, record.normal, refraction_ratio);
+                    direction = refract_vec(unit_direction, record.normal, refraction_ratio);
                 }
                 temp_ray = Ray(record.point, normalize(direction));
                 attenuation = vec3f(1, 1, 1);
@@ -276,11 +276,11 @@ fn ray_color(ray: Ray) -> vec3<f32> {
     return radiance;
 }
 
-fn reflect(dir: vec3<f32>, norm: vec3<f32>) -> vec3 <f32> {
-    return dir - dot(norm, dir) * 2 * norm;
+fn reflect_vec(dir: vec3<f32>, norm: vec3<f32>) -> vec3 <f32> {
+    return dir - dot(norm, dir) * 2.0 * norm;
 }
 
-fn refract(dir: vec3<f32>, norm: vec3<f32>, ratio: f32) -> vec3<f32> {
+fn refract_vec(dir: vec3<f32>, norm: vec3<f32>, ratio: f32) -> vec3<f32> {
     let cos_theta: f32 = min(dot(-dir, norm), 1.0);
     let perpendicular: vec3<f32> = ratio * (dir + cos_theta * norm);
     let parallel: vec3<f32> = -sqrt(abs(1.0 - dot(perpendicular, perpendicular))) * norm;

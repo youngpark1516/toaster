@@ -11,3 +11,4 @@ pub mod scene_upload;
 
 pub use device::{create_gpu_context, GpuContext};
 pub use gradient::render_gradient;
+pub use path_tracer::render_scene_gpu;

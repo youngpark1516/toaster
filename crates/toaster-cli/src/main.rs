@@ -28,7 +28,7 @@ fn main() -> anyhow::Result<()> {
         Command::GpuRender { scene_path, out } => {
             println!("Scene: {}", scene_path.display());
             println!("Output: {}", out.display());
-            pollster::block_on(toaster_gpu::render_gradient(&out))?;
+            pollster::block_on(toaster_gpu::render_scene_gpu(&out))?;
         }
         Command::Server { host, port } => {
             println!("Server placeholder: http://{host}:{port}");
