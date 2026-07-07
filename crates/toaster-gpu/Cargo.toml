@@ -7,9 +7,9 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 bytemuck.workspace = true
+glam.workspace = true
 pollster.workspace = true
 image.workspace = true
 wgpu.workspace = true
 toaster-core = { path = "../toaster-core" }
 toaster-scene = { path = "../toaster-scene" }
-

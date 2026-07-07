@@ -1,5 +1,5 @@
 //! GPU buffer layouts.
-use crate::gpu_types::{GpuCamera, GpuMaterial, GpuRenderParams, GpuSphere};
+use crate::gpu_types::GpuRenderParams;
 use crate::scene_upload::SceneGpuData;
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
