@@ -53,6 +53,15 @@ fn at(ray: Ray, d: f32) -> vec3<f32> {
     return ray.origin + d * ray.direction;
 }
 
+struct Triangle {
+    v0: vec4<f32>,
+    v1: vec4<f32>,
+    v2: vec4<f32>,
+
+    material_index: u32,
+    _pad0: vec3<u32>,
+};
+
 @group(0) @binding(0)
 var<storage, read_write> output: array<vec4<f32>>;
 
@@ -67,6 +76,9 @@ var<storage, read> spheres: array<Sphere>;
 
 @group(0) @binding(4)
 var<storage, read> materials: array<Material>;
+
+@group(0) @binding(5)
+var<storage, read> triangles: array<Triangle>;
 
 var<private> rng_state: u32;
 
@@ -87,6 +99,9 @@ fn random_unit_vector() -> vec3<f32> {
     let r = sqrt(max(0.0, 1.0 - z * z));
     return vec3<f32>(r * cos(a), r * sin(a), z);
 }
+
+var<private> MIN_DISTANCE: f32 = 0.001;
+var<private> MAX_DISTANCE: f32 = 10000; //ARBITRARY MAGIC NUMBER, CHANGE LATER?
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -122,7 +137,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 fn hit_sphere(ray: Ray, sphere: Sphere) -> HitRecord {
-    let MIN_DISTANCE: f32 = 0.001;
     let no_hit: HitRecord = HitRecord(
         3.4028235e38f,
         vec3<f32>(0, 0, 0),
@@ -144,10 +158,10 @@ fn hit_sphere(ray: Ray, sphere: Sphere) -> HitRecord {
     let sqrt_disc: f32 = sqrt(discriminant);
     var distance: f32 = (-half_b - sqrt_disc) / a;
 
-    if distance < MIN_DISTANCE {
+    if distance < EPSILON {
         distance = (-1 * half_b + sqrt_disc) / a;
 
-        if distance < MIN_DISTANCE {
+        if distance < EPSILON {
             return no_hit;
         }
     }
@@ -167,8 +181,61 @@ fn hit_sphere(ray: Ray, sphere: Sphere) -> HitRecord {
     );
 }
 
+fn hit_triangle(ray: Ray, triangle: Triangle) -> HitRecord {
+    let no_hit: HitRecord = HitRecord(
+        3.4028235e38f,
+        vec3<f32>(0, 0, 0),
+        vec3<f32>(0, 0, 0),
+        false,
+        0
+    );
+
+    var EPSILON: f32 = 1e-8;
+
+
+    let edge1: vec3<f32> = triangle.v1.xyz - triangle.v0.xyz;
+    let edge2: vec3<f32> = triangle.v2.xyz - triangle.v0.xyz;
+    let direction_cross_edge2: vec3<f32> = cross(ray.direction, edge2);
+    let determinant: f32 = dot(direction_cross_edge2, edge1);
+
+    if abs(determinant) < MIN_DISTANCE {
+        return no_hit;
+    }
+
+    let inv_determinant: f32 = 1.0 / determinant;
+    let origin_offset: vec3<f32> = ray.origin - triangle.v0.xyz;
+    let u: f32 = dot(origin_offset, direction_cross_edge2) * inv_determinant;
+    if u < 0.0 || u > 1.0 {
+        return no_hit;
+    }
+
+    let origin_cross_edge1: vec3<f32> = cross(origin_offset, edge1);
+    let v: f32 = dot(origin_cross_edge1, edge2) * inv_determinant;
+    if v < 0.0 || (u + v) > 1.0 {
+        return no_hit;
+    }
+
+    let distance: f32 = dot(origin_cross_edge1, edge2);
+    if distance < MIN_DISTANCE || distance > MAX_DISTANCE {
+        return no_hit;
+    }
+
+    let outward_normal: vec3<f32> = normalize(cross(edge1, edge2));
+    let front_face: bool = dot(ray.direction, outward_normal) < 0.0;
+    let normal = select(-1 * outward_normal, outward_normal, front_face);
+
+    return HitRecord(
+        distance,
+        at(ray, distance),
+        normal,
+        front_face,
+        triangle.material_index
+    );
+}
+
 fn calc_intersections(ray: Ray) -> HitRecord {
     let num_sphere: u32 = params.sphere_count;
+    let num_triangle: u32 = arrayLength(triangles);
     var record: HitRecord = HitRecord(
         3.4028235e38f,
         vec3<f32>(0, 0, 0),
@@ -186,11 +253,19 @@ fn calc_intersections(ray: Ray) -> HitRecord {
         }
     }
 
+    for (var i: u32 = 0; i < num_triangle, i++) {
+        let triangle: Triangle = triangles[i];
+        let tempRecord: HitRecord = hit_triangle(ray, triangle);
+
+        if (record.distance > tempRecord.distance) {
+            record = tempRecord;
+        }
+    }
+
     return record;
 }
 
 fn ray_color(ray: Ray) -> vec3<f32> {
-    let MAX_DISTANCE: f32 = 10000; //ARBITRARY MAGIC NUMBER CHANGE LATER
     let max_bounces: u32 = params.max_bounces;
 
     var throughput: vec3<f32> = vec3f(1, 1, 1);
