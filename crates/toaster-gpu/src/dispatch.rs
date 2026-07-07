@@ -1,7 +1,5 @@
 use anyhow::Result;
 
-use crate::buffers::{GradientBuffers, RenderParams};
-
 pub fn dispatch_compute_2d(
     device: &wgpu::Device,
     queue: &wgpu::Queue,

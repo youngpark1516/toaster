@@ -11,7 +11,7 @@ pub struct GpuRenderParams {
     pub sphere_count: u32,
     pub material_count: u32,
     pub frame_index: u32,
-    pub _pad0: u32,
+    pub background_kind: u32,
 }
 
 #[repr(C)]

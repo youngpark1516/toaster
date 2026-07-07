@@ -9,7 +9,7 @@ struct RenderParams {
     sphere_count: u32,
     material_count: u32,
     frame_index: u32,
-    _pad0: u32,
+    background_kind: u32,
 };
 
 struct Camera {
@@ -202,8 +202,10 @@ fn ray_color(ray: Ray) -> vec3<f32> {
         let record: HitRecord = calc_intersections(cur_ray);
 
         if (record.distance > MAX_DISTANCE) {
-            let lerp_t: f32 = (normalize(cur_ray.direction).y + 1.0) * 0.5;
-            radiance += throughput * mix(vec3f(1.0, 1.0, 1.0), vec3f(0.35, 0.65, 1.0), lerp_t);
+            if params.background_kind == 0u {
+                let lerp_t: f32 = (normalize(cur_ray.direction).y + 1.0) * 0.5;
+                radiance += throughput * mix(vec3f(1.0, 1.0, 1.0), vec3f(0.35, 0.65, 1.0), lerp_t);
+            }
             break;
         }
 

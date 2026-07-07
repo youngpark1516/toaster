@@ -11,10 +11,10 @@ use crate::pipeline::{
     create_pathtrace_bind_group, create_pathtrace_bind_group_layout, create_pipeline, load_shader,
 };
 use crate::readback::readback_pixels;
-use crate::scene_upload::create_test_scene;
+use crate::scene_upload::load_scene_gpu;
 
-pub async fn render_scene_gpu(out_path: &Path) -> Result<()> {
-    let scene = create_test_scene(800, 450);
+pub async fn render_scene_gpu(scene_path: &Path, out_path: &Path) -> Result<()> {
+    let scene = load_scene_gpu(scene_path)?;
     let generation_started_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
     let total_start = Instant::now();
@@ -52,6 +52,11 @@ pub async fn render_scene_gpu(out_path: &Path) -> Result<()> {
     );
 
     let pipeline = create_pipeline(&context.device, &shader, &bind_group_layout);
+
+    println!(
+        "GPU setup time: {:.3}s",
+        setup_start.elapsed().as_secs_f64()
+    );
 
     let dispatch_start = Instant::now();
 
