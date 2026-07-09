@@ -7,9 +7,14 @@ struct RenderParams {
     max_bounces: u32,
 
     sphere_count: u32,
+    triangle_count: u32,
     material_count: u32,
     frame_index: u32,
+
     background_kind: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 };
 
 struct Camera {
@@ -59,7 +64,7 @@ struct Triangle {
     v2: vec4<f32>,
 
     material_index: u32,
-    _pad0: vec3<u32>,
+    _pad0: array<u32, 3>,
 };
 
 @group(0) @binding(0)
@@ -158,10 +163,10 @@ fn hit_sphere(ray: Ray, sphere: Sphere) -> HitRecord {
     let sqrt_disc: f32 = sqrt(discriminant);
     var distance: f32 = (-half_b - sqrt_disc) / a;
 
-    if distance < EPSILON {
+    if distance < MIN_DISTANCE {
         distance = (-1 * half_b + sqrt_disc) / a;
 
-        if distance < EPSILON {
+        if distance < MIN_DISTANCE {
             return no_hit;
         }
     }
@@ -190,7 +195,7 @@ fn hit_triangle(ray: Ray, triangle: Triangle) -> HitRecord {
         0
     );
 
-    var EPSILON: f32 = 1e-8;
+    let EPSILON: f32 = 1e-8;
 
 
     let edge1: vec3<f32> = triangle.v1.xyz - triangle.v0.xyz;
@@ -198,7 +203,7 @@ fn hit_triangle(ray: Ray, triangle: Triangle) -> HitRecord {
     let direction_cross_edge2: vec3<f32> = cross(ray.direction, edge2);
     let determinant: f32 = dot(direction_cross_edge2, edge1);
 
-    if abs(determinant) < MIN_DISTANCE {
+    if abs(determinant) < EPSILON {
         return no_hit;
     }
 
@@ -210,12 +215,12 @@ fn hit_triangle(ray: Ray, triangle: Triangle) -> HitRecord {
     }
 
     let origin_cross_edge1: vec3<f32> = cross(origin_offset, edge1);
-    let v: f32 = dot(origin_cross_edge1, edge2) * inv_determinant;
+    let v: f32 = dot(ray.direction, origin_cross_edge1) * inv_determinant;
     if v < 0.0 || (u + v) > 1.0 {
         return no_hit;
     }
 
-    let distance: f32 = dot(origin_cross_edge1, edge2);
+    let distance: f32 = dot(edge2, origin_cross_edge1) * inv_determinant;
     if distance < MIN_DISTANCE || distance > MAX_DISTANCE {
         return no_hit;
     }
@@ -235,7 +240,7 @@ fn hit_triangle(ray: Ray, triangle: Triangle) -> HitRecord {
 
 fn calc_intersections(ray: Ray) -> HitRecord {
     let num_sphere: u32 = params.sphere_count;
-    let num_triangle: u32 = arrayLength(triangles);
+    let num_triangle: u32 = params.triangle_count;
     var record: HitRecord = HitRecord(
         3.4028235e38f,
         vec3<f32>(0, 0, 0),
@@ -253,7 +258,7 @@ fn calc_intersections(ray: Ray) -> HitRecord {
         }
     }
 
-    for (var i: u32 = 0; i < num_triangle, i++) {
+    for (var i: u32 = 0; i < num_triangle; i++) {
         let triangle: Triangle = triangles[i];
         let tempRecord: HitRecord = hit_triangle(ray, triangle);
 

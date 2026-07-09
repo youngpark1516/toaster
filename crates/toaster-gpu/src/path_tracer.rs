@@ -25,12 +25,13 @@ pub async fn render_scene_gpu(scene_path: &Path, out_path: &Path) -> Result<()> 
     );
 
     println!(
-        "GPU path tracer: {}x{}, samples={}, bounces={}, spheres={}, materials={}",
+        "GPU path tracer: {}x{}, samples={}, bounces={}, spheres={}, triangles={}, materials={}",
         scene.params.width,
         scene.params.height,
         scene.params.samples,
         scene.params.max_bounces,
         scene.params.sphere_count,
+        scene.params.triangle_count,
         scene.params.material_count,
     );
 
@@ -47,8 +48,8 @@ pub async fn render_scene_gpu(scene_path: &Path, out_path: &Path) -> Result<()> 
 
     let shader = load_shader(
         &context.device,
-        "Pathtrace Triangles Shader",
-        include_str!("../../../shaders/pathtrace_triangles.wgsl"),
+        "Pathtrace Shader",
+        include_str!("../../../shaders/pathtrace_spheres.wgsl"),
     );
 
     let pipeline = create_pipeline(&context.device, &shader, &bind_group_layout);

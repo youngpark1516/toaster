@@ -27,6 +27,8 @@ pub fn scene_to_gpu(scene: &Scene) -> Result<SceneGpuData> {
     }
 
     let sphere_count = u32::try_from(scene.spheres.len()).context("too many spheres for GPU")?;
+    let triangle_count =
+        u32::try_from(scene.triangles.len()).context("too many triangles for GPU")?;
     let material_count =
         u32::try_from(scene.materials.len()).context("too many materials for GPU")?;
 
@@ -86,12 +88,16 @@ pub fn scene_to_gpu(scene: &Scene) -> Result<SceneGpuData> {
             samples: scene.render.samples,
             max_bounces: scene.render.max_bounces,
             sphere_count,
+            triangle_count,
             material_count,
             frame_index: 0,
             background_kind: match scene.render.background {
                 Background::Sky => 0,
                 Background::Black => 1,
             },
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         },
         camera,
         spheres,
@@ -145,13 +151,28 @@ mod tests {
     #[test]
     fn loads_materials_scene_into_gpu_layout() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes/002_materials.json");
+        let source_scene = toaster_scene::load_scene(&path).unwrap();
         let scene = load_scene_gpu(path).unwrap();
 
-        assert_eq!((scene.params.width, scene.params.height), (2400, 1800));
-        assert_eq!((scene.params.samples, scene.params.max_bounces), (16, 16));
         assert_eq!(
-            (scene.params.sphere_count, scene.params.material_count),
-            (5, 5)
+            (scene.params.width, scene.params.height),
+            (source_scene.render.width, source_scene.render.height)
+        );
+        assert_eq!(
+            (scene.params.samples, scene.params.max_bounces),
+            (source_scene.render.samples, source_scene.render.max_bounces)
+        );
+        assert_eq!(
+            (
+                scene.params.sphere_count,
+                scene.params.triangle_count,
+                scene.params.material_count
+            ),
+            (
+                source_scene.spheres.len() as u32,
+                source_scene.triangles.len() as u32,
+                source_scene.materials.len() as u32
+            )
         );
         assert_eq!(scene.camera.origin, [0.0, 1.4, 6.0, 0.0]);
         assert_eq!(scene.spheres[3].center_radius, [1.2, 0.5, 0.0, 0.5]);
@@ -161,7 +182,7 @@ mod tests {
         assert_eq!(scene.materials[3].params[0], 0.08);
         assert_eq!(scene.materials[4].kind, 3);
         assert_eq!(scene.materials[4].params[2], 6.0);
-        assert!(scene.triangles.is_empty());
+        assert_eq!(scene.triangles.len(), source_scene.triangles.len());
     }
 
     #[test]

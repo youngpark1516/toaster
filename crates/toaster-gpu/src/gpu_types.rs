@@ -9,9 +9,14 @@ pub struct GpuRenderParams {
     pub max_bounces: u32,
 
     pub sphere_count: u32,
+    pub triangle_count: u32,
     pub material_count: u32,
     pub frame_index: u32,
+
     pub background_kind: u32,
+    pub _pad0: u32,
+    pub _pad1: u32,
+    pub _pad2: u32,
 }
 
 #[repr(C)]
@@ -55,4 +60,18 @@ pub struct GpuMaterial {
 
     // x = roughness, y = ior, z = emission_strength, w = unused
     pub params: [f32; 4],
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gpu_types_match_wgsl_layout_sizes() {
+        assert_eq!(std::mem::size_of::<GpuRenderParams>(), 48);
+        assert_eq!(std::mem::size_of::<GpuCamera>(), 64);
+        assert_eq!(std::mem::size_of::<GpuSphere>(), 32);
+        assert_eq!(std::mem::size_of::<GpuTriangle>(), 64);
+        assert_eq!(std::mem::size_of::<GpuMaterial>(), 48);
+    }
 }
