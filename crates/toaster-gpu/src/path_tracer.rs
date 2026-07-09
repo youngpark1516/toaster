@@ -47,8 +47,8 @@ pub async fn render_scene_gpu(scene_path: &Path, out_path: &Path) -> Result<()> 
 
     let shader = load_shader(
         &context.device,
-        "Pathtrace Spheres Shader",
-        include_str!("../../../shaders/pathtrace_spheres.wgsl"),
+        "Pathtrace Triangles Shader",
+        include_str!("../../../shaders/pathtrace_triangles.wgsl"),
     );
 
     let pipeline = create_pipeline(&context.device, &shader, &bind_group_layout);

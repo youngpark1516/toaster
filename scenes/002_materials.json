@@ -6,9 +6,9 @@
     "fov_degrees": 40.0
   },
   "render": {
-    "width": 800,
-    "height": 450,
-    "samples": 32,
+    "width": 2400,
+    "height": 1800,
+    "samples": 64,
     "max_bounces": 16
   },
   "materials": [

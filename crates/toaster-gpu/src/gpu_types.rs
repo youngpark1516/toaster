@@ -35,6 +35,17 @@ pub struct GpuSphere {
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
+pub struct GpuTriangle {
+    pub v0: [f32; 4],
+    pub v1: [f32; 4],
+    pub v2: [f32; 4],
+
+    pub material_index: u32,
+    pub _pad0: [u32; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 pub struct GpuMaterial {
     // 0 = diffuse, 1 = metal, 2 = dielectric, 3 = emissive
     pub kind: u32,
