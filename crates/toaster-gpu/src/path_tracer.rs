@@ -1,6 +1,6 @@
 //! Compute path-tracing pipeline.
 use anyhow::Result;
-use std::path::Path;
+use std::path::{Path,PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::buffers::create_scene_gpu_buffers;
@@ -13,8 +13,24 @@ use crate::pipeline::{
 use crate::readback::readback_pixels;
 use crate::scene_upload::load_scene_gpu;
 
+fn frame_output_path(out_path: &Path, frame: u32) -> PathBuf {
+    let parent = out_path.parent().unwrap_or_else(|| Path::new(""));
+
+    let stem = out_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("frame");
+
+    let ext = out_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("png");
+
+    parent.join(format!("{}_{:04}.{}", stem, frame, ext))
+}
+
 pub async fn render_scene_gpu(scene_path: &Path, out_path: &Path) -> Result<()> {
-    let scene = load_scene_gpu(scene_path)?;
+    let mut scene = load_scene_gpu(scene_path)?;
     let generation_started_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
     let total_start = Instant::now();
@@ -59,42 +75,74 @@ pub async fn render_scene_gpu(scene_path: &Path, out_path: &Path) -> Result<()> 
         setup_start.elapsed().as_secs_f64()
     );
 
-    let dispatch_start = Instant::now();
+    let frame_count = 60;
 
-    dispatch_compute_2d(
-        &context.device,
-        &context.queue,
-        &pipeline,
-        &bind_group,
-        &buffers.output,
-        &buffers.readback,
-        buffers.output_size,
-        scene.params.width,
-        scene.params.height,
-    )?;
+    for frame in 0..frame_count {
+        let frame_start = Instant::now();
 
-    println!(
-        "GPU dispatch + wait time: {:.3}s",
-        dispatch_start.elapsed().as_secs_f64()
-    );
+        scene.params.frame_index = frame;
 
-    let readback_start = Instant::now();
+        context.queue.write_buffer(
+            &buffers.params,
+            0,
+            bytemuck::bytes_of(&scene.params),
+        );
 
-    let pixels = readback_pixels(&context.device, &buffers.readback)?;
-    println!("Read back {} pixels.", pixels.len());
+        let dispatch_start = Instant::now();
 
-    println!(
-        "Readback time: {:.3}s",
-        readback_start.elapsed().as_secs_f64()
-    );
+        dispatch_compute_2d(
+            &context.device,
+            &context.queue,
+            &pipeline,
+            &bind_group,
+            &buffers.output,
+            &buffers.readback,
+            buffers.output_size,
+            scene.params.width,
+            scene.params.height,
+        )?;
 
-    let save_start = Instant::now();
+        println!(
+            "Frame {} GPU dispatch + wait time: {:.3}s",
+            frame,
+            dispatch_start.elapsed().as_secs_f64()
+        );
 
-    save_pixels_to_png(&pixels, scene.params.width, scene.params.height, out_path)?;
+        let readback_start = Instant::now();
 
-    println!("PNG save time: {:.3}s", save_start.elapsed().as_secs_f64());
-    println!("Saved {}", out_path.display());
+        let pixels = readback_pixels(&context.device, &buffers.readback)?;
+        println!("Frame {} read back {} pixels.", frame, pixels.len());
 
+        println!(
+            "Frame {} readback time: {:.3}s",
+            frame,
+            readback_start.elapsed().as_secs_f64()
+        );
+
+        let save_start = Instant::now();
+
+        let frame_path = frame_output_path(out_path, frame);
+
+        save_pixels_to_png(
+            &pixels,
+            scene.params.width,
+            scene.params.height,
+            &frame_path,
+        )?;
+
+        println!(
+            "Frame {} PNG save time: {:.3}s",
+            frame,
+            save_start.elapsed().as_secs_f64()
+        );
+
+        println!(
+            "Saved frame {} to {} in {:.3}s",
+            frame,
+            frame_path.display(),
+            frame_start.elapsed().as_secs_f64()
+        );
+    }
     println!(
         "Total generation time: {:.3}s",
         total_start.elapsed().as_secs_f64()

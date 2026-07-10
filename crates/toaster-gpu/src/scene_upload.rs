@@ -198,4 +198,24 @@ mod tests {
         assert_eq!(scene.triangles[8].material_index, 2);
         assert_eq!(scene.triangles[10].material_index, 3);
     }
+
+    #[test]
+    fn loads_mesh_room_into_gpu_layout() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes/004_mesh.json");
+        let scene = load_scene_gpu(path).unwrap();
+
+        assert_eq!(scene.spheres.len(), 0);
+        assert_eq!(scene.triangles.len(), 24);
+        assert_eq!(
+            (
+                scene.params.sphere_count,
+                scene.params.triangle_count,
+                scene.params.material_count
+            ),
+            (0, 24, 6)
+        );
+        assert_eq!(scene.materials[3].kind, 0);
+        assert_eq!(scene.materials[4].kind, 1);
+        assert_eq!(scene.materials[5].kind, 3);
+    }
 }

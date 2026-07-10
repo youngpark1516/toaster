@@ -1,1 +1,60 @@
-{}
+{
+  "camera": {
+    "position": [0.0, 2.0, 7.0],
+    "look_at": [0.0, 1.5, -2.2],
+    "up": [0.0, 1.0, 0.0],
+    "fov_degrees": 40.0
+  },
+  "render": {
+    "width": 1200,
+    "height": 1200,
+    "samples": 64,
+    "max_bounces": 12,
+    "background": "black"
+  },
+  "materials": [
+    { "name": "wall", "type": "diffuse", "albedo": [0.72, 0.72, 0.68] },
+    { "name": "red_wall", "type": "diffuse", "albedo": [0.65, 0.08, 0.06] },
+    { "name": "green_wall", "type": "diffuse", "albedo": [0.10, 0.45, 0.16] },
+    { "name": "mesh_blue", "type": "diffuse", "albedo": [0.15, 0.35, 0.85] },
+    { "name": "mesh_gold", "type": "metal", "albedo": [0.95, 0.72, 0.32], "roughness": 0.25 },
+    { "name": "light", "type": "emissive", "color": [1.0, 0.92, 0.78], "strength": 18.0 }
+  ],
+  "objects": [
+    { "type": "triangle", "vertices": [[-2.0, 0.0, 0.0], [2.0, 0.0, -4.0], [2.0, 0.0, 0.0]], "material": "wall" },
+    { "type": "triangle", "vertices": [[-2.0, 0.0, 0.0], [-2.0, 0.0, -4.0], [2.0, 0.0, -4.0]], "material": "wall" },
+
+    { "type": "triangle", "vertices": [[-2.0, 4.0, 0.0], [2.0, 4.0, 0.0], [2.0, 4.0, -4.0]], "material": "wall" },
+    { "type": "triangle", "vertices": [[-2.0, 4.0, 0.0], [2.0, 4.0, -4.0], [-2.0, 4.0, -4.0]], "material": "wall" },
+
+    { "type": "triangle", "vertices": [[-2.0, 0.0, -4.0], [-2.0, 4.0, -4.0], [2.0, 4.0, -4.0]], "material": "wall" },
+    { "type": "triangle", "vertices": [[-2.0, 0.0, -4.0], [2.0, 4.0, -4.0], [2.0, 0.0, -4.0]], "material": "wall" },
+
+    { "type": "triangle", "vertices": [[-2.0, 0.0, 0.0], [-2.0, 4.0, -4.0], [-2.0, 0.0, -4.0]], "material": "red_wall" },
+    { "type": "triangle", "vertices": [[-2.0, 0.0, 0.0], [-2.0, 4.0, 0.0], [-2.0, 4.0, -4.0]], "material": "red_wall" },
+
+    { "type": "triangle", "vertices": [[2.0, 0.0, 0.0], [2.0, 0.0, -4.0], [2.0, 4.0, -4.0]], "material": "green_wall" },
+    { "type": "triangle", "vertices": [[2.0, 0.0, 0.0], [2.0, 4.0, -4.0], [2.0, 4.0, 0.0]], "material": "green_wall" },
+
+    { "type": "triangle", "vertices": [[-0.75, 3.98, -1.35], [0.75, 3.98, -2.65], [0.75, 3.98, -1.35]], "material": "light" },
+    { "type": "triangle", "vertices": [[-0.75, 3.98, -1.35], [-0.75, 3.98, -2.65], [0.75, 3.98, -2.65]], "material": "light" },
+
+    { "type": "triangle", "vertices": [[-0.6, 0.0, -1.6], [0.6, 0.0, -2.8], [0.6, 0.0, -1.6]], "material": "mesh_gold" },
+    { "type": "triangle", "vertices": [[-0.6, 0.0, -1.6], [-0.6, 0.0, -2.8], [0.6, 0.0, -2.8]], "material": "mesh_gold" },
+
+    { "type": "triangle", "vertices": [[-0.6, 1.2, -1.6], [0.6, 1.2, -1.6], [0.6, 1.2, -2.8]], "material": "mesh_gold" },
+    { "type": "triangle", "vertices": [[-0.6, 1.2, -1.6], [0.6, 1.2, -2.8], [-0.6, 1.2, -2.8]], "material": "mesh_gold" },
+
+    { "type": "triangle", "vertices": [[-0.6, 0.0, -1.6], [0.6, 0.0, -1.6], [0.6, 1.2, -1.6]], "material": "mesh_blue" },
+    { "type": "triangle", "vertices": [[-0.6, 0.0, -1.6], [0.6, 1.2, -1.6], [-0.6, 1.2, -1.6]], "material": "mesh_blue" },
+
+    { "type": "triangle", "vertices": [[0.6, 0.0, -1.6], [0.6, 0.0, -2.8], [0.6, 1.2, -2.8]], "material": "mesh_blue" },
+    { "type": "triangle", "vertices": [[0.6, 0.0, -1.6], [0.6, 1.2, -2.8], [0.6, 1.2, -1.6]], "material": "mesh_blue" },
+
+    { "type": "triangle", "vertices": [[0.6, 0.0, -2.8], [-0.6, 0.0, -2.8], [-0.6, 1.2, -2.8]], "material": "mesh_blue" },
+    { "type": "triangle", "vertices": [[0.6, 0.0, -2.8], [-0.6, 1.2, -2.8], [0.6, 1.2, -2.8]], "material": "mesh_blue" },
+
+    { "type": "triangle", "vertices": [[-0.6, 0.0, -2.8], [-0.6, 0.0, -1.6], [-0.6, 1.2, -1.6]], "material": "mesh_blue" },
+    { "type": "triangle", "vertices": [[-0.6, 0.0, -2.8], [-0.6, 1.2, -1.6], [-0.6, 1.2, -2.8]], "material": "mesh_blue" }
+  ]
+}
