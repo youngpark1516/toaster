@@ -108,12 +108,20 @@ fn random_unit_vector() -> vec3<f32> {
 var<private> MIN_DISTANCE: f32 = 0.001;
 var<private> MAX_DISTANCE: f32 = 10000; //ARBITRARY MAGIC NUMBER, CHANGE LATER?
 var<private> EPSILON: f32 = 1e-8;
+
 var<private> light_area_tot: f32 = 0;
 const PI : f32 = 3.14159265359;
+
+struct LightRecord {
+    triangle: Triangle,
+    sphere: Sphere,
+    is_triangle: bool,
+}
 
 fn collect_lights() {
     light_area_tot = 0;
     let num_triangle: u32 = params.triangle_count;
+    let num_spheres: u32 = params.sphere_count;
 
     for (var i: u32 = 0; i < num_triangle; i++) {
         let triangle: Triangle = triangles[i];
@@ -125,14 +133,26 @@ fn collect_lights() {
         let edge2: vec3<f32> = triangle.v2.xyz - triangle.v0.xyz;
         light_area_tot += length(cross(edge1, edge2)) * 0.5;
     }
+
+    for (var i: u32 = 0; i < num_spheres; i++) {
+        let sphere: Sphere = spheres[i];
+        if materials[sphere.material_index].kind != 3 {
+            continue;
+        }
+
+        light_area_tot += sphere.center_radius.w * sphere.center_radius.w * PI * 4.0;
+    }
 }
 
-fn sample_light() -> Triangle {
+fn sample_light() -> LightRecord {
     let random_area_sample: f32 = random_f32() * light_area_tot;
     let num_triangle: u32 = params.triangle_count;
 
     var temp_area: f32 = 0;
     var triangle: Triangle;
+    var sphere: Sphere;
+    let num_spheres: u32 = params.sphere_count;
+    var is_triangle: bool;
 
     for (var i: u32 = 0; i < num_triangle; i++) {
         triangle = triangles[i];
@@ -145,11 +165,31 @@ fn sample_light() -> Triangle {
         temp_area += length(cross(edge1, edge2)) * 0.5;
 
         if (temp_area >= random_area_sample) {
+            is_triangle = true;
             break;
         }
     }
 
-    return triangle;
+    for (var i: u32 = 0; i < num_spheres; i++) {
+        sphere = spheres[i];
+        if materials[sphere.material_index].kind != 3 {
+            continue;
+        }
+
+        temp_area += sphere.center_radius.w * sphere.center_radius.w * PI * (4.0/3.0);
+        if (temp_area >= random_area_sample) {
+            is_triangle = false;
+            break;
+        }
+    }
+
+    let record: LightRecord = LightRecord(
+        triangle,
+        sphere,
+        is_triangle
+    );
+
+    return record;
 }
 
 fn direct_light(hit: HitRecord, albedo: vec3<f32>) ->vec3<f32> {
@@ -157,25 +197,39 @@ fn direct_light(hit: HitRecord, albedo: vec3<f32>) ->vec3<f32> {
         return vec3f(0, 0, 0);
     }
 
-    let triangle: Triangle = sample_light();
-    let u: f32 = sqrt(random_f32());
-    let v: f32 = random_f32();
-    let weights: vec3<f32> = vec3f(1.0 - u, u * (1.0 - v), u * v);
-    let position: vec3<f32> = weights.x * triangle.v0.xyz
-        + weights.y * triangle.v1.xyz
-        + weights.z * triangle.v2.xyz;
-            // let edge2 = ;
-            // let cross = edge1.cross(edge2);
-    let light_normal: vec3<f32> = normalize(cross(
-        triangle.v1.xyz - triangle.v0.xyz,
-        triangle.v2.xyz - triangle.v0.xyz
-    ));
-    
-    let shadow_origin: vec3<f32> = hit.point + hit.normal * EPSILON;
+    let light_record: LightRecord = sample_light();
+    var position: vec3<f32>;
+    var emissive_material: Material;
+    var light_normal: vec3<f32>;
+
+    if light_record.is_triangle {
+        let triangle: Triangle = light_record.triangle;
+        let u: f32 = sqrt(random_f32());
+        let v: f32 = random_f32();
+        let weights: vec3<f32> = vec3f(1.0 - u, u * (1.0 - v), u * v);
+
+        position = weights.x * triangle.v0.xyz
+            + weights.y * triangle.v1.xyz
+            + weights.z * triangle.v2.xyz;
+            
+        light_normal = normalize(cross(
+            triangle.v1.xyz - triangle.v0.xyz,
+            triangle.v2.xyz - triangle.v0.xyz
+        ));
+        emissive_material = materials[triangle.material_index];
+    } else {
+        let sphere: Sphere = light_record.sphere;
+        light_normal = random_unit_vector();
+        position = sphere.center_radius.xyz + sphere.center_radius.w * light_normal;
+        emissive_material = materials[sphere.material_index];
+
+    }
+
+    let shadow_origin: vec3<f32> = hit.point + hit.normal * MIN_DISTANCE;
     let to_light: vec3<f32> = position - shadow_origin;
 
     let distance_squared: f32 = dot(to_light, to_light);
-    if distance_squared <= EPSILON * EPSILON {
+    if distance_squared <= MIN_DISTANCE * MIN_DISTANCE {
         return vec3f(0, 0, 0);
     }
 
@@ -198,12 +252,10 @@ fn direct_light(hit: HitRecord, albedo: vec3<f32>) ->vec3<f32> {
         return vec3f(0, 0, 0);
     }
 
-    let material: Material = materials[triangle.material_index];
-
     let diffuse_brdf: vec3<f32> = albedo / PI;
 
-    return diffuse_brdf * material.albedo.xyz * material.params.z * surface_cosine * light_cosine * light_area_tot
-        / (distance_squared);
+    return diffuse_brdf * emissive_material.albedo.xyz * emissive_material.params.z
+        * surface_cosine * light_cosine * light_area_tot / (distance_squared);
 }
 
 @compute @workgroup_size(8, 8, 1)
