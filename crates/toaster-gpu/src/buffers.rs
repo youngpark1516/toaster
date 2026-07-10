@@ -1,5 +1,5 @@
 //! GPU buffer layouts.
-use crate::gpu_types::GpuRenderParams;
+use crate::gpu_types::{GpuRenderParams, GpuSphere, GpuTriangle};
 use crate::scene_upload::SceneGpuData;
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
@@ -28,6 +28,7 @@ pub struct SceneGpuBuffers {
     pub params: wgpu::Buffer,
     pub camera: wgpu::Buffer,
     pub spheres: wgpu::Buffer,
+    pub triangles: wgpu::Buffer,
     pub materials: wgpu::Buffer,
     pub output_size: u64,
     pub params_size: u64,
@@ -104,9 +105,27 @@ pub fn create_scene_gpu_buffers(device: &wgpu::Device, scene: &SceneGpuData) -> 
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
 
+    let dummy_sphere = [GpuSphere::zeroed()];
+    let sphere_data = if scene.spheres.is_empty() {
+        &dummy_sphere[..]
+    } else {
+        &scene.spheres
+    };
     let spheres_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Scene Spheres Buffer"),
-        contents: bytemuck::cast_slice(&scene.spheres),
+        contents: bytemuck::cast_slice(sphere_data),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
+
+    let dummy_triangle = [GpuTriangle::zeroed()];
+    let triangle_data = if scene.triangles.is_empty() {
+        &dummy_triangle[..]
+    } else {
+        &scene.triangles
+    };
+    let triangles_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Scene Triangles Buffer"),
+        contents: bytemuck::cast_slice(triangle_data),
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
     });
 
@@ -122,6 +141,7 @@ pub fn create_scene_gpu_buffers(device: &wgpu::Device, scene: &SceneGpuData) -> 
         params: params_buffer,
         camera: camera_buffer,
         spheres: spheres_buffer,
+        triangles: triangles_buffer,
         materials: materials_buffer,
         output_size,
         params_size,

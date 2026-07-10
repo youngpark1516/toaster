@@ -25,10 +25,46 @@ fn main() -> anyhow::Result<()> {
             image.save_png(&out)?;
             println!("Rendered in {:.2?}", start.elapsed());
         }
-        Command::GpuRender { scene_path, out } => {
+        Command::GpuRender {
+            scene_path,
+            out,
+            fps,
+            duration,
+        } => {
             println!("Scene: {}", scene_path.display());
             println!("Output: {}", out.display());
-            pollster::block_on(toaster_gpu::render_scene_gpu(&scene_path, &out))?;
+
+            let animation = match (fps, duration) {
+                (None, None) => toaster_gpu::AnimationConfig::single_frame(),
+                _ => {
+                    let fps = fps.unwrap_or(24);
+                    let duration_seconds = duration.unwrap_or(1.0);
+
+                    anyhow::ensure!(fps > 0, "fps must be greater than zero");
+                    anyhow::ensure!(
+                        duration_seconds > 0.0,
+                        "duration must be greater than zero"
+                    );
+
+                    toaster_gpu::AnimationConfig {
+                        fps,
+                        duration_seconds,
+                    }
+                }
+            };
+
+            println!(
+                "Animation: fps={}, duration={:.3}s, frames={}",
+                animation.fps,
+                animation.duration_seconds,
+                animation.frame_count()
+            );
+
+            pollster::block_on(toaster_gpu::render_scene_gpu_animation(
+                &scene_path,
+                &out,
+                animation,
+            ))?;
         }
         Command::Server { host, port } => {
             println!("Server placeholder: http://{host}:{port}");

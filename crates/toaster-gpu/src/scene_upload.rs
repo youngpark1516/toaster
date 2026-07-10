@@ -3,12 +3,13 @@ use glam::Vec3;
 use std::path::Path;
 use toaster_scene::{Background, Material, Scene};
 
-use crate::gpu_types::{GpuCamera, GpuMaterial, GpuRenderParams, GpuSphere};
+use crate::gpu_types::{GpuCamera, GpuMaterial, GpuRenderParams, GpuSphere, GpuTriangle};
 
 pub struct SceneGpuData {
     pub params: GpuRenderParams,
     pub camera: GpuCamera,
     pub spheres: Vec<GpuSphere>,
+    pub triangles: Vec<GpuTriangle>,
     pub materials: Vec<GpuMaterial>,
 }
 
@@ -18,17 +19,16 @@ pub fn load_scene_gpu(path: impl AsRef<Path>) -> Result<SceneGpuData> {
 }
 
 pub fn scene_to_gpu(scene: &Scene) -> Result<SceneGpuData> {
-    if !scene.triangles.is_empty() {
-        bail!("GPU renderer currently supports spheres only; scene contains triangles");
-    }
-    if scene.spheres.is_empty() {
-        bail!("GPU renderer requires at least one sphere");
+    if scene.spheres.is_empty() && scene.triangles.is_empty() {
+        bail!("GPU renderer requires at least one object");
     }
     if scene.materials.is_empty() {
         bail!("GPU renderer requires at least one material");
     }
 
     let sphere_count = u32::try_from(scene.spheres.len()).context("too many spheres for GPU")?;
+    let triangle_count =
+        u32::try_from(scene.triangles.len()).context("too many triangles for GPU")?;
     let material_count =
         u32::try_from(scene.materials.len()).context("too many materials for GPU")?;
 
@@ -59,6 +59,21 @@ pub fn scene_to_gpu(scene: &Scene) -> Result<SceneGpuData> {
         })
         .collect::<Result<Vec<_>>>()?;
 
+    let triangles = scene
+        .triangles
+        .iter()
+        .map(|triangle| {
+            Ok(GpuTriangle {
+                v0: vec4(triangle.vertices[0]),
+                v1: vec4(triangle.vertices[1]),
+                v2: vec4(triangle.vertices[2]),
+                material_index: u32::try_from(triangle.material_index)
+                    .context("material index does not fit on GPU")?,
+                _pad0: [0; 3],
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
     let materials = scene
         .materials
         .iter()
@@ -73,15 +88,20 @@ pub fn scene_to_gpu(scene: &Scene) -> Result<SceneGpuData> {
             samples: scene.render.samples,
             max_bounces: scene.render.max_bounces,
             sphere_count,
+            triangle_count,
             material_count,
             frame_index: 0,
             background_kind: match scene.render.background {
                 Background::Sky => 0,
                 Background::Black => 1,
             },
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         },
         camera,
         spheres,
+        triangles,
         materials,
     })
 }
@@ -131,13 +151,28 @@ mod tests {
     #[test]
     fn loads_materials_scene_into_gpu_layout() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes/002_materials.json");
+        let source_scene = toaster_scene::load_scene(&path).unwrap();
         let scene = load_scene_gpu(path).unwrap();
 
-        assert_eq!((scene.params.width, scene.params.height), (800, 450));
-        assert_eq!((scene.params.samples, scene.params.max_bounces), (32, 16));
         assert_eq!(
-            (scene.params.sphere_count, scene.params.material_count),
-            (5, 5)
+            (scene.params.width, scene.params.height),
+            (source_scene.render.width, source_scene.render.height)
+        );
+        assert_eq!(
+            (scene.params.samples, scene.params.max_bounces),
+            (source_scene.render.samples, source_scene.render.max_bounces)
+        );
+        assert_eq!(
+            (
+                scene.params.sphere_count,
+                scene.params.triangle_count,
+                scene.params.material_count
+            ),
+            (
+                source_scene.spheres.len() as u32,
+                source_scene.triangles.len() as u32,
+                source_scene.materials.len() as u32
+            )
         );
         assert_eq!(scene.camera.origin, [0.0, 1.4, 6.0, 0.0]);
         assert_eq!(scene.spheres[3].center_radius, [1.2, 0.5, 0.0, 0.5]);
@@ -147,5 +182,40 @@ mod tests {
         assert_eq!(scene.materials[3].params[0], 0.08);
         assert_eq!(scene.materials[4].kind, 3);
         assert_eq!(scene.materials[4].params[2], 6.0);
+        assert_eq!(scene.triangles.len(), source_scene.triangles.len());
+    }
+
+    #[test]
+    fn loads_cornell_box_triangles_into_gpu_layout() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes/003_cornell_box.json");
+        let scene = load_scene_gpu(path).unwrap();
+
+        assert_eq!(scene.triangles.len(), 12);
+        assert_eq!(scene.triangles[0].v0, [-2.0, 0.0, 0.0, 0.0]);
+        assert_eq!(scene.triangles[0].v1, [2.0, 0.0, -4.0, 0.0]);
+        assert_eq!(scene.triangles[0].material_index, 0);
+        assert_eq!(scene.triangles[6].material_index, 1);
+        assert_eq!(scene.triangles[8].material_index, 2);
+        assert_eq!(scene.triangles[10].material_index, 3);
+    }
+
+    #[test]
+    fn loads_mesh_room_into_gpu_layout() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes/004_mesh.json");
+        let scene = load_scene_gpu(path).unwrap();
+
+        assert_eq!(scene.spheres.len(), 0);
+        assert_eq!(scene.triangles.len(), 24);
+        assert_eq!(
+            (
+                scene.params.sphere_count,
+                scene.params.triangle_count,
+                scene.params.material_count
+            ),
+            (0, 24, 6)
+        );
+        assert_eq!(scene.materials[3].kind, 0);
+        assert_eq!(scene.materials[4].kind, 1);
+        assert_eq!(scene.materials[5].kind, 3);
     }
 }

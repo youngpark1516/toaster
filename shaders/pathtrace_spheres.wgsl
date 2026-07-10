@@ -7,9 +7,14 @@ struct RenderParams {
     max_bounces: u32,
 
     sphere_count: u32,
+    triangle_count: u32,
     material_count: u32,
     frame_index: u32,
+
     background_kind: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 };
 
 struct Camera {
@@ -53,6 +58,15 @@ fn at(ray: Ray, d: f32) -> vec3<f32> {
     return ray.origin + d * ray.direction;
 }
 
+struct Triangle {
+    v0: vec4<f32>,
+    v1: vec4<f32>,
+    v2: vec4<f32>,
+
+    material_index: u32,
+    _pad0: array<u32, 3>,
+};
+
 @group(0) @binding(0)
 var<storage, read_write> output: array<vec4<f32>>;
 
@@ -67,6 +81,9 @@ var<storage, read> spheres: array<Sphere>;
 
 @group(0) @binding(4)
 var<storage, read> materials: array<Material>;
+
+@group(0) @binding(5)
+var<storage, read> triangles: array<Triangle>;
 
 var<private> rng_state: u32;
 
@@ -88,6 +105,107 @@ fn random_unit_vector() -> vec3<f32> {
     return vec3<f32>(r * cos(a), r * sin(a), z);
 }
 
+var<private> MIN_DISTANCE: f32 = 0.001;
+var<private> MAX_DISTANCE: f32 = 10000; //ARBITRARY MAGIC NUMBER, CHANGE LATER?
+var<private> EPSILON: f32 = 1e-8;
+var<private> light_area_tot: f32 = 0;
+const PI : f32 = 3.14159265359;
+
+fn collect_lights() {
+    light_area_tot = 0;
+    let num_triangle: u32 = params.triangle_count;
+
+    for (var i: u32 = 0; i < num_triangle; i++) {
+        let triangle: Triangle = triangles[i];
+        if materials[triangle.material_index].kind != 3 {
+            continue;
+        }
+
+        let edge1: vec3<f32> = triangle.v1.xyz - triangle.v0.xyz;
+        let edge2: vec3<f32> = triangle.v2.xyz - triangle.v0.xyz;
+        light_area_tot += length(cross(edge1, edge2)) * 0.5;
+    }
+}
+
+fn sample_light() -> Triangle {
+    let random_area_sample: f32 = random_f32() * light_area_tot;
+    let num_triangle: u32 = params.triangle_count;
+
+    var temp_area: f32 = 0;
+    var triangle: Triangle;
+
+    for (var i: u32 = 0; i < num_triangle; i++) {
+        triangle = triangles[i];
+        if materials[triangle.material_index].kind != 3 {
+            continue;
+        }
+
+        let edge1: vec3<f32> = triangle.v1.xyz - triangle.v0.xyz;
+        let edge2: vec3<f32> = triangle.v2.xyz - triangle.v0.xyz;
+        temp_area += length(cross(edge1, edge2)) * 0.5;
+
+        if (temp_area >= random_area_sample) {
+            break;
+        }
+    }
+
+    return triangle;
+}
+
+fn direct_light(hit: HitRecord, albedo: vec3<f32>) ->vec3<f32> {
+    if light_area_tot == 0 {
+        return vec3f(0, 0, 0);
+    }
+
+    let triangle: Triangle = sample_light();
+    let u: f32 = sqrt(random_f32());
+    let v: f32 = random_f32();
+    let weights: vec3<f32> = vec3f(1.0 - u, u * (1.0 - v), u * v);
+    let position: vec3<f32> = weights.x * triangle.v0.xyz
+        + weights.y * triangle.v1.xyz
+        + weights.z * triangle.v2.xyz;
+            // let edge2 = ;
+            // let cross = edge1.cross(edge2);
+    let light_normal: vec3<f32> = normalize(cross(
+        triangle.v1.xyz - triangle.v0.xyz,
+        triangle.v2.xyz - triangle.v0.xyz
+    ));
+    
+    let shadow_origin: vec3<f32> = hit.point + hit.normal * EPSILON;
+    let to_light: vec3<f32> = position - shadow_origin;
+
+    let distance_squared: f32 = dot(to_light, to_light);
+    if distance_squared <= EPSILON * EPSILON {
+        return vec3f(0, 0, 0);
+    }
+
+    let distance: f32 = sqrt(distance_squared);
+    let direction: vec3<f32> = to_light / distance;
+
+
+    let surface_cosine: f32 = dot(direction, hit.normal);
+    let light_cosine:f32 = dot(-direction, light_normal);
+
+    if surface_cosine <= 0.0 || light_cosine <= 0.0 {
+        return vec3f(0, 0, 0);
+    }
+
+    let shadow_ray: Ray = Ray(shadow_origin, direction);
+    let shadow_intersection: HitRecord = calc_intersections(shadow_ray);
+
+    if shadow_intersection.distance < distance - 2.0 * EPSILON
+        || shadow_intersection.distance > MAX_DISTANCE {
+        return vec3f(0, 0, 0);
+    }
+
+    let material: Material = materials[triangle.material_index];
+
+    let diffuse_brdf: vec3<f32> = albedo / PI;
+
+    return diffuse_brdf * material.albedo.xyz * material.params.z * surface_cosine * light_cosine * light_area_tot
+        / (distance_squared);
+}
+
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     
@@ -102,6 +220,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     rng_state = pcg_hash(idx ^ (params.frame_index * 9781u));
     let num_samples: u32 = params.samples;
     var color: vec4<f32> = vec4f(0, 0, 0, 0); 
+
+    collect_lights();
 
     for (var i: u32 = 0; i < num_samples; i++) {
 
@@ -122,7 +242,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 fn hit_sphere(ray: Ray, sphere: Sphere) -> HitRecord {
-    let MIN_DISTANCE: f32 = 0.001;
     let no_hit: HitRecord = HitRecord(
         3.4028235e38f,
         vec3<f32>(0, 0, 0),
@@ -167,8 +286,58 @@ fn hit_sphere(ray: Ray, sphere: Sphere) -> HitRecord {
     );
 }
 
+fn hit_triangle(ray: Ray, triangle: Triangle) -> HitRecord {
+    let no_hit: HitRecord = HitRecord(
+        3.4028235e38f,
+        vec3<f32>(0, 0, 0),
+        vec3<f32>(0, 0, 0),
+        false,
+        0
+    );
+
+    let edge1: vec3<f32> = triangle.v1.xyz - triangle.v0.xyz;
+    let edge2: vec3<f32> = triangle.v2.xyz - triangle.v0.xyz;
+    let direction_cross_edge2: vec3<f32> = cross(ray.direction, edge2);
+    let determinant: f32 = dot(direction_cross_edge2, edge1);
+
+    if abs(determinant) < EPSILON {
+        return no_hit;
+    }
+
+    let inv_determinant: f32 = 1.0 / determinant;
+    let origin_offset: vec3<f32> = ray.origin - triangle.v0.xyz;
+    let u: f32 = dot(origin_offset, direction_cross_edge2) * inv_determinant;
+    if u < 0.0 || u > 1.0 {
+        return no_hit;
+    }
+
+    let origin_cross_edge1: vec3<f32> = cross(origin_offset, edge1);
+    let v: f32 = dot(ray.direction, origin_cross_edge1) * inv_determinant;
+    if v < 0.0 || (u + v) > 1.0 {
+        return no_hit;
+    }
+
+    let distance: f32 = dot(edge2, origin_cross_edge1) * inv_determinant;
+    if distance < MIN_DISTANCE || distance > MAX_DISTANCE {
+        return no_hit;
+    }
+
+    let outward_normal: vec3<f32> = normalize(cross(edge1, edge2));
+    let front_face: bool = dot(ray.direction, outward_normal) < 0.0;
+    let normal = select(-1 * outward_normal, outward_normal, front_face);
+
+    return HitRecord(
+        distance,
+        at(ray, distance),
+        normal,
+        front_face,
+        triangle.material_index
+    );
+}
+
 fn calc_intersections(ray: Ray) -> HitRecord {
     let num_sphere: u32 = params.sphere_count;
+    let num_triangle: u32 = params.triangle_count;
     var record: HitRecord = HitRecord(
         3.4028235e38f,
         vec3<f32>(0, 0, 0),
@@ -186,11 +355,19 @@ fn calc_intersections(ray: Ray) -> HitRecord {
         }
     }
 
+    for (var i: u32 = 0; i < num_triangle; i++) {
+        let triangle: Triangle = triangles[i];
+        let tempRecord: HitRecord = hit_triangle(ray, triangle);
+
+        if (record.distance > tempRecord.distance) {
+            record = tempRecord;
+        }
+    }
+
     return record;
 }
 
 fn ray_color(ray: Ray) -> vec3<f32> {
-    let MAX_DISTANCE: f32 = 10000; //ARBITRARY MAGIC NUMBER CHANGE LATER
     let max_bounces: u32 = params.max_bounces;
 
     var throughput: vec3<f32> = vec3f(1, 1, 1);
@@ -215,15 +392,19 @@ fn ray_color(ray: Ray) -> vec3<f32> {
             record.point,
             normalize(reflect_vec(cur_ray.direction, record.normal))
         );
+        var include_emissive: bool = true;
 
         switch(material.kind) {
             case 0: { // diffuse
+                radiance += throughput * direct_light(record, material.albedo.xyz);
+
                 var direction: vec3<f32> = record.normal + random_unit_vector();
-                if dot(direction, direction) < 1e-8 {
+                if dot(direction, direction) < EPSILON {
                     direction = record.normal;
                 }
                 temp_ray = Ray(record.point, normalize(direction));
                 attenuation = material.albedo.xyz;
+                include_emissive = false;
             }
             case 1: { // metal
                 let reflected = reflect_vec(cur_ray.direction, record.normal);
@@ -237,6 +418,7 @@ fn ray_color(ray: Ray) -> vec3<f32> {
                     normalize(direction)
                 );
                 attenuation = material.albedo.xyz;
+                include_emissive = true;
             }
             case 2: { // dielectric
                 let refraction_ratio: f32 = select(
@@ -256,10 +438,13 @@ fn ray_color(ray: Ray) -> vec3<f32> {
                 }
                 temp_ray = Ray(record.point, normalize(direction));
                 attenuation = vec3f(1, 1, 1);
+                include_emissive = true;
             }
             case 3: { // emissive
-                radiance += throughput * material.albedo.xyz * material.params.z;
-                break_loop = true;
+                if include_emissive {
+                    radiance += throughput * material.albedo.xyz * material.params.z;
+                    break_loop = true;
+                }
             }
             default: {
                 break_loop = true;
