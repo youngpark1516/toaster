@@ -194,7 +194,7 @@ fn direct_light(hit: HitRecord, albedo: vec3<f32>) ->vec3<f32> {
     let shadow_intersection: HitRecord = calc_intersections(shadow_ray);
 
     if shadow_intersection.distance < distance - 2.0 * EPSILON
-        && shadow_intersection.distance > MAX_DISTANCE {
+        || shadow_intersection.distance > MAX_DISTANCE {
         return vec3f(0, 0, 0);
     }
 
@@ -392,6 +392,7 @@ fn ray_color(ray: Ray) -> vec3<f32> {
             record.point,
             normalize(reflect_vec(cur_ray.direction, record.normal))
         );
+        var include_emissive: bool = true;
 
         switch(material.kind) {
             case 0: { // diffuse
@@ -403,6 +404,7 @@ fn ray_color(ray: Ray) -> vec3<f32> {
                 }
                 temp_ray = Ray(record.point, normalize(direction));
                 attenuation = material.albedo.xyz;
+                include_emissive = false;
             }
             case 1: { // metal
                 let reflected = reflect_vec(cur_ray.direction, record.normal);
@@ -416,6 +418,7 @@ fn ray_color(ray: Ray) -> vec3<f32> {
                     normalize(direction)
                 );
                 attenuation = material.albedo.xyz;
+                include_emissive = true;
             }
             case 2: { // dielectric
                 let refraction_ratio: f32 = select(
@@ -435,10 +438,13 @@ fn ray_color(ray: Ray) -> vec3<f32> {
                 }
                 temp_ray = Ray(record.point, normalize(direction));
                 attenuation = vec3f(1, 1, 1);
+                include_emissive = true;
             }
             case 3: { // emissive
-                radiance += throughput * material.albedo.xyz * material.params.z;
-                break_loop = true;
+                if include_emissive {
+                    radiance += throughput * material.albedo.xyz * material.params.z;
+                    break_loop = true;
+                }
             }
             default: {
                 break_loop = true;
