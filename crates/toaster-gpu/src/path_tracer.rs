@@ -36,7 +36,7 @@ pub async fn render_scene_gpu_animation(
     );
 
     println!(
-        "GPU path tracer: {}x{}, samples={}, bounces={}, spheres={}, triangles={}, materials={}",
+        "GPU path tracer: {}x{}, samples={}, bounces={}, spheres={}, triangles={}, materials={}, lights={}",
         scene.params.width,
         scene.params.height,
         scene.params.samples,
@@ -44,6 +44,7 @@ pub async fn render_scene_gpu_animation(
         scene.params.sphere_count,
         scene.params.triangle_count,
         scene.params.material_count,
+        scene.params.light_count,
     );
 
     let setup_start = Instant::now();

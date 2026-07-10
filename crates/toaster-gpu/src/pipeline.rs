@@ -121,6 +121,17 @@ pub fn create_pathtrace_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGr
                 },
                 count: None,
             },
+            // binding 6: emissive lights
+            wgpu::BindGroupLayoutEntry {
+                binding: 6,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
         ],
     })
 }
@@ -157,6 +168,10 @@ pub fn create_pathtrace_bind_group(
             wgpu::BindGroupEntry {
                 binding: 5,
                 resource: buffers.triangles.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: buffers.lights.as_entire_binding(),
             },
         ],
     })

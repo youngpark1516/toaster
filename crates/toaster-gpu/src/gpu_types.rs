@@ -14,9 +14,9 @@ pub struct GpuRenderParams {
     pub frame_index: u32,
 
     pub background_kind: u32,
+    pub light_count: u32,
+    pub total_light_area: f32,
     pub _pad0: u32,
-    pub _pad1: u32,
-    pub _pad2: u32,
 }
 
 #[repr(C)]
@@ -62,6 +62,23 @@ pub struct GpuMaterial {
     pub params: [f32; 4],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct GpuLight {
+    // 0 = triangle, 1 = sphere
+    pub kind: u32,
+    pub material_index: u32,
+    pub _pad0: [u32; 2],
+
+    pub v0: [f32; 4],
+    pub v1: [f32; 4],
+    pub v2: [f32; 4],
+    pub center_radius: [f32; 4],
+
+    // x = area, y = cumulative_area, z/w = unused
+    pub area_cumulative: [f32; 4],
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,5 +90,6 @@ mod tests {
         assert_eq!(std::mem::size_of::<GpuSphere>(), 32);
         assert_eq!(std::mem::size_of::<GpuTriangle>(), 64);
         assert_eq!(std::mem::size_of::<GpuMaterial>(), 48);
+        assert_eq!(std::mem::size_of::<GpuLight>(), 96);
     }
 }

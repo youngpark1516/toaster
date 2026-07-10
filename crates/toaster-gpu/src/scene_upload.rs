@@ -3,7 +3,7 @@ use glam::Vec3;
 use std::path::Path;
 use toaster_scene::{Background, Material, Scene};
 
-use crate::gpu_types::{GpuCamera, GpuMaterial, GpuRenderParams, GpuSphere, GpuTriangle};
+use crate::gpu_types::{GpuCamera, GpuLight, GpuMaterial, GpuRenderParams, GpuSphere, GpuTriangle};
 
 pub struct SceneGpuData {
     pub params: GpuRenderParams,
@@ -11,6 +11,7 @@ pub struct SceneGpuData {
     pub spheres: Vec<GpuSphere>,
     pub triangles: Vec<GpuTriangle>,
     pub materials: Vec<GpuMaterial>,
+    pub lights: Vec<GpuLight>,
 }
 
 pub fn load_scene_gpu(path: impl AsRef<Path>) -> Result<SceneGpuData> {
@@ -80,6 +81,8 @@ pub fn scene_to_gpu(scene: &Scene) -> Result<SceneGpuData> {
         .copied()
         .map(material_to_gpu)
         .collect();
+    let (lights, total_light_area) = lights_to_gpu(scene)?;
+    let light_count = u32::try_from(lights.len()).context("too many lights for GPU")?;
 
     Ok(SceneGpuData {
         params: GpuRenderParams {
@@ -95,14 +98,15 @@ pub fn scene_to_gpu(scene: &Scene) -> Result<SceneGpuData> {
                 Background::Sky => 0,
                 Background::Black => 1,
             },
+            light_count,
+            total_light_area,
             _pad0: 0,
-            _pad1: 0,
-            _pad2: 0,
         },
         camera,
         spheres,
         triangles,
         materials,
+        lights,
     })
 }
 
@@ -144,6 +148,72 @@ fn vec4(value: Vec3) -> [f32; 4] {
     [value.x, value.y, value.z, 0.0]
 }
 
+fn lights_to_gpu(scene: &Scene) -> Result<(Vec<GpuLight>, f32)> {
+    let mut cumulative_area = 0.0;
+    let mut lights = Vec::new();
+
+    for triangle in &scene.triangles {
+        if !is_emissive(scene.materials[triangle.material_index]) {
+            continue;
+        }
+
+        let edge1 = triangle.vertices[1] - triangle.vertices[0];
+        let edge2 = triangle.vertices[2] - triangle.vertices[0];
+        let area = 0.5 * edge1.cross(edge2).length();
+        if area <= 0.0 {
+            continue;
+        }
+
+        cumulative_area += area;
+        lights.push(GpuLight {
+            kind: 0,
+            material_index: u32::try_from(triangle.material_index)
+                .context("material index does not fit on GPU")?,
+            _pad0: [0; 2],
+            v0: vec4(triangle.vertices[0]),
+            v1: vec4(triangle.vertices[1]),
+            v2: vec4(triangle.vertices[2]),
+            center_radius: [0.0; 4],
+            area_cumulative: [area, cumulative_area, 0.0, 0.0],
+        });
+    }
+
+    for sphere in &scene.spheres {
+        if !is_emissive(scene.materials[sphere.material_index]) {
+            continue;
+        }
+
+        let area = 4.0 * std::f32::consts::PI * sphere.radius * sphere.radius;
+        if area <= 0.0 {
+            continue;
+        }
+
+        cumulative_area += area;
+        lights.push(GpuLight {
+            kind: 1,
+            material_index: u32::try_from(sphere.material_index)
+                .context("material index does not fit on GPU")?,
+            _pad0: [0; 2],
+            v0: [0.0; 4],
+            v1: [0.0; 4],
+            v2: [0.0; 4],
+            center_radius: [
+                sphere.center.x,
+                sphere.center.y,
+                sphere.center.z,
+                sphere.radius,
+            ],
+            area_cumulative: [area, cumulative_area, 0.0, 0.0],
+        });
+    }
+
+    Ok((lights, cumulative_area))
+}
+
+fn is_emissive(material: Material) -> bool {
+    matches!(material, Material::Emissive { strength, .. } if strength > 0.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,6 +253,11 @@ mod tests {
         assert_eq!(scene.materials[4].kind, 3);
         assert_eq!(scene.materials[4].params[2], 6.0);
         assert_eq!(scene.triangles.len(), source_scene.triangles.len());
+        assert_eq!(scene.lights.len(), 1);
+        assert_eq!(scene.params.light_count, 1);
+        assert!(scene.params.total_light_area > 0.0);
+        assert_eq!(scene.lights[0].kind, 1);
+        assert_eq!(scene.lights[0].material_index, 4);
     }
 
     #[test]
@@ -197,6 +272,10 @@ mod tests {
         assert_eq!(scene.triangles[6].material_index, 1);
         assert_eq!(scene.triangles[8].material_index, 2);
         assert_eq!(scene.triangles[10].material_index, 3);
+        assert_eq!(scene.lights.len(), 2);
+        assert_eq!(scene.params.light_count, 2);
+        assert!(scene.params.total_light_area > 0.0);
+        assert!(scene.lights.iter().all(|light| light.kind == 0));
     }
 
     #[test]
@@ -217,5 +296,40 @@ mod tests {
         assert_eq!(scene.materials[3].kind, 0);
         assert_eq!(scene.materials[4].kind, 1);
         assert_eq!(scene.materials[5].kind, 3);
+        assert_eq!(scene.lights.len(), 2);
+        assert_eq!(scene.params.light_count, 2);
+        assert!(scene.params.total_light_area > 0.0);
+        assert!(scene.lights.iter().all(|light| light.kind == 0));
+    }
+
+    #[test]
+    fn uploads_no_lights_scene_with_zero_light_count() {
+        let scene = Scene {
+            camera: toaster_scene::CameraSettings {
+                position: Vec3::new(0.0, 0.0, 1.0),
+                look_at: Vec3::ZERO,
+                up: Vec3::Y,
+                fov_degrees: 45.0,
+            },
+            render: toaster_scene::RenderSettings {
+                width: 4,
+                height: 4,
+                samples: 1,
+                max_bounces: 1,
+                background: Background::Black,
+            },
+            materials: vec![Material::Diffuse { albedo: Vec3::ONE }],
+            spheres: vec![toaster_scene::Sphere {
+                center: Vec3::ZERO,
+                radius: 0.5,
+                material_index: 0,
+            }],
+            triangles: Vec::new(),
+        };
+        let gpu_scene = scene_to_gpu(&scene).unwrap();
+
+        assert!(gpu_scene.lights.is_empty());
+        assert_eq!(gpu_scene.params.light_count, 0);
+        assert_eq!(gpu_scene.params.total_light_area, 0.0);
     }
 }

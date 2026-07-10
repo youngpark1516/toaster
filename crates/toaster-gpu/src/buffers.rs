@@ -1,5 +1,5 @@
 //! GPU buffer layouts.
-use crate::gpu_types::{GpuRenderParams, GpuSphere, GpuTriangle};
+use crate::gpu_types::{GpuLight, GpuRenderParams, GpuSphere, GpuTriangle};
 use crate::scene_upload::SceneGpuData;
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
@@ -30,6 +30,7 @@ pub struct SceneGpuBuffers {
     pub spheres: wgpu::Buffer,
     pub triangles: wgpu::Buffer,
     pub materials: wgpu::Buffer,
+    pub lights: wgpu::Buffer,
     pub output_size: u64,
     pub params_size: u64,
 }
@@ -135,6 +136,18 @@ pub fn create_scene_gpu_buffers(device: &wgpu::Device, scene: &SceneGpuData) -> 
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
     });
 
+    let dummy_light = [GpuLight::zeroed()];
+    let light_data = if scene.lights.is_empty() {
+        &dummy_light[..]
+    } else {
+        &scene.lights
+    };
+    let lights_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Scene Lights Buffer"),
+        contents: bytemuck::cast_slice(light_data),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
+
     SceneGpuBuffers {
         output: output_buffer,
         readback: readback_buffer,
@@ -143,6 +156,7 @@ pub fn create_scene_gpu_buffers(device: &wgpu::Device, scene: &SceneGpuData) -> 
         spheres: spheres_buffer,
         triangles: triangles_buffer,
         materials: materials_buffer,
+        lights: lights_buffer,
         output_size,
         params_size,
     }
