@@ -176,7 +176,7 @@ fn sample_light() -> LightRecord {
             continue;
         }
 
-        temp_area += sphere.center_radius.w * sphere.center_radius.w * PI * (4.0/3.0);
+        temp_area += sphere.center_radius.w * sphere.center_radius.w * PI * 4.0;
         if (temp_area >= random_area_sample) {
             is_triangle = false;
             break;
@@ -247,8 +247,7 @@ fn direct_light(hit: HitRecord, albedo: vec3<f32>) ->vec3<f32> {
     let shadow_ray: Ray = Ray(shadow_origin, direction);
     let shadow_intersection: HitRecord = calc_intersections(shadow_ray);
 
-    if shadow_intersection.distance < distance - 2.0 * EPSILON
-        || shadow_intersection.distance > MAX_DISTANCE {
+    if shadow_intersection.distance < distance - 2.0 * MIN_DISTANCE {
         return vec3f(0, 0, 0);
     }
 
@@ -426,6 +425,7 @@ fn ray_color(ray: Ray) -> vec3<f32> {
     var cur_ray: Ray = ray;
     var radiance: vec3<f32> = vec3f(0,0,0);
     var break_loop: bool = false;
+    var include_emissive: bool = true;
 
     for (var i: u32 = 0; i < max_bounces; i++) {
         let record: HitRecord = calc_intersections(cur_ray);
@@ -444,7 +444,6 @@ fn ray_color(ray: Ray) -> vec3<f32> {
             record.point,
             normalize(reflect_vec(cur_ray.direction, record.normal))
         );
-        var include_emissive: bool = true;
 
         switch(material.kind) {
             case 0: { // diffuse
