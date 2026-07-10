@@ -30,6 +30,7 @@ fn main() -> anyhow::Result<()> {
             out,
             fps,
             duration,
+            orbit_degrees,
         } => {
             println!("Scene: {}", scene_path.display());
             println!("Output: {}", out.display());
@@ -49,6 +50,7 @@ fn main() -> anyhow::Result<()> {
                     toaster_gpu::AnimationConfig {
                         fps,
                         duration_seconds,
+                        orbit_degrees,
                     }
                 }
             };

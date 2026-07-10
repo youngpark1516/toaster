@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 pub struct AnimationConfig {
     pub fps: u32,
     pub duration_seconds: f32,
+    pub orbit_degrees: Option<f32>,
 }
 
 impl AnimationConfig {
@@ -11,6 +12,7 @@ impl AnimationConfig {
         Self {
             fps: 1,
             duration_seconds: 1.0,
+            orbit_degrees: None,
         }
     }
 

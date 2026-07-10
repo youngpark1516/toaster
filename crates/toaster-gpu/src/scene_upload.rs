@@ -110,7 +110,7 @@ pub fn scene_to_gpu(scene: &Scene) -> Result<SceneGpuData> {
     })
 }
 
-fn make_camera(position: Vec3, look_at: Vec3, up: Vec3, fov: f32, aspect: f32) -> GpuCamera {
+pub fn make_camera(position: Vec3, look_at: Vec3, up: Vec3, fov: f32, aspect: f32) -> GpuCamera {
     let backward = (position - look_at).normalize();
     let right = up.cross(backward).normalize();
     let true_up = backward.cross(right);

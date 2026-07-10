@@ -32,6 +32,9 @@ pub enum Command {
 
         #[arg(long)]
         duration: Option<f32>,
+
+        #[arg(long)]
+        orbit_degrees: Option<f32>,
     },
     Server {
         #[arg(long, default_value = "127.0.0.1")]

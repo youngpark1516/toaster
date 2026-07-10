@@ -2,6 +2,7 @@
 use anyhow::Result;
 use std::path::Path;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use glam::Vec3;
 
 use crate::buffers::create_scene_gpu_buffers;
 use crate::device::create_gpu_context;
@@ -12,8 +13,8 @@ use crate::pipeline::{
 };
 use crate::animation::{AnimationConfig, frame_output_path};
 use crate::readback::readback_pixels;
-use crate::scene_upload::load_scene_gpu;
-use crate::gpu_types::GpuCamera;
+use crate::scene_upload::{load_scene_gpu, make_camera};
+use crate::gpu_types::{GpuCamera};
 
 pub async fn render_scene_gpu(scene_path: &Path, out_path: &Path) -> Result<()> {
     render_scene_gpu_animation(scene_path, out_path, AnimationConfig::single_frame()).await
@@ -24,7 +25,8 @@ pub async fn render_scene_gpu_animation(
     out_path: &Path,
     animation: AnimationConfig,
 ) -> Result<()> {
-    let mut scene = load_scene_gpu(scene_path)?;
+    let source_scene = toaster_scene::load_scene(scene_path)?;
+    let mut scene = crate::scene_upload::scene_to_gpu(&source_scene)?;
     let base_camera = scene.camera;
     let generation_started_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
@@ -99,6 +101,21 @@ pub async fn render_scene_gpu_animation(
         );
 
         let frame_start = Instant::now();
+
+        if let Some(orbit_degrees) = animation.orbit_degrees {
+            scene.camera = orbit_camera_for_frame(
+                &source_scene,
+                frame,
+                frame_count,
+                orbit_degrees,
+            );
+
+            context.queue.write_buffer(
+                &buffers.camera,
+                0,
+                bytemuck::bytes_of(&scene.camera),
+            );
+        }
 
         scene.params.frame_index = frame;
 
@@ -186,4 +203,46 @@ fn translate_camera(camera: GpuCamera, offset: [f32; 3]) -> GpuCamera {
         horizontal: camera.horizontal,
         vertical: camera.vertical,
     }
+}
+
+fn orbit_camera_for_frame(
+    source_scene: &toaster_scene::Scene,
+    frame: u32,
+    frame_count: u32,
+    orbit_degrees: f32,
+) -> crate::gpu_types::GpuCamera {
+    let camera = &source_scene.camera;
+
+    let look_at = camera.look_at;
+    let offset = camera.position - look_at;
+
+    let radius_xz = (offset.x * offset.x + offset.z * offset.z)
+        .sqrt()
+        .max(0.001);
+
+    let base_angle = offset.z.atan2(offset.x);
+
+    let progress = if frame_count <= 1 {
+        0.0
+    } else {
+        frame as f32 / (frame_count - 1) as f32
+    };
+
+    let angle = base_angle + orbit_degrees.to_radians() * progress;
+
+    let position = Vec3::new(
+        look_at.x + radius_xz * angle.cos(),
+        look_at.y + offset.y,
+        look_at.z + radius_xz * angle.sin(),
+    );
+
+    let aspect = source_scene.render.width as f32 / source_scene.render.height as f32;
+
+    crate::scene_upload::make_camera(
+        position,
+        look_at,
+        camera.up,
+        camera.fov_degrees,
+        aspect,
+    )
 }
