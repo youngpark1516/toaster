@@ -1,6 +1,6 @@
 //! Compute path-tracing pipeline.
 use anyhow::Result;
-use std::path::{Path,PathBuf};
+use std::path::Path;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::buffers::create_scene_gpu_buffers;
@@ -10,26 +10,19 @@ use crate::image_output::save_pixels_to_png;
 use crate::pipeline::{
     create_pathtrace_bind_group, create_pathtrace_bind_group_layout, create_pipeline, load_shader,
 };
+use crate::animation::{AnimationConfig, frame_output_path};
 use crate::readback::readback_pixels;
 use crate::scene_upload::load_scene_gpu;
 
-fn frame_output_path(out_path: &Path, frame: u32) -> PathBuf {
-    let parent = out_path.parent().unwrap_or_else(|| Path::new(""));
-
-    let stem = out_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("frame");
-
-    let ext = out_path
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("png");
-
-    parent.join(format!("{}_{:04}.{}", stem, frame, ext))
+pub async fn render_scene_gpu(scene_path: &Path, out_path: &Path) -> Result<()> {
+    render_scene_gpu_animation(scene_path, out_path, AnimationConfig::single_frame()).await
 }
 
-pub async fn render_scene_gpu(scene_path: &Path, out_path: &Path) -> Result<()> {
+pub async fn render_scene_gpu_animation(
+    scene_path: &Path,
+    out_path: &Path,
+    animation: AnimationConfig,
+) -> Result<()> {
     let mut scene = load_scene_gpu(scene_path)?;
     let generation_started_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
@@ -75,7 +68,7 @@ pub async fn render_scene_gpu(scene_path: &Path, out_path: &Path) -> Result<()> 
         setup_start.elapsed().as_secs_f64()
     );
 
-    let frame_count = 60;
+    let frame_count = animation.frame_count();
 
     for frame in 0..frame_count {
         let frame_start = Instant::now();
@@ -121,7 +114,7 @@ pub async fn render_scene_gpu(scene_path: &Path, out_path: &Path) -> Result<()> 
 
         let save_start = Instant::now();
 
-        let frame_path = frame_output_path(out_path, frame);
+        let frame_path = frame_output_path(out_path, frame, frame_count);
 
         save_pixels_to_png(
             &pixels,

@@ -23,8 +23,15 @@ pub enum Command {
     },
     GpuRender {
         scene_path: PathBuf,
+
         #[arg(long)]
         out: PathBuf,
+
+        #[arg(long)]
+        fps: Option<u32>,
+
+        #[arg(long)]
+        duration: Option<f32>,
     },
     Server {
         #[arg(long, default_value = "127.0.0.1")]
