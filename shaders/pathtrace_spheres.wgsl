@@ -117,7 +117,7 @@ fn collect_lights() {
 
     for (var i: u32 = 0; i < num_triangle; i++) {
         let triangle: Triangle = triangles[i];
-        if triangle.material_index != 3 {
+        if materials[triangle.material_index].kind != 3 {
             continue;
         }
 
@@ -136,7 +136,7 @@ fn sample_light() -> Triangle {
 
     for (var i: u32 = 0; i < num_triangle; i++) {
         triangle = triangles[i];
-        if triangle.material_index != 3 {
+        if materials[triangle.material_index].kind != 3 {
             continue;
         }
 
@@ -396,7 +396,7 @@ fn ray_color(ray: Ray) -> vec3<f32> {
         switch(material.kind) {
             case 0: { // diffuse
                 radiance += throughput * direct_light(record, material.albedo.xyz);
-                
+
                 var direction: vec3<f32> = record.normal + random_unit_vector();
                 if dot(direction, direction) < EPSILON {
                     direction = record.normal;
