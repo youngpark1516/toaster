@@ -13,6 +13,7 @@ use crate::pipeline::{
 use crate::animation::{AnimationConfig, frame_output_path};
 use crate::readback::readback_pixels;
 use crate::scene_upload::load_scene_gpu;
+use crate::gpu_types::GpuCamera;
 
 pub async fn render_scene_gpu(scene_path: &Path, out_path: &Path) -> Result<()> {
     render_scene_gpu_animation(scene_path, out_path, AnimationConfig::single_frame()).await
@@ -24,6 +25,7 @@ pub async fn render_scene_gpu_animation(
     animation: AnimationConfig,
 ) -> Result<()> {
     let mut scene = load_scene_gpu(scene_path)?;
+    let base_camera = scene.camera;
     let generation_started_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
     let total_start = Instant::now();
@@ -71,6 +73,30 @@ pub async fn render_scene_gpu_animation(
     let frame_count = animation.frame_count();
 
     for frame in 0..frame_count {
+        let progress = if frame_count <= 1 {
+            0.0
+        } else {
+            frame as f32 / (frame_count - 1) as f32
+        };
+
+        let camera_x = -1.0 + 2.0 * progress;
+
+        scene.camera = translate_camera(base_camera, [camera_x, 0.0, 0.0]);
+
+        context.queue.write_buffer(
+            &buffers.camera,
+            0,
+            bytemuck::bytes_of(&scene.camera),
+        );
+
+        scene.params.frame_index = frame;
+
+        context.queue.write_buffer(
+            &buffers.params,
+            0,
+            bytemuck::bytes_of(&scene.params),
+        );
+
         let frame_start = Instant::now();
 
         scene.params.frame_index = frame;
@@ -141,4 +167,22 @@ pub async fn render_scene_gpu_animation(
         total_start.elapsed().as_secs_f64()
     );
     Ok(())
+}
+
+fn translate_camera(camera: GpuCamera, offset: [f32; 3]) -> GpuCamera {
+    let add_offset = |v: [f32; 4]| -> [f32; 4] {
+        [
+            v[0] + offset[0],
+            v[1] + offset[1],
+            v[2] + offset[2],
+            v[3],
+        ]
+    };
+
+    GpuCamera {
+        origin: add_offset(camera.origin),
+        lower_left_corner: add_offset(camera.lower_left_corner),
+        horizontal: camera.horizontal,
+        vertical: camera.vertical,
+    }
 }
