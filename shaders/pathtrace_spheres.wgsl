@@ -194,7 +194,7 @@ fn direct_light(hit: HitRecord, albedo: vec3<f32>) ->vec3<f32> {
     let shadow_intersection: HitRecord = calc_intersections(shadow_ray);
 
     if shadow_intersection.distance < distance - 2.0 * EPSILON
-        && shadow_intersection.distance > MAX_DISTANCE {
+        || shadow_intersection.distance > MAX_DISTANCE {
         return vec3f(0, 0, 0);
     }
 
