@@ -39,22 +39,49 @@
     { "type": "triangle", "vertices": [[-0.75, 3.98, -1.35], [0.75, 3.98, -2.65], [0.75, 3.98, -1.35]], "material": "light" },
     { "type": "triangle", "vertices": [[-0.75, 3.98, -1.35], [-0.75, 3.98, -2.65], [0.75, 3.98, -2.65]], "material": "light" },
 
-    { "type": "triangle", "vertices": [[-0.6, 0.0, -1.6], [0.6, 0.0, -2.8], [0.6, 0.0, -1.6]], "material": "mesh_gold" },
-    { "type": "triangle", "vertices": [[-0.6, 0.0, -1.6], [-0.6, 0.0, -2.8], [0.6, 0.0, -2.8]], "material": "mesh_gold" },
+    { "type": "triangle", "group": "cube", "vertices": [[-0.6, 0.0, -1.6], [0.6, 0.0, -2.8], [0.6, 0.0, -1.6]], "material": "mesh_gold" },
+    { "type": "triangle", "group": "cube", "vertices": [[-0.6, 0.0, -1.6], [-0.6, 0.0, -2.8], [0.6, 0.0, -2.8]], "material": "mesh_gold" },
 
-    { "type": "triangle", "vertices": [[-0.6, 1.2, -1.6], [0.6, 1.2, -1.6], [0.6, 1.2, -2.8]], "material": "mesh_gold" },
-    { "type": "triangle", "vertices": [[-0.6, 1.2, -1.6], [0.6, 1.2, -2.8], [-0.6, 1.2, -2.8]], "material": "mesh_gold" },
+    { "type": "triangle", "group": "cube", "vertices": [[-0.6, 1.2, -1.6], [0.6, 1.2, -1.6], [0.6, 1.2, -2.8]], "material": "mesh_gold" },
+    { "type": "triangle", "group": "cube", "vertices": [[-0.6, 1.2, -1.6], [0.6, 1.2, -2.8], [-0.6, 1.2, -2.8]], "material": "mesh_gold" },
 
-    { "type": "triangle", "vertices": [[-0.6, 0.0, -1.6], [0.6, 0.0, -1.6], [0.6, 1.2, -1.6]], "material": "mesh_blue" },
-    { "type": "triangle", "vertices": [[-0.6, 0.0, -1.6], [0.6, 1.2, -1.6], [-0.6, 1.2, -1.6]], "material": "mesh_blue" },
+    { "type": "triangle", "group": "cube", "vertices": [[-0.6, 0.0, -1.6], [0.6, 0.0, -1.6], [0.6, 1.2, -1.6]], "material": "mesh_blue" },
+    { "type": "triangle", "group": "cube", "vertices": [[-0.6, 0.0, -1.6], [0.6, 1.2, -1.6], [-0.6, 1.2, -1.6]], "material": "mesh_blue" },
 
-    { "type": "triangle", "vertices": [[0.6, 0.0, -1.6], [0.6, 0.0, -2.8], [0.6, 1.2, -2.8]], "material": "mesh_blue" },
-    { "type": "triangle", "vertices": [[0.6, 0.0, -1.6], [0.6, 1.2, -2.8], [0.6, 1.2, -1.6]], "material": "mesh_blue" },
+    { "type": "triangle", "group": "cube", "vertices": [[0.6, 0.0, -1.6], [0.6, 0.0, -2.8], [0.6, 1.2, -2.8]], "material": "mesh_blue" },
+    { "type": "triangle", "group": "cube", "vertices": [[0.6, 0.0, -1.6], [0.6, 1.2, -2.8], [0.6, 1.2, -1.6]], "material": "mesh_blue" },
 
-    { "type": "triangle", "vertices": [[0.6, 0.0, -2.8], [-0.6, 0.0, -2.8], [-0.6, 1.2, -2.8]], "material": "mesh_blue" },
-    { "type": "triangle", "vertices": [[0.6, 0.0, -2.8], [-0.6, 1.2, -2.8], [0.6, 1.2, -2.8]], "material": "mesh_blue" },
+    { "type": "triangle", "group": "cube", "vertices": [[0.6, 0.0, -2.8], [-0.6, 0.0, -2.8], [-0.6, 1.2, -2.8]], "material": "mesh_blue" },
+    { "type": "triangle", "group": "cube", "vertices": [[0.6, 0.0, -2.8], [-0.6, 1.2, -2.8], [0.6, 1.2, -2.8]], "material": "mesh_blue" },
 
-    { "type": "triangle", "vertices": [[-0.6, 0.0, -2.8], [-0.6, 0.0, -1.6], [-0.6, 1.2, -1.6]], "material": "mesh_blue" },
-    { "type": "triangle", "vertices": [[-0.6, 0.0, -2.8], [-0.6, 1.2, -1.6], [-0.6, 1.2, -2.8]], "material": "mesh_blue" }
-  ]
+    { "type": "triangle", "group": "cube", "vertices": [[-0.6, 0.0, -2.8], [-0.6, 0.0, -1.6], [-0.6, 1.2, -1.6]], "material": "mesh_blue" },
+    { "type": "triangle", "group": "cube", "vertices": [[-0.6, 0.0, -2.8], [-0.6, 1.2, -1.6], [-0.6, 1.2, -2.8]], "material": "mesh_blue" }
+  ],
+  "animation": {
+    "tracks": [
+      {
+        "type": "rotation",
+        "target": { "type": "group", "name": "cube" },
+        "axis": [0.0, 1.0, 0.0],
+        "pivot": [0.0, 0.6, -2.2],
+        "interpolation": "linear",
+        "keyframes": [
+          { "time": 0.0, "degrees": 0.0 },
+          { "time": 2.0, "degrees": 360.0 }
+        ]
+      },
+      {
+        "type": "rotation",
+        "target": { "type": "camera" },
+        "axis": [0.0, 1.0, 0.0],
+        "pivot": [0.0, 1.5, -2.2],
+        "interpolation": "linear",
+        "keyframes": [
+          { "time": 0.0, "degrees": 0.0 },
+          { "time": 1.0, "degrees": 15.0 },
+          { "time": 2.0, "degrees": 0.0 }
+        ]
+      }
+    ]
+  }
 }

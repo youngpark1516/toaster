@@ -1,0 +1,52 @@
+{
+  "camera": {
+    "position": [3.2, 2.4, 4.2],
+    "look_at": [0.0, 0.0, 0.0],
+    "up": [0.0, 1.0, 0.0],
+    "fov_degrees": 38.0
+  },
+  "render": {
+    "width": 320,
+    "height": 320,
+    "samples": 8,
+    "max_bounces": 4,
+    "background": "sky"
+  },
+  "materials": [
+    { "name": "front", "type": "diffuse", "albedo": [0.92, 0.18, 0.12] },
+    { "name": "back", "type": "diffuse", "albedo": [0.12, 0.35, 0.92] },
+    { "name": "left", "type": "diffuse", "albedo": [0.14, 0.72, 0.28] },
+    { "name": "right", "type": "diffuse", "albedo": [0.95, 0.62, 0.10] },
+    { "name": "top", "type": "diffuse", "albedo": [0.72, 0.20, 0.88] },
+    { "name": "bottom", "type": "diffuse", "albedo": [0.12, 0.78, 0.82] }
+  ],
+  "objects": [
+    { "type": "triangle", "group": "cube", "vertices": [[-1,-1,1],[1,-1,1],[1,1,1]], "material": "front" },
+    { "type": "triangle", "group": "cube", "vertices": [[-1,-1,1],[1,1,1],[-1,1,1]], "material": "front" },
+    { "type": "triangle", "group": "cube", "vertices": [[1,-1,-1],[-1,-1,-1],[-1,1,-1]], "material": "back" },
+    { "type": "triangle", "group": "cube", "vertices": [[1,-1,-1],[-1,1,-1],[1,1,-1]], "material": "back" },
+    { "type": "triangle", "group": "cube", "vertices": [[-1,-1,-1],[-1,-1,1],[-1,1,1]], "material": "left" },
+    { "type": "triangle", "group": "cube", "vertices": [[-1,-1,-1],[-1,1,1],[-1,1,-1]], "material": "left" },
+    { "type": "triangle", "group": "cube", "vertices": [[1,-1,1],[1,-1,-1],[1,1,-1]], "material": "right" },
+    { "type": "triangle", "group": "cube", "vertices": [[1,-1,1],[1,1,-1],[1,1,1]], "material": "right" },
+    { "type": "triangle", "group": "cube", "vertices": [[-1,1,1],[1,1,1],[1,1,-1]], "material": "top" },
+    { "type": "triangle", "group": "cube", "vertices": [[-1,1,1],[1,1,-1],[-1,1,-1]], "material": "top" },
+    { "type": "triangle", "group": "cube", "vertices": [[-1,-1,-1],[1,-1,-1],[1,-1,1]], "material": "bottom" },
+    { "type": "triangle", "group": "cube", "vertices": [[-1,-1,-1],[1,-1,1],[-1,-1,1]], "material": "bottom" }
+  ],
+  "animation": {
+    "tracks": [
+      {
+        "type": "rotation",
+        "target": { "type": "group", "name": "cube" },
+        "axis": [0.0, 1.0, 0.0],
+        "pivot": [0.0, 0.0, 0.0],
+        "interpolation": "linear",
+        "keyframes": [
+          { "time": 0.0, "degrees": 0.0 },
+          { "time": 1.0, "degrees": 360.0 }
+        ]
+      }
+    ]
+  }
+}

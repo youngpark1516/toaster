@@ -1,4 +1,5 @@
 use crate::{
+    animation::Animation,
     material::Material,
     object::{Sphere, Triangle},
 };
@@ -11,6 +12,7 @@ pub struct Scene {
     pub materials: Vec<Material>,
     pub spheres: Vec<Sphere>,
     pub triangles: Vec<Triangle>,
+    pub animation: Animation,
 }
 
 #[derive(Clone, Copy, Debug)]

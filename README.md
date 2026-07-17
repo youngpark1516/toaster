@@ -25,6 +25,24 @@ cargo run -p toaster-cli -- cpu-render scenes/003_cornell_box.json --out out/cor
 
 The CPU renderer supports spheres, triangles, diffuse/metal/glass materials, and emissive area lights. Higher sample counts produce cleaner images but take longer in the current single-threaded reference renderer.
 
+### GPU animation
+
+```sh
+# 24 frames sampled over one second
+cargo run -p toaster-cli -- gpu-render scenes/006_rotating_cube.json \
+  --out out/cube.png --fps 24 --duration 1
+
+# Exactly 48 frames at an explicitly selected frame rate
+cargo run -p toaster-cli -- gpu-render scenes/006_rotating_cube.json \
+  --out out/cube.png --fps 30 --frames 48
+
+# A two-second rotating cube with an independently orbiting Cornell-room camera
+cargo run -p toaster-cli -- gpu-render scenes/004_mesh.json \
+  --out out/cornell-cube.png --fps 24 --duration 2
+```
+
+Multi-frame output is numbered from `cube_0000.png`. Omitting all timing flags renders one frame at time zero; partial or conflicting timing options are rejected rather than defaulted.
+
 ### Render setting overrides
 
 Scene render settings are used by default. Override any combination of resolution, samples, and path depth from the command line:

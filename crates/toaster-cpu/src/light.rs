@@ -2,7 +2,7 @@ use glam::Vec3;
 use rand::Rng;
 use toaster_scene::{Material, Scene, Triangle};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct AreaLight {
     triangle: Triangle,
     normal: Vec3,
@@ -44,7 +44,7 @@ impl AreaLights {
             }
             total_area += area;
             lights.push(AreaLight {
-                triangle: *triangle,
+                triangle: triangle.clone(),
                 normal: cross.normalize(),
                 emission: color * strength,
                 area,
@@ -128,12 +128,15 @@ mod tests {
                 Triangle {
                     vertices: [Vec3::ZERO, Vec3::X * 2.0, Vec3::Y],
                     material_index: 0,
+                    group: None,
                 },
                 Triangle {
                     vertices: [Vec3::Z, Vec3::X + Vec3::Z, Vec3::Y + Vec3::Z],
                     material_index: 1,
+                    group: None,
                 },
             ],
+            animation: Default::default(),
         }
     }
 

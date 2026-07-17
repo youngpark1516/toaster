@@ -1,4 +1,5 @@
 use crate::{
+    animation::{validate_animation, Animation},
     material::Material,
     object::{Sphere, Triangle},
     scene::{Background, CameraSettings, RenderSettings, Scene},
@@ -14,6 +15,8 @@ struct SceneFile {
     render: RenderFile,
     materials: Vec<MaterialFile>,
     objects: Vec<ObjectFile>,
+    #[serde(default)]
+    animation: Animation,
 }
 
 #[derive(Deserialize)]
@@ -68,10 +71,12 @@ enum ObjectFile {
         center: Vec3,
         radius: f32,
         material: String,
+        group: Option<String>,
     },
     Triangle {
         vertices: [Vec3; 3],
         material: String,
+        group: Option<String>,
     },
 }
 
@@ -168,6 +173,7 @@ fn build_scene(file: SceneFile) -> Result<Scene> {
                 center,
                 radius,
                 material,
+                group,
             } => {
                 if !center.is_finite() || !radius.is_finite() || radius <= 0.0 {
                     bail!("sphere radius must be positive and its center must be finite");
@@ -180,9 +186,14 @@ fn build_scene(file: SceneFile) -> Result<Scene> {
                     center,
                     radius,
                     material_index,
+                    group: validate_group(group)?,
                 });
             }
-            ObjectFile::Triangle { vertices, material } => {
+            ObjectFile::Triangle {
+                vertices,
+                material,
+                group,
+            } => {
                 if vertices.iter().any(|vertex| !vertex.is_finite()) {
                     bail!("triangle vertices must be finite");
                 }
@@ -196,12 +207,15 @@ fn build_scene(file: SceneFile) -> Result<Scene> {
                 triangles.push(Triangle {
                     vertices,
                     material_index,
+                    group: validate_group(group)?,
                 });
             }
         }
     }
 
-    Ok(Scene {
+    let mut animation = file.animation;
+    animation.normalize_rotation_axes()?;
+    let scene = Scene {
         camera: CameraSettings {
             position: file.camera.position,
             look_at: file.camera.look_at,
@@ -221,7 +235,17 @@ fn build_scene(file: SceneFile) -> Result<Scene> {
         materials,
         spheres,
         triangles,
-    })
+        animation,
+    };
+    validate_animation(&scene)?;
+    Ok(scene)
+}
+
+fn validate_group(group: Option<String>) -> Result<Option<String>> {
+    if group.as_deref().is_some_and(str::is_empty) {
+        bail!("object group name must not be empty");
+    }
+    Ok(group)
 }
 
 fn validate_albedo(name: &str, albedo: Vec3) -> Result<()> {
@@ -361,5 +385,61 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("unknown material"));
+    }
+
+    #[test]
+    fn parses_grouped_animation_tracks() {
+        let scene = parse(
+            r#"{
+            "camera":{"position":[0,0,2],"look_at":[0,0,0],"fov_degrees":45},
+            "render":{"width":1,"height":1,"samples":1,"max_bounces":1},
+            "materials":[{"name":"red","type":"diffuse","albedo":[1,0,0]}],
+            "objects":[{"type":"sphere","group":"ball","center":[1,0,0],"radius":0.5,"material":"red"}],
+            "animation":{"tracks":[
+                {"type":"translation","target":{"type":"group","name":"ball"},"interpolation":"step","keyframes":[{"time":0,"value":[0,1,0]}]},
+                {"type":"rotation","target":{"type":"camera"},"axis":[0,2,0],"pivot":[0,0,0],"interpolation":"linear","keyframes":[{"time":0,"degrees":0},{"time":1,"degrees":90}]}
+            ]}
+        }"#,
+        )
+        .unwrap();
+
+        assert_eq!(scene.spheres[0].group.as_deref(), Some("ball"));
+        assert_eq!(scene.animation.tracks.len(), 2);
+        let crate::AnimationTrack::Rotation { axis, .. } = &scene.animation.tracks[1] else {
+            panic!("expected rotation track");
+        };
+        assert_eq!(*axis, Vec3::Y);
+    }
+
+    #[test]
+    fn rejects_bad_animation_definitions() {
+        for track in [
+            r#"{"type":"rotation","target":{"type":"camera"},"axis":[0,0,0],"pivot":[0,0,0],"interpolation":"linear","keyframes":[{"time":0,"degrees":0}]}"#,
+            r#"{"type":"translation","target":{"type":"group","name":"missing"},"interpolation":"linear","keyframes":[{"time":0,"value":[0,0,0]}]}"#,
+            r#"{"type":"translation","target":{"type":"camera"},"interpolation":"linear","keyframes":[{"time":1,"value":[0,0,0]},{"time":1,"value":[1,0,0]}]}"#,
+        ] {
+            let json = format!(
+                r#"{{
+                "camera":{{"position":[0,0,2],"look_at":[0,0,0],"fov_degrees":45}},
+                "render":{{"width":1,"height":1,"samples":1,"max_bounces":1}},
+                "materials":[],"objects":[],"animation":{{"tracks":[{track}]}}
+            }}"#
+            );
+            assert!(parse(&json).is_err());
+        }
+    }
+
+    #[test]
+    fn loads_rotating_cube_demo() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes/006_rotating_cube.json");
+        let scene = load_scene(path).unwrap();
+
+        assert_eq!(scene.triangles.len(), 12);
+        assert!(scene
+            .triangles
+            .iter()
+            .all(|triangle| triangle.group.as_deref() == Some("cube")));
+        assert_eq!(scene.animation.tracks.len(), 1);
     }
 }

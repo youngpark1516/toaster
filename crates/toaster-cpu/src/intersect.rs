@@ -129,6 +129,7 @@ mod tests {
             center,
             radius,
             material_index,
+            group: None,
         }
     }
 
@@ -190,6 +191,7 @@ mod tests {
                 sphere(Vec3::new(0.0, 0.0, -2.0), 0.5, 1),
             ],
             triangles: Vec::new(),
+            animation: Default::default(),
         };
         assert_eq!(
             intersect_scene(&ray, &scene, 0.001).unwrap().material_index,
@@ -206,6 +208,7 @@ mod tests {
                 Vec3::new(0.0, 1.0, -2.0),
             ],
             material_index: 7,
+            group: None,
         };
         let front = intersect_triangle(
             &Ray::new(Vec3::ZERO, -Vec3::Z),
@@ -234,6 +237,7 @@ mod tests {
         let triangle = Triangle {
             vertices: [Vec3::ZERO, Vec3::X, Vec3::Y],
             material_index: 0,
+            group: None,
         };
         assert!(intersect_triangle(
             &Ray::new(Vec3::new(2.0, 2.0, 1.0), -Vec3::Z),

@@ -281,10 +281,31 @@ mod tests {
     #[test]
     fn loads_mesh_room_into_gpu_layout() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes/004_mesh.json");
+        let source = toaster_scene::load_scene(&path).unwrap();
+        let evaluated = source.evaluate_at(0.5).unwrap();
         let scene = load_scene_gpu(path).unwrap();
 
         assert_eq!(scene.spheres.len(), 0);
         assert_eq!(scene.triangles.len(), 24);
+        assert_eq!(
+            source
+                .triangles
+                .iter()
+                .filter(|triangle| triangle.group.as_deref() == Some("cube"))
+                .count(),
+            12
+        );
+        assert_eq!(source.animation.tracks.len(), 2);
+        assert_eq!(
+            evaluated.triangles[0].vertices,
+            source.triangles[0].vertices
+        );
+        assert_ne!(
+            evaluated.triangles[12].vertices,
+            source.triangles[12].vertices
+        );
+        assert_ne!(evaluated.camera.position, source.camera.position);
+        assert_eq!(evaluated.camera.look_at, source.camera.look_at);
         assert_eq!(
             (
                 scene.params.sphere_count,
@@ -323,8 +344,10 @@ mod tests {
                 center: Vec3::ZERO,
                 radius: 0.5,
                 material_index: 0,
+                group: None,
             }],
             triangles: Vec::new(),
+            animation: Default::default(),
         };
         let gpu_scene = scene_to_gpu(&scene).unwrap();
 

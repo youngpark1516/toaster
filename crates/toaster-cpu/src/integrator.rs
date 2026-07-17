@@ -260,8 +260,10 @@ mod tests {
                 center: Vec3::new(0.0, 0.0, -2.0),
                 radius: 0.7,
                 material_index: 0,
+                group: None,
             }],
             triangles: Vec::new(),
+            animation: Default::default(),
         }
     }
 
@@ -283,6 +285,7 @@ mod tests {
                 Vec3::new(0.0, 2.0, 1.0),
             ],
             material_index: 1,
+            group: None,
         }];
         if blocked {
             triangles.extend([
@@ -293,6 +296,7 @@ mod tests {
                         Vec3::new(3.0, 1.0, -3.0),
                     ],
                     material_index: 0,
+                    group: None,
                 },
                 Triangle {
                     vertices: [
@@ -301,6 +305,7 @@ mod tests {
                         Vec3::new(3.0, 1.0, 3.0),
                     ],
                     material_index: 0,
+                    group: None,
                 },
             ]);
         }
@@ -327,6 +332,7 @@ mod tests {
             ],
             spheres: Vec::new(),
             triangles,
+            animation: Default::default(),
         }
     }
 

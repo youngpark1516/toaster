@@ -1,3 +1,4 @@
+pub mod animation;
 pub mod buffers;
 pub mod device;
 pub mod dispatch;
@@ -8,9 +9,8 @@ pub mod path_tracer;
 pub mod pipeline;
 pub mod readback;
 pub mod scene_upload;
-pub mod animation;
 
+pub use animation::{frame_output_path, AnimationConfig};
 pub use device::{create_gpu_context, GpuContext};
 pub use gradient::render_gradient;
 pub use path_tracer::render_scene_gpu_animation;
-pub use animation::{frame_output_path, AnimationConfig};

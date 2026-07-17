@@ -30,37 +30,16 @@ fn main() -> anyhow::Result<()> {
             out,
             fps,
             duration,
-            orbit_degrees,
+            frames,
         } => {
             println!("Scene: {}", scene_path.display());
             println!("Output: {}", out.display());
 
-            let animation = match (fps, duration) {
-                (None, None) => toaster_gpu::AnimationConfig::single_frame(),
-                _ => {
-                    let fps = fps.unwrap_or(24);
-                    let duration_seconds = duration.unwrap_or(1.0);
-
-                    anyhow::ensure!(fps > 0, "fps must be greater than zero");
-                    anyhow::ensure!(
-                        duration_seconds > 0.0,
-                        "duration must be greater than zero"
-                    );
-
-                    toaster_gpu::AnimationConfig {
-                        fps,
-                        duration_seconds,
-                        orbit_degrees,
-                    }
-                }
-            };
-
-            println!(
-                "Animation: fps={}, duration={:.3}s, frames={}",
-                animation.fps,
-                animation.duration_seconds,
-                animation.frame_count()
-            );
+            let animation = resolve_animation(fps, duration, frames)?;
+            match animation.fps() {
+                Some(fps) => println!("Animation: fps={}, frames={}", fps, animation.frame_count()),
+                None => println!("Animation: single frame at time 0"),
+            }
 
             pollster::block_on(toaster_gpu::render_scene_gpu_animation(
                 &scene_path,
@@ -77,6 +56,29 @@ fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn resolve_animation(
+    fps: Option<u32>,
+    duration: Option<f32>,
+    frames: Option<u32>,
+) -> anyhow::Result<toaster_gpu::AnimationConfig> {
+    match (fps, duration, frames) {
+        (None, None, None) => Ok(toaster_gpu::AnimationConfig::single_frame()),
+        (Some(fps), Some(duration), None) => {
+            toaster_gpu::AnimationConfig::from_duration(fps, duration)
+        }
+        (Some(fps), None, Some(frames)) => {
+            toaster_gpu::AnimationConfig::from_frame_count(fps, frames)
+        }
+        (None, _, _) => anyhow::bail!("animated renders require --fps"),
+        (Some(_), None, None) => {
+            anyhow::bail!("--fps requires exactly one of --duration or --frames")
+        }
+        (Some(_), Some(_), Some(_)) => {
+            anyhow::bail!("--duration and --frames are mutually exclusive")
+        }
+    }
 }
 
 fn apply_overrides(
@@ -166,6 +168,32 @@ mod tests {
             },
         ] {
             assert!(apply_overrides(&mut settings(), overrides).is_err());
+        }
+    }
+
+    #[test]
+    fn resolves_explicit_animation_timing() {
+        let duration = resolve_animation(Some(24), Some(1.1), None).unwrap();
+        assert_eq!(duration.frame_count(), 27);
+        assert_eq!(duration.fps(), Some(24));
+
+        let frames = resolve_animation(Some(30), None, Some(12)).unwrap();
+        assert_eq!(frames.frame_count(), 12);
+        assert_eq!(frames.fps(), Some(30));
+    }
+
+    #[test]
+    fn rejects_incomplete_or_conflicting_animation_timing() {
+        for timing in [
+            (Some(24), None, None),
+            (None, Some(1.0), None),
+            (None, None, Some(24)),
+            (Some(24), Some(1.0), Some(24)),
+            (Some(0), Some(1.0), None),
+            (Some(24), Some(f32::NAN), None),
+            (Some(24), None, Some(0)),
+        ] {
+            assert!(resolve_animation(timing.0, timing.1, timing.2).is_err());
         }
     }
 }

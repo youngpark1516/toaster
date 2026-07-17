@@ -27,14 +27,17 @@ pub enum Command {
         #[arg(long)]
         out: PathBuf,
 
+        /// Frames rendered per second. Required for animated output.
         #[arg(long)]
         fps: Option<u32>,
 
-        #[arg(long)]
+        /// Animation duration in seconds; conflicts with --frames.
+        #[arg(long, requires = "fps", conflicts_with = "frames")]
         duration: Option<f32>,
 
-        #[arg(long)]
-        orbit_degrees: Option<f32>,
+        /// Exact animation frame count; conflicts with --duration.
+        #[arg(long, requires = "fps", conflicts_with = "duration")]
+        frames: Option<u32>,
     },
     Server {
         #[arg(long, default_value = "127.0.0.1")]
@@ -91,5 +94,35 @@ mod tests {
         assert_eq!(overrides.width, Some(800));
         assert_eq!(overrides.height, Some(600));
         assert_eq!(overrides.max_bounces, Some(12));
+    }
+
+    #[test]
+    fn parses_both_gpu_timing_shapes() {
+        for args in [
+            vec![
+                "toaster",
+                "gpu-render",
+                "scene.json",
+                "--out",
+                "image.png",
+                "--fps",
+                "24",
+                "--duration",
+                "2",
+            ],
+            vec![
+                "toaster",
+                "gpu-render",
+                "scene.json",
+                "--out",
+                "image.png",
+                "--fps",
+                "30",
+                "--frames",
+                "45",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
     }
 }
