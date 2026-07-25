@@ -48,7 +48,8 @@ fn main() -> anyhow::Result<()> {
             ))?;
         }
         Command::Server { host, port } => {
-            println!("Server placeholder: http://{host}:{port}");
+            let runtime = tokio::runtime::Runtime::new()?;
+            runtime.block_on(toaster_server::serve(&host, port))?;
         }
         Command::Info => {
             println!("Toaster {}", env!("CARGO_PKG_VERSION"));
