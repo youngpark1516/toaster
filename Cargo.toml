@@ -13,7 +13,7 @@ axum = "0.8"
 bytemuck = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"] }
 glam = { version = "0.30", features = ["serde"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 pollster = "0.4"
 rand = "0.9"
 serde = { version = "1", features = ["derive"] }
