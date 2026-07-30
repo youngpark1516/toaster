@@ -3,7 +3,7 @@ use axum::{
     body::{Body, Bytes},
     extract::State,
     http::{header, HeaderValue},
-    response::Response,
+    response::{Html, Response},
     routing::get,
     Router,
 };
@@ -11,16 +11,33 @@ use std::{convert::Infallible, sync::Arc};
 use tokio_stream::{wrappers::WatchStream, StreamExt};
 
 const MJPEG_BOUNDARY: &str = "frame";
+const INDEX_HTML: &str = r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Toaster Live Preview</title>
+</head>
+<body>
+  <img src="/stream" alt="Toaster live preview">
+</body>
+</html>
+"#;
 
 pub fn router(publisher: FramePublisher) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/stream", get(stream))
+        .route("/healthz", get(healthz))
         .with_state(publisher)
 }
 
-async fn index() -> &'static str {
-    "toaster preview server\n"
+async fn index() -> Html<&'static str> {
+    Html(INDEX_HTML)
+}
+
+async fn healthz() -> &'static str {
+    "ok\n"
 }
 
 async fn stream(State(publisher): State<FramePublisher>) -> Response<Body> {
@@ -31,6 +48,10 @@ async fn stream(State(publisher): State<FramePublisher>) -> Response<Body> {
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("multipart/x-mixed-replace; boundary=frame"),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, no-cache, must-revalidate"),
     );
     response
 }
@@ -55,6 +76,20 @@ mod tests {
     #[test]
     fn builds_router() {
         let _router = router(FramePublisher::new());
+    }
+
+    #[test]
+    fn index_contains_mjpeg_image() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let page = runtime.block_on(index());
+
+        assert!(page.0.contains(r#"<img src="/stream""#));
+    }
+
+    #[test]
+    fn health_check_is_ok() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        assert_eq!(runtime.block_on(healthz()), "ok\n");
     }
 
     #[test]
@@ -90,6 +125,10 @@ mod tests {
         assert_eq!(
             response.headers().get(header::CONTENT_TYPE).unwrap(),
             "multipart/x-mixed-replace; boundary=frame"
+        );
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store, no-cache, must-revalidate"
         );
     }
 }

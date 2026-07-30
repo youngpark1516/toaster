@@ -2,8 +2,36 @@ mod cli;
 
 use clap::Parser;
 use cli::{Cli, Command, RenderOverrides};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Instant;
 use toaster_scene::RenderSettings;
+
+const STREAM_JPEG_QUALITY: u8 = 90;
+
+struct ServerFrameSink {
+    publisher: toaster_server::FramePublisher,
+    stop: Arc<AtomicBool>,
+}
+
+impl toaster_gpu::FrameSink for ServerFrameSink {
+    fn deliver(&mut self, frame: toaster_gpu::CompletedFrame<'_>) -> anyhow::Result<()> {
+        let jpeg =
+            toaster_gpu::image_output::encode_rgba_image_to_jpeg(frame.image, STREAM_JPEG_QUALITY)?;
+        self.publisher.publish_jpeg(jpeg.into());
+        println!(
+            "Published preview frame {} ({}x{}) at {:.3}s.",
+            frame.index, frame.width, frame.height, frame.time_seconds
+        );
+        Ok(())
+    }
+
+    fn should_continue(&self) -> bool {
+        !self.stop.load(Ordering::Relaxed)
+    }
+}
 
 fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
@@ -37,7 +65,11 @@ fn main() -> anyhow::Result<()> {
 
             let animation = resolve_animation(fps, duration, frames)?;
             match animation.fps() {
-                Some(fps) => println!("Animation: fps={}, frames={}", fps, animation.frame_count()),
+                Some(fps) => println!(
+                    "Animation: fps={}, frames={}",
+                    fps,
+                    animation.frame_limit().unwrap_or_default()
+                ),
                 None => println!("Animation: single frame at time 0"),
             }
 
@@ -46,6 +78,26 @@ fn main() -> anyhow::Result<()> {
                 &out,
                 animation,
             ))?;
+        }
+        Command::StreamPreview {
+            scene_path,
+            host,
+            port,
+            fps,
+            duration,
+        } => {
+            let animation = resolve_preview_animation(fps, duration)?;
+            println!("Scene: {}", scene_path.display());
+            match duration {
+                Some(duration) => println!(
+                    "Preview: fps={fps}, frames={}, duration={duration:.3}s",
+                    animation
+                        .frame_limit()
+                        .expect("duration-based preview has a finite frame limit")
+                ),
+                None => println!("Preview: fps={fps}, running until Ctrl+C"),
+            }
+            render_stream_preview(&scene_path, animation, &host, port)?;
         }
         Command::Server { host, port } => {
             let runtime = tokio::runtime::Runtime::new()?;
@@ -57,6 +109,80 @@ fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn render_stream_preview(
+    scene_path: &std::path::Path,
+    animation: toaster_gpu::AnimationConfig,
+    host: &str,
+    port: u16,
+) -> anyhow::Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(async {
+        let publisher = toaster_server::FramePublisher::new();
+        let listener = toaster_server::bind(host, port).await?;
+        let stop = Arc::new(AtomicBool::new(false));
+
+        let server_publisher = publisher.clone();
+        let server_stop = stop.clone();
+        let server = tokio::spawn(async move {
+            let result = toaster_server::serve_listener(listener, server_publisher).await;
+            server_stop.store(true, Ordering::Relaxed);
+            result
+        });
+
+        let signal_stop = stop.clone();
+        let signal = tokio::spawn(async move {
+            match tokio::signal::ctrl_c().await {
+                Ok(()) => {
+                    println!("Stopping preview after the current frame.");
+                    signal_stop.store(true, Ordering::Relaxed);
+                }
+                Err(error) => eprintln!("Failed to listen for Ctrl+C: {error}"),
+            }
+        });
+
+        let mut sink = ServerFrameSink {
+            publisher,
+            stop: stop.clone(),
+        };
+
+        let render_result = toaster_gpu::render_scene_gpu_animation_with_sink(
+            scene_path,
+            animation,
+            toaster_gpu::FramePacing::RealTime,
+            &mut sink,
+        )
+        .await;
+
+        stop.store(true, Ordering::Relaxed);
+        signal.abort();
+        let _ = signal.await;
+
+        let server_result = if server.is_finished() {
+            match server.await {
+                Ok(result) => result,
+                Err(error) => Err(error.into()),
+            }
+        } else {
+            server.abort();
+            let _ = server.await;
+            Ok(())
+        };
+
+        render_result?;
+        server_result
+    })
+}
+
+fn resolve_preview_animation(
+    fps: u32,
+    duration: Option<f32>,
+) -> anyhow::Result<toaster_gpu::AnimationConfig> {
+    match duration {
+        Some(duration) => toaster_gpu::AnimationConfig::from_duration(fps, duration),
+        None => toaster_gpu::AnimationConfig::indefinite(fps),
+    }
 }
 
 fn resolve_animation(
@@ -175,12 +301,23 @@ mod tests {
     #[test]
     fn resolves_explicit_animation_timing() {
         let duration = resolve_animation(Some(24), Some(1.1), None).unwrap();
-        assert_eq!(duration.frame_count(), 27);
+        assert_eq!(duration.frame_limit(), Some(27));
         assert_eq!(duration.fps(), Some(24));
 
         let frames = resolve_animation(Some(30), None, Some(12)).unwrap();
-        assert_eq!(frames.frame_count(), 12);
+        assert_eq!(frames.frame_limit(), Some(12));
         assert_eq!(frames.fps(), Some(30));
+    }
+
+    #[test]
+    fn resolves_finite_and_indefinite_preview_timing() {
+        let finite = resolve_preview_animation(12, Some(1.1)).unwrap();
+        assert_eq!(finite.frame_limit(), Some(14));
+        assert_eq!(finite.fps(), Some(12));
+
+        let indefinite = resolve_preview_animation(12, None).unwrap();
+        assert_eq!(indefinite.frame_limit(), None);
+        assert_eq!(indefinite.fps(), Some(12));
     }
 
     #[test]

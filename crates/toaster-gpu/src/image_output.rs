@@ -10,7 +10,11 @@ pub fn save_pixels_to_png(
     out_path: &Path,
 ) -> Result<()> {
     let img = pixels_to_rgba_image(pixels, width, height)?;
-    img.save(out_path)?;
+    save_rgba_image_to_png(&img, out_path)
+}
+
+pub fn save_rgba_image_to_png(image: &RgbaImage, out_path: &Path) -> Result<()> {
+    image.save(out_path)?;
     Ok(())
 }
 
@@ -26,9 +30,18 @@ pub fn encode_pixels_to_jpeg(
     );
 
     let img = pixels_to_rgba_image(pixels, width, height)?;
+    encode_rgba_image_to_jpeg(&img, quality)
+}
+
+pub fn encode_rgba_image_to_jpeg(image: &RgbaImage, quality: u8) -> Result<Vec<u8>> {
+    ensure!(
+        (1..=100).contains(&quality),
+        "JPEG quality must be between 1 and 100"
+    );
+
     let mut jpeg = Vec::new();
     JpegEncoder::new_with_quality(&mut jpeg, quality)
-        .encode_image(&img)
+        .encode_image(image)
         .context("failed to encode JPEG frame")?;
     Ok(jpeg)
 }

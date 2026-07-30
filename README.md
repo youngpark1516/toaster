@@ -43,6 +43,37 @@ cargo run -p toaster-cli -- gpu-render scenes/004_mesh.json \
 
 Multi-frame output is numbered from `cube_0000.png`. Omitting all timing flags renders one frame at time zero; partial or conflicting timing options are rejected rather than defaulted.
 
+### Live GPU preview
+
+Start a headless MJPEG preview server and render a scene for ten seconds:
+
+```sh
+cargo run -p toaster-cli -- stream-preview scenes/006_rotating_cube.json \
+  --host 127.0.0.1 --port 7878 --fps 12 --duration 10
+```
+
+Open <http://127.0.0.1:7878/> in a browser. The server exposes:
+
+- `/` — a minimal preview page
+- `/stream` — the live `multipart/x-mixed-replace` JPEG stream
+- `/healthz` — a basic health check
+
+The host, port, and target frame rate default to `127.0.0.1`, `7878`, and `12` FPS. Omit `--duration` to keep rendering until Ctrl+C:
+
+```sh
+cargo run -p toaster-cli -- stream-preview scenes/006_rotating_cube.json
+```
+
+Preview frames are kept in memory and are not written to disk. If rendering is slower than the target FPS, each completed frame is published immediately and no backlog is created.
+
+For a renderer running on a remote GPU machine, forward the loopback-bound server over SSH:
+
+```sh
+ssh -L 7878:127.0.0.1:7878 <remote>
+```
+
+Then run the preview command on the remote machine and open <http://127.0.0.1:7878/> locally.
+
 ### Render setting overrides
 
 Scene render settings are used by default. Override any combination of resolution, samples, and path depth from the command line:

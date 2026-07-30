@@ -10,11 +10,21 @@ pub async fn serve(host: &str, port: u16) -> Result<()> {
 }
 
 pub async fn serve_with_publisher(host: &str, port: u16, publisher: FramePublisher) -> Result<()> {
-    let listener = TcpListener::bind((host, port))
-        .await
-        .with_context(|| format!("failed to bind preview server to {host}:{port}"))?;
+    let listener = bind(host, port).await?;
+    serve_listener(listener, publisher).await
+}
 
-    println!("Preview server listening on http://{host}:{port}");
+pub async fn bind(host: &str, port: u16) -> Result<TcpListener> {
+    TcpListener::bind((host, port))
+        .await
+        .with_context(|| format!("failed to bind preview server to {host}:{port}"))
+}
+
+pub async fn serve_listener(listener: TcpListener, publisher: FramePublisher) -> Result<()> {
+    println!(
+        "Preview server listening on http://{}",
+        listener.local_addr()?
+    );
 
     axum::serve(listener, routes::router(publisher))
         .await

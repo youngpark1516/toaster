@@ -13,4 +13,7 @@ pub mod scene_upload;
 pub use animation::{frame_output_path, AnimationConfig};
 pub use device::{create_gpu_context, GpuContext};
 pub use gradient::render_gradient;
-pub use path_tracer::render_scene_gpu_animation;
+pub use path_tracer::{
+    render_scene_gpu_animation, render_scene_gpu_animation_with_sink, CompletedFrame, FramePacing,
+    FrameSink,
+};
