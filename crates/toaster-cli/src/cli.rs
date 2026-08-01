@@ -61,6 +61,33 @@ pub enum Command {
         /// Optional preview duration in seconds. Omit to run until Ctrl+C.
         #[arg(long, value_parser = parse_positive_f32)]
         duration: Option<f32>,
+
+        /// Wrap animation time at this interval while frame indices continue increasing.
+        #[arg(long, value_parser = parse_positive_f32)]
+        loop_duration: Option<f32>,
+
+        #[command(flatten)]
+        overrides: RenderOverrides,
+
+        /// Adjust samples per frame to stay near the target FPS.
+        #[arg(long)]
+        adaptive_samples: bool,
+
+        /// Lowest sample count used by adaptive preview.
+        #[arg(
+            long,
+            requires = "adaptive_samples",
+            value_parser = clap::value_parser!(u32).range(1..)
+        )]
+        min_samples: Option<u32>,
+
+        /// Highest sample count used by adaptive preview.
+        #[arg(
+            long,
+            requires = "adaptive_samples",
+            value_parser = clap::value_parser!(u32).range(1..)
+        )]
+        max_samples: Option<u32>,
     },
     Server {
         #[arg(long, default_value = "127.0.0.1")]
@@ -167,6 +194,11 @@ mod tests {
             port,
             fps,
             duration,
+            loop_duration,
+            overrides,
+            adaptive_samples,
+            min_samples,
+            max_samples,
             ..
         } = defaults.command
         else {
@@ -176,6 +208,11 @@ mod tests {
         assert_eq!(port, 7878);
         assert_eq!(fps, 12);
         assert_eq!(duration, None);
+        assert_eq!(loop_duration, None);
+        assert_eq!(overrides.width, None);
+        assert!(!adaptive_samples);
+        assert_eq!(min_samples, None);
+        assert_eq!(max_samples, None);
 
         let cli = Cli::try_parse_from([
             "toaster",
@@ -189,6 +226,21 @@ mod tests {
             "24",
             "--duration",
             "1.5",
+            "--loop-duration",
+            "2",
+            "--width",
+            "640",
+            "--height",
+            "360",
+            "--samples",
+            "8",
+            "--max-bounces",
+            "4",
+            "--adaptive-samples",
+            "--min-samples",
+            "2",
+            "--max-samples",
+            "32",
         ])
         .unwrap();
 
@@ -197,6 +249,11 @@ mod tests {
             port,
             fps,
             duration,
+            loop_duration,
+            overrides,
+            adaptive_samples,
+            min_samples,
+            max_samples,
             ..
         } = cli.command
         else {
@@ -206,6 +263,14 @@ mod tests {
         assert_eq!(port, 9000);
         assert_eq!(fps, 24);
         assert_eq!(duration, Some(1.5));
+        assert_eq!(loop_duration, Some(2.0));
+        assert_eq!(overrides.width, Some(640));
+        assert_eq!(overrides.height, Some(360));
+        assert_eq!(overrides.samples, Some(8));
+        assert_eq!(overrides.max_bounces, Some(4));
+        assert!(adaptive_samples);
+        assert_eq!(min_samples, Some(2));
+        assert_eq!(max_samples, Some(32));
     }
 
     #[test]
@@ -219,6 +284,28 @@ mod tests {
                 "scene.json",
                 "--duration",
                 "NaN",
+            ],
+            vec![
+                "toaster",
+                "stream-preview",
+                "scene.json",
+                "--loop-duration",
+                "0",
+            ],
+            vec![
+                "toaster",
+                "stream-preview",
+                "scene.json",
+                "--adaptive-samples",
+                "--min-samples",
+                "0",
+            ],
+            vec![
+                "toaster",
+                "stream-preview",
+                "scene.json",
+                "--min-samples",
+                "2",
             ],
         ] {
             assert!(Cli::try_parse_from(args).is_err());

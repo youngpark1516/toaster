@@ -56,6 +56,7 @@ Open <http://127.0.0.1:7878/> in a browser. The server exposes:
 
 - `/` — a minimal preview page
 - `/stream` — the live `multipart/x-mixed-replace` JPEG stream
+- `/status` — current frame timing and render settings as JSON
 - `/healthz` — a basic health check
 
 The host, port, and target frame rate default to `127.0.0.1`, `7878`, and `12` FPS. Omit `--duration` to keep rendering until Ctrl+C:
@@ -65,6 +66,31 @@ cargo run -p toaster-cli -- stream-preview scenes/006_rotating_cube.json
 ```
 
 Preview frames are kept in memory and are not written to disk. If rendering is slower than the target FPS, each completed frame is published immediately and no backlog is created.
+
+Preview quality can be adjusted without creating another scene file, and animation time can wrap while the render frame index keeps increasing:
+
+```sh
+cargo run -p toaster-cli -- stream-preview scenes/004_mesh.json \
+  --fps 12 \
+  --width 800 \
+  --height 800 \
+  --samples 16 \
+  --max-bounces 6 \
+  --loop-duration 2
+```
+
+The browser page displays the latest frame number, animation time, effective FPS, render time, resolution, samples, and bounce limit beneath the image.
+
+Adaptive sampling can trade quality for cadence automatically. It starts from the scene or `--samples` value, stays within the selected bounds, and reports each adjustment through `/status`:
+
+```sh
+cargo run -p toaster-cli -- stream-preview scenes/004_mesh.json \
+  --fps 12 --width 800 --height 800 --max-bounces 6 \
+  --samples 16 --adaptive-samples --min-samples 2 --max-samples 32 \
+  --loop-duration 2
+```
+
+Without `--adaptive-samples`, the preview keeps using the fixed scene or `--samples` value.
 
 For a renderer running on a remote GPU machine, forward the loopback-bound server over SSH:
 

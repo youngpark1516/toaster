@@ -11,4 +11,4 @@
 
 Dependencies point inward toward core data. Renderer-specific code stays out of scene descriptions, and GPU concerns remain isolated from the CPU reference implementation.
 
-The live preview path keeps rendering and HTTP transport separate. `toaster-gpu` produces completed RGBA frames through a reusable sink, `toaster-cli` JPEG-encodes and publishes them, and `toaster-server` broadcasts only the latest JPEG through a Tokio watch channel. Slow browser clients therefore drop superseded frames instead of blocking the GPU render loop.
+The live preview path keeps rendering and HTTP transport separate. `toaster-gpu` produces completed RGBA frames through a reusable sink, `toaster-cli` JPEG-encodes and publishes them, and `toaster-server` broadcasts only the latest JPEG through a Tokio watch channel. A separate latest-value status channel feeds `/status` and the browser metrics display. Slow browser clients therefore drop superseded frames instead of blocking the GPU render loop.
