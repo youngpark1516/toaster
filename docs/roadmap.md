@@ -20,8 +20,9 @@ Add triangles, construct a CPU BVH, flatten it into GPU-friendly buffers, and me
 
 Initial glTF/GLB import now includes triangle geometry, node transforms, smooth
 normals, UVs, base-color factors and textures, relative scene paths, material
-overrides, and animation groups. Next, add environment lighting, then reusable
-procedural scene generators.
+overrides, animation groups, and equirectangular HDR/PNG/JPEG environment
+lighting. Next, add importance sampling for bright environment regions, then
+reusable procedural scene generators.
 
 ## Phase 5: Preview server
 

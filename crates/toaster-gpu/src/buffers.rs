@@ -33,6 +33,7 @@ pub struct SceneGpuBuffers {
     pub materials: wgpu::Buffer,
     pub lights: wgpu::Buffer,
     pub texture_pixels: wgpu::Buffer,
+    pub environment_pixels: wgpu::Buffer,
     pub output_size: u64,
     pub params_size: u64,
 }
@@ -174,6 +175,18 @@ pub fn create_scene_gpu_buffers(device: &wgpu::Device, scene: &SceneGpuData) -> 
         usage: wgpu::BufferUsages::STORAGE,
     });
 
+    let dummy_environment_pixel = [[0.0_f32; 4]];
+    let environment_data = if scene.environment_pixels.is_empty() {
+        &dummy_environment_pixel[..]
+    } else {
+        &scene.environment_pixels
+    };
+    let environment_pixels_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Scene Environment Pixels Buffer"),
+        contents: bytemuck::cast_slice(environment_data),
+        usage: wgpu::BufferUsages::STORAGE,
+    });
+
     SceneGpuBuffers {
         output: output_buffer,
         readback: readback_buffer,
@@ -185,6 +198,7 @@ pub fn create_scene_gpu_buffers(device: &wgpu::Device, scene: &SceneGpuData) -> 
         materials: materials_buffer,
         lights: lights_buffer,
         texture_pixels: texture_pixels_buffer,
+        environment_pixels: environment_pixels_buffer,
         output_size,
         params_size,
     }

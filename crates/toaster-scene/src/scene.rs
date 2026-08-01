@@ -1,5 +1,6 @@
 use crate::{
     animation::Animation,
+    environment::EnvironmentMap,
     material::Material,
     object::{Sphere, Triangle, TriangleAttributes},
     texture::Texture,
@@ -15,6 +16,7 @@ pub struct Scene {
     pub triangles: Vec<Triangle>,
     pub triangle_attributes: Vec<TriangleAttributes>,
     pub textures: Vec<Texture>,
+    pub environment: Option<EnvironmentMap>,
     pub animation: Animation,
 }
 
@@ -40,4 +42,5 @@ pub enum Background {
     #[default]
     Sky,
     Black,
+    Environment,
 }

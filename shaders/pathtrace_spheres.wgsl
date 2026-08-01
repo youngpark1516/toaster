@@ -15,6 +15,11 @@ struct RenderParams {
     light_count: u32,
     total_light_area: f32,
     _pad1: u32,
+
+    environment_width: u32,
+    environment_height: u32,
+    environment_intensity: f32,
+    environment_rotation_degrees: f32,
 };
 
 struct Camera {
@@ -124,6 +129,9 @@ var<storage, read> texture_pixels: array<u32>;
 @group(0) @binding(8)
 var<storage, read> triangle_attributes: array<TriangleAttributes>;
 
+@group(0) @binding(9)
+var<storage, read> environment_pixels: array<vec4<f32>>;
+
 var<private> rng_state: u32;
 
 fn pcg_hash(input: u32) -> u32 {
@@ -200,6 +208,39 @@ fn sample_base_color(material: Material, uv: vec2<f32>) -> vec3<f32> {
         amount.x
     );
     return material.albedo.xyz * mix(top, bottom, amount.y);
+}
+
+fn read_environment_texel(x: i32, y: i32) -> vec3<f32> {
+    let wrapped_x = wrap_texel(x, params.environment_width);
+    let clamped_y = u32(clamp(y, 0, i32(params.environment_height) - 1));
+    return environment_pixels[clamped_y * params.environment_width + wrapped_x].xyz;
+}
+
+fn sample_environment(direction: vec3<f32>) -> vec3<f32> {
+    let unit_direction = normalize(direction);
+    let u = fract(
+        atan2(unit_direction.z, unit_direction.x) / (2.0 * PI)
+            + 0.5
+            + params.environment_rotation_degrees / 360.0
+    );
+    let v = acos(clamp(unit_direction.y, -1.0, 1.0)) / PI;
+    let position = vec2f(
+        u * f32(params.environment_width) - 0.5,
+        v * f32(params.environment_height) - 0.5
+    );
+    let base = vec2<i32>(floor(position));
+    let amount = fract(position);
+    let top = mix(
+        read_environment_texel(base.x, base.y),
+        read_environment_texel(base.x + 1, base.y),
+        amount.x
+    );
+    let bottom = mix(
+        read_environment_texel(base.x, base.y + 1),
+        read_environment_texel(base.x + 1, base.y + 1),
+        amount.x
+    );
+    return mix(top, bottom, amount.y) * params.environment_intensity;
 }
 
 var<private> MIN_DISTANCE: f32 = 0.001;
@@ -482,6 +523,8 @@ fn ray_color(ray: Ray) -> vec3<f32> {
             if params.background_kind == 0u {
                 let lerp_t: f32 = (normalize(cur_ray.direction).y + 1.0) * 0.5;
                 radiance += throughput * mix(vec3f(1.0, 1.0, 1.0), vec3f(0.35, 0.65, 1.0), lerp_t);
+            } else if params.background_kind == 2u {
+                radiance += throughput * sample_environment(cur_ray.direction);
             }
             break;
         }

@@ -156,13 +156,44 @@ normals, UV set zero, and 8-bit base-color textures. Metallic-roughness shading,
 normal maps, alpha modes, skinning, morph targets, and non-triangle primitives
 remain deferred.
 
+### Environment maps
+
+Use an equirectangular HDR, PNG, or JPEG image as the background and as incoming
+radiance when a path leaves the scene. Paths are resolved relative to the scene
+file. `intensity` defaults to `1.0`, and `rotation_degrees` applies a yaw rotation:
+
+```json
+"background": {
+  "type": "environment",
+  "path": "../assets/environments/studio_test.hdr",
+  "intensity": 8.0,
+  "rotation_degrees": 20.0
+}
+```
+
+Render the included small test environment on the CPU or GPU:
+
+```sh
+cargo run -p toaster-cli -- gpu-render scenes/010_environment_map.json \
+  --out out/environment.png
+
+cargo run -p toaster-cli -- stream-preview scenes/010_environment_map.json \
+  --fps 12 --samples 8
+```
+
+HDR pixels remain linear floating-point radiance. PNG and JPEG environment maps
+are converted from sRGB to linear color. This first version samples the map when
+rays miss; importance sampling the environment for cleaner diffuse lighting is a
+future optimization.
+
 ## Milestones
 
 1. ✅ CPU sphere path tracer and material scattering
 2. ✅ Emissive materials, initial triangles, and Cornell box
 3. ✅ `wgpu` compute renderer and image readback
 4. Triangle meshes and BVH acceleration (in progress)
-5. Initial glTF geometry import and browser preview (procedural scenes remain)
+5. ✅ Initial glTF geometry import and browser preview
+6. ✅ HDR/PNG/JPEG environment-map lighting
 
 See the [project guide](docs/project_guide.md) for the complete operational
 snapshot, or the shorter [roadmap](docs/roadmap.md) and

@@ -1,4 +1,5 @@
 pub mod animation;
+pub mod environment;
 pub mod loader;
 pub mod material;
 pub mod object;
@@ -10,6 +11,7 @@ pub use animation::{
     Animation, AnimationTarget, AnimationTrack, Interpolation, RotationKeyframe,
     TranslationKeyframe,
 };
+pub use environment::EnvironmentMap;
 pub use loader::load_scene;
 pub use material::Material;
 pub use object::{Sphere, Triangle, TriangleAttributes};

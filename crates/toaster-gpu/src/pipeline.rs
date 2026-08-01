@@ -154,6 +154,17 @@ pub fn create_pathtrace_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGr
                 },
                 count: None,
             },
+            // binding 9: linear floating-point environment-map pixels
+            wgpu::BindGroupLayoutEntry {
+                binding: 9,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
         ],
     })
 }
@@ -202,6 +213,10 @@ pub fn create_pathtrace_bind_group(
             wgpu::BindGroupEntry {
                 binding: 8,
                 resource: buffers.triangle_attributes.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 9,
+                resource: buffers.environment_pixels.as_entire_binding(),
             },
         ],
     })

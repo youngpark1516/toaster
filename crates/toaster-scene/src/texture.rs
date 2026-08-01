@@ -64,7 +64,7 @@ impl Texture {
     }
 }
 
-fn srgb_to_linear(value: u8) -> f32 {
+pub(crate) fn srgb_to_linear(value: u8) -> f32 {
     let value = value as f32 / 255.0;
     if value <= 0.04045 {
         value / 12.92

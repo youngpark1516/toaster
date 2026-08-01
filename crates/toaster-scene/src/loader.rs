@@ -1,5 +1,6 @@
 use crate::{
     animation::{validate_animation, Animation},
+    environment::EnvironmentMap,
     material::Material,
     object::{Sphere, Triangle, TriangleAttributes},
     scene::{Background, CameraSettings, RenderSettings, Scene},
@@ -44,12 +45,37 @@ struct RenderFile {
     background: BackgroundFile,
 }
 
+#[derive(Clone, Deserialize)]
+#[serde(untagged)]
+enum BackgroundFile {
+    Kind(BackgroundKindFile),
+    Detailed(DetailedBackgroundFile),
+}
+
+impl Default for BackgroundFile {
+    fn default() -> Self {
+        Self::Kind(BackgroundKindFile::Sky)
+    }
+}
+
 #[derive(Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum BackgroundFile {
+enum BackgroundKindFile {
     #[default]
     Sky,
     Black,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum DetailedBackgroundFile {
+    Environment {
+        path: PathBuf,
+        #[serde(default = "default_environment_intensity")]
+        intensity: f32,
+        #[serde(default)]
+        rotation_degrees: f32,
+    },
 }
 
 #[derive(Deserialize)]
@@ -91,6 +117,10 @@ enum ObjectFile {
 
 fn default_up() -> Vec3 {
     Vec3::Y
+}
+
+fn default_environment_intensity() -> f32 {
+    1.0
 }
 
 pub fn load_scene(path: impl AsRef<Path>) -> Result<Scene> {
@@ -332,6 +362,30 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
         }
     }
 
+    let (background, environment) = match file.render.background {
+        BackgroundFile::Kind(BackgroundKindFile::Sky) => (Background::Sky, None),
+        BackgroundFile::Kind(BackgroundKindFile::Black) => (Background::Black, None),
+        BackgroundFile::Detailed(DetailedBackgroundFile::Environment {
+            path,
+            intensity,
+            rotation_degrees,
+        }) => {
+            let environment_path = if path.is_absolute() {
+                path
+            } else {
+                asset_root.join(path)
+            };
+            let environment = EnvironmentMap::load(&environment_path, intensity, rotation_degrees)
+                .with_context(|| {
+                    format!(
+                        "failed to load environment background {}",
+                        environment_path.display()
+                    )
+                })?;
+            (Background::Environment, Some(environment))
+        }
+    };
+
     let mut animation = file.animation;
     animation.normalize_rotation_axes()?;
     let scene = Scene {
@@ -346,16 +400,14 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
             height: file.render.height,
             samples: file.render.samples,
             max_bounces: file.render.max_bounces,
-            background: match file.render.background {
-                BackgroundFile::Sky => Background::Sky,
-                BackgroundFile::Black => Background::Black,
-            },
+            background,
         },
         materials,
         spheres,
         triangles,
         triangle_attributes,
         textures,
+        environment,
         animation,
     };
     validate_animation(&scene)?;
@@ -623,5 +675,23 @@ mod tests {
         let animated = scene.evaluate_at(2.0).unwrap();
         let rotated_normal = animated.triangle_attributes[0].normals.unwrap()[0];
         assert!(rotated_normal.abs_diff_eq(Vec3::X, 1e-5));
+    }
+
+    #[test]
+    fn loads_relative_hdr_environment_background() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes/010_environment_map.json");
+        let scene = load_scene(path).unwrap();
+        let environment = scene.environment.as_ref().unwrap();
+
+        assert_eq!(scene.render.background, Background::Environment);
+        assert_eq!((environment.width, environment.height), (4, 2));
+        assert_eq!(environment.intensity, 8.0);
+        assert_eq!(environment.rotation_degrees, 20.0);
+        assert_eq!(environment.pixels.len(), 8);
+        assert!(environment
+            .pixels
+            .iter()
+            .any(|pixel| pixel.max_element() > 0.0));
     }
 }

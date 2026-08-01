@@ -4,6 +4,7 @@
 *.png
 *.exr
 *.hdr
+!assets/environments/studio_test.hdr
 *.tmp
 *.swp
 *~
@@ -14,4 +15,3 @@
 .cluster/
 cluster.local.*
 local.toml
-

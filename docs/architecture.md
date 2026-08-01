@@ -19,4 +19,10 @@ renderers. Smooth normals and UVs occupy a parallel array keyed by triangle inde
 so BVH traversal can retain the existing position/material structure and retrieve
 shading attributes only after a hit.
 
+Environment images are decoded in `toaster-scene` into renderer-neutral linear
+floating-point radiance. The CPU integrator samples that shared representation;
+the GPU uploader copies the same pixels into a read-only storage buffer. CPU and
+WGSL use the same latitude-longitude mapping, horizontal wrap, vertical clamp,
+bilinear filtering, intensity, and yaw rotation.
+
 The live preview path keeps rendering and HTTP transport separate. `toaster-gpu` produces completed RGBA frames through a reusable sink, `toaster-cli` JPEG-encodes and publishes them, and `toaster-server` broadcasts only the latest JPEG through a Tokio watch channel. A separate latest-value status channel feeds `/status` and the browser metrics display. Slow browser clients therefore drop superseded frames instead of blocking the GPU render loop.

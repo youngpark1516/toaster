@@ -352,6 +352,7 @@ mod tests {
             }],
             triangle_attributes: vec![crate::TriangleAttributes::default()],
             textures: Vec::new(),
+            environment: None,
             animation: Animation { tracks },
         }
     }

@@ -19,7 +19,7 @@ portable GPU compute, remote-cluster operation, and measurable milestones.
 
 - CPU and GPU rendering of spheres and triangles.
 - Diffuse, metal, dielectric, and emissive materials.
-- Sky or black backgrounds.
+- Sky, black, or equirectangular HDR/PNG/JPEG environment backgrounds.
 - Emissive sphere and triangle area lights with direct-light sampling.
 - JSON scene loading and validation.
 - Camera and object-group translation and rotation tracks.
@@ -30,6 +30,7 @@ portable GPU compute, remote-cluster operation, and measurable milestones.
 - Smooth-normal and UV interpolation at triangle hits.
 - glTF base-color factors and 8-bit base-color textures in both renderers.
 - Repeating bilinear texture filtering with sRGB-to-linear conversion.
+- Linear floating-point environment radiance with intensity and yaw controls.
 - Scene-relative mesh paths, Toaster material overrides, and animation groups.
 - Headless MJPEG live preview with health and render-status endpoints.
 - Finite or indefinite preview schedules, animation looping, Ctrl+C shutdown,
@@ -46,7 +47,7 @@ portable GPU compute, remote-cluster operation, and measurable milestones.
 | `glam` | Vectors, quaternions, matrices, and transforms |
 | `serde` / `serde_json` | Scene and animation JSON parsing |
 | `gltf` | `.gltf`/`.glb` documents, buffers, accessors, and node traversal |
-| `image` | PNG output and JPEG encoding |
+| `image` | HDR/PNG/JPEG loading, PNG output, and JPEG encoding |
 | `axum` | Browser-facing HTTP routes |
 | `tokio` | Server runtime, signals, tasks, and latest-value watch channels |
 | `tokio-stream` | Adapting watch-channel updates into HTTP response streams |
@@ -75,9 +76,9 @@ cloud orchestrator in the current design.
 The main data flow is:
 
 ```text
-JSON scene ──┐
-             ├─> toaster-scene ─> CPU renderer ─> PNG
-glTF asset ─> toaster-assets ─┘
+JSON scene ───────┐
+environment map ─┼─> toaster-scene ─> CPU renderer ─> PNG
+glTF asset ──────> toaster-assets ─┘
                          └───────> GPU renderer ─> RGBA frame
                                                     ├─> PNG
                                                     └─> JPEG ─> Axum ─> browser
@@ -288,6 +289,22 @@ Toaster material overrides every imported primitive. When it is omitted, Toaster
 uses each primitive's glTF base-color factor and texture. Smooth `NORMAL` and
 `TEXCOORD_0` attributes are interpolated barycentrically.
 
+Render backgrounds accept the original `"sky"` and `"black"` strings or an
+equirectangular environment description:
+
+```json
+"background": {
+  "type": "environment",
+  "path": "../assets/environments/studio_test.hdr",
+  "intensity": 8.0,
+  "rotation_degrees": 20.0
+}
+```
+
+Environment paths are relative to the scene. HDR values stay as linear floats;
+PNG and JPEG values are converted from sRGB. Both renderers bilinearly sample
+the map when a ray misses.
+
 Animation tracks can target the camera or every object sharing a group. Supported
 tracks are translation and axis/pivot rotation with linear or step interpolation.
 
@@ -305,6 +322,7 @@ tracks are translation and axis/pivot rotation with linear or step interpolation
 | `007_mesh_long_preview.json` | Lower-cost, long-running preview |
 | `008_gltf_tetrahedron.json` | Imported and animated glTF geometry |
 | `009_gltf_textured_quad.json` | Smooth normals and glTF base-color texture |
+| `010_environment_map.json` | HDR environment background and reflections |
 
 ## Current limitations
 
@@ -321,20 +339,19 @@ tracks are translation and axis/pivot rotation with linear or step interpolation
 - There is no authentication or multi-render orchestration.
 - The CPU renderer is single-threaded.
 - There is no temporal accumulation, reprojection, or denoiser.
+- Environment lighting has no luminance importance sampling yet, so diffuse
+  illumination can require many samples.
 
 ## Next milestone
 
-The next coherent feature is an **environment-lighting MVP**, which is independent
-of the BVH traversal currently in progress:
+The next coherent optimization is **environment-map importance sampling**:
 
-1. Add an equirectangular environment image, intensity, and yaw rotation to the
-   scene background settings.
-2. Load environment pixels into renderer-neutral linear floating-point data.
-3. Convert ray directions to latitude/longitude UVs consistently on CPU and GPU.
-4. Sample the environment whenever a ray misses instead of using only the fixed
-   sky gradient or black background.
-5. Add a small fixture and CPU/GPU direction-to-color tests.
+1. Build a luminance-weighted distribution that includes the latitude sine term.
+2. Sample environment directions directly for diffuse surfaces.
+3. Combine direct environment samples and BSDF samples with multiple importance
+   sampling to avoid bias and reduce noise around bright map regions.
+4. Mirror the distribution and PDF calculations on CPU and GPU, with statistical
+   and image-level tests.
 
-Importance sampling the environment by luminance should follow once background
-lookup is correct. After that, the logical sequence is progressive accumulation
-and denoising, expanded PBR material inputs, then procedural scene generation.
+After that, the logical sequence is progressive accumulation and denoising,
+expanded PBR material inputs, then procedural scene generation.

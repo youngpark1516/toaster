@@ -13,7 +13,7 @@ use crate::pipeline::{
     create_pathtrace_bind_group, create_pathtrace_bind_group_layout, create_pipeline, load_shader,
 };
 use crate::readback::readback_pixels;
-use crate::scene_upload::scene_to_gpu;
+use crate::scene_upload::{scene_to_gpu, scene_to_gpu_frame};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FramePacing {
@@ -166,7 +166,7 @@ pub async fn render_gpu_animation_with_sink(
         let frame_start = Instant::now();
         let time_seconds = animation.time_for_frame(frame);
         let evaluated = source_scene.evaluate_at(time_seconds)?;
-        scene = scene_to_gpu(&evaluated)?;
+        scene = scene_to_gpu_frame(&evaluated)?;
         if let Some(samples) = sink.samples_for_frame() {
             ensure!(
                 samples > 0,

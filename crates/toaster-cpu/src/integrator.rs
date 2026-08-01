@@ -102,6 +102,11 @@ fn ray_color_inner<R: Rng + ?Sized>(
             Vec3::ONE.lerp(Vec3::new(0.35, 0.65, 1.0), blend)
         }
         Background::Black => Vec3::ZERO,
+        Background::Environment => scene
+            .environment
+            .as_ref()
+            .expect("scene loader provides an environment map")
+            .sample(ray.direction),
     }
 }
 
@@ -260,7 +265,9 @@ fn random_in_unit_sphere<R: Rng + ?Sized>(rng: &mut R) -> Vec3 {
 mod tests {
     use super::*;
     use rand::SeedableRng;
-    use toaster_scene::{Background, CameraSettings, Material, RenderSettings, Sphere, Triangle};
+    use toaster_scene::{
+        Background, CameraSettings, EnvironmentMap, Material, RenderSettings, Sphere, Triangle,
+    };
 
     fn test_scene(albedo: Vec3) -> Scene {
         Scene {
@@ -287,6 +294,7 @@ mod tests {
             triangles: Vec::new(),
             triangle_attributes: Vec::new(),
             textures: Vec::new(),
+            environment: None,
             animation: Default::default(),
         }
     }
@@ -362,6 +370,7 @@ mod tests {
                 if blocked { 3 } else { 1 }
             ],
             textures: Vec::new(),
+            environment: None,
             animation: Default::default(),
         }
     }
@@ -398,6 +407,19 @@ mod tests {
             4,
         );
         assert!(color.abs_diff_eq(Vec3::new(0.35, 0.65, 1.0), 1e-6));
+    }
+
+    #[test]
+    fn miss_samples_environment_radiance() {
+        let mut scene = test_scene(Vec3::ONE);
+        scene.render.background = Background::Environment;
+        scene.environment =
+            Some(EnvironmentMap::new(1, 1, vec![Vec3::new(3.0, 2.0, 1.0)], 0.5, 0.0).unwrap());
+        let mut rng = StdRng::seed_from_u64(1);
+
+        let color = ray_color(&Ray::new(Vec3::ZERO, Vec3::X), &scene, &mut rng, 1);
+
+        assert_eq!(color, Vec3::new(1.5, 1.0, 0.5));
     }
 
     #[test]

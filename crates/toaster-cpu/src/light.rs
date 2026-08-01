@@ -138,6 +138,7 @@ mod tests {
             ],
             triangle_attributes: vec![toaster_scene::TriangleAttributes::default(); 2],
             textures: Vec::new(),
+            environment: None,
             animation: Default::default(),
         }
     }

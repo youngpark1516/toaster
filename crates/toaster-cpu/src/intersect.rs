@@ -231,6 +231,7 @@ mod tests {
             triangles: Vec::new(),
             triangle_attributes: Vec::new(),
             textures: Vec::new(),
+            environment: None,
             animation: Default::default(),
         };
         assert_eq!(

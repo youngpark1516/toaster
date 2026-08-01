@@ -17,6 +17,7 @@ pub struct SceneGpuData {
     pub materials: Vec<GpuMaterial>,
     pub lights: Vec<GpuLight>,
     pub texture_pixels: Vec<u32>,
+    pub environment_pixels: Vec<[f32; 4]>,
 }
 
 pub fn load_scene_gpu(path: impl AsRef<Path>) -> Result<SceneGpuData> {
@@ -25,6 +26,14 @@ pub fn load_scene_gpu(path: impl AsRef<Path>) -> Result<SceneGpuData> {
 }
 
 pub fn scene_to_gpu(scene: &Scene) -> Result<SceneGpuData> {
+    scene_to_gpu_inner(scene, true)
+}
+
+pub(crate) fn scene_to_gpu_frame(scene: &Scene) -> Result<SceneGpuData> {
+    scene_to_gpu_inner(scene, false)
+}
+
+fn scene_to_gpu_inner(scene: &Scene, include_static_pixels: bool) -> Result<SceneGpuData> {
     if scene.spheres.is_empty() && scene.triangles.is_empty() {
         bail!("GPU renderer requires at least one object");
     }
@@ -111,15 +120,22 @@ pub fn scene_to_gpu(scene: &Scene) -> Result<SceneGpuData> {
 
     let mut texture_pixels = Vec::new();
     let mut texture_metadata = Vec::with_capacity(scene.textures.len());
+    let mut texture_pixel_count = 0_usize;
     for texture in &scene.textures {
-        let offset = u32::try_from(texture_pixels.len()).context("texture atlas is too large")?;
+        let offset = u32::try_from(texture_pixel_count).context("texture atlas is too large")?;
         texture_metadata.push((offset, texture.width, texture.height));
-        texture_pixels.extend(
-            texture
-                .rgba8
-                .chunks_exact(4)
-                .map(|pixel| u32::from_le_bytes([pixel[0], pixel[1], pixel[2], pixel[3]])),
-        );
+        let pixel_count = texture.rgba8.len() / 4;
+        texture_pixel_count = texture_pixel_count
+            .checked_add(pixel_count)
+            .context("texture atlas is too large")?;
+        if include_static_pixels {
+            texture_pixels.extend(
+                texture
+                    .rgba8
+                    .chunks_exact(4)
+                    .map(|pixel| u32::from_le_bytes([pixel[0], pixel[1], pixel[2], pixel[3]])),
+            );
+        }
     }
 
     let materials = scene
@@ -130,6 +146,38 @@ pub fn scene_to_gpu(scene: &Scene) -> Result<SceneGpuData> {
         .collect::<Result<Vec<_>>>()?;
     let (lights, total_light_area) = lights_to_gpu(scene)?;
     let light_count = u32::try_from(lights.len()).context("too many lights for GPU")?;
+    let (
+        environment_width,
+        environment_height,
+        environment_intensity,
+        environment_rotation_degrees,
+    ) = match (&scene.render.background, &scene.environment) {
+        (Background::Environment, Some(environment)) => (
+            environment.width,
+            environment.height,
+            environment.intensity,
+            environment.rotation_degrees,
+        ),
+        (Background::Environment, None) => {
+            bail!("environment background requires an environment map")
+        }
+        (_, _) => (0, 0, 0.0, 0.0),
+    };
+    let environment_pixels = if include_static_pixels {
+        scene
+            .environment
+            .as_ref()
+            .map(|environment| {
+                environment
+                    .pixels
+                    .iter()
+                    .map(|pixel| [pixel.x, pixel.y, pixel.z, 0.0])
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
 
     Ok(SceneGpuData {
         params: GpuRenderParams {
@@ -144,10 +192,15 @@ pub fn scene_to_gpu(scene: &Scene) -> Result<SceneGpuData> {
             background_kind: match scene.render.background {
                 Background::Sky => 0,
                 Background::Black => 1,
+                Background::Environment => 2,
             },
             light_count,
             total_light_area,
             _pad0: 0,
+            environment_width,
+            environment_height,
+            environment_intensity,
+            environment_rotation_degrees,
         },
         camera,
         spheres,
@@ -156,6 +209,7 @@ pub fn scene_to_gpu(scene: &Scene) -> Result<SceneGpuData> {
         materials,
         lights,
         texture_pixels,
+        environment_pixels,
     })
 }
 
@@ -449,6 +503,7 @@ mod tests {
             triangles: Vec::new(),
             triangle_attributes: Vec::new(),
             textures: Vec::new(),
+            environment: None,
             animation: Default::default(),
         };
         let gpu_scene = scene_to_gpu(&scene).unwrap();
@@ -456,5 +511,28 @@ mod tests {
         assert!(gpu_scene.lights.is_empty());
         assert_eq!(gpu_scene.params.light_count, 0);
         assert_eq!(gpu_scene.params.total_light_area, 0.0);
+    }
+
+    #[test]
+    fn uploads_float_environment_map_and_metadata() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes/010_environment_map.json");
+        let source = toaster_scene::load_scene(path).unwrap();
+        let scene = scene_to_gpu(&source).unwrap();
+
+        assert_eq!(scene.params.background_kind, 2);
+        assert_eq!(scene.params.environment_width, 4);
+        assert_eq!(scene.params.environment_height, 2);
+        assert_eq!(scene.params.environment_intensity, 8.0);
+        assert_eq!(scene.params.environment_rotation_degrees, 20.0);
+        assert_eq!(scene.environment_pixels.len(), 8);
+        assert!(scene
+            .environment_pixels
+            .iter()
+            .any(|pixel| pixel[0] > 0.0 || pixel[1] > 0.0 || pixel[2] > 0.0));
+
+        let frame = scene_to_gpu_frame(&source).unwrap();
+        assert_eq!(frame.params.environment_width, 4);
+        assert!(frame.environment_pixels.is_empty());
     }
 }
