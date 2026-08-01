@@ -33,7 +33,9 @@ struct Sphere {
 
 struct Material {
     kind: u32,
-    _pad0: array<u32, 3>,
+    texture_offset: u32,
+    texture_width: u32,
+    texture_height: u32,
 
     albedo: vec4<f32>,
 
@@ -52,6 +54,7 @@ struct HitRecord {
     normal: vec3<f32>,
     front_face: bool,
     material_index: u32,
+    tex_coord: vec2<f32>,
 };
 
 fn at(ray: Ray, d: f32) -> vec3<f32> {
@@ -65,6 +68,18 @@ struct Triangle {
 
     material_index: u32,
     _pad0: array<u32, 3>,
+};
+
+struct TriangleAttributes {
+    n0: vec4<f32>,
+    n1: vec4<f32>,
+    n2: vec4<f32>,
+
+    uv0: vec2<f32>,
+    uv1: vec2<f32>,
+    uv2: vec2<f32>,
+    flags: u32,
+    _pad0: u32,
 };
 
 struct Light {
@@ -103,6 +118,12 @@ var<storage, read> triangles: array<Triangle>;
 @group(0) @binding(6)
 var<storage, read> lights: array<Light>;
 
+@group(0) @binding(7)
+var<storage, read> texture_pixels: array<u32>;
+
+@group(0) @binding(8)
+var<storage, read> triangle_attributes: array<TriangleAttributes>;
+
 var<private> rng_state: u32;
 
 fn pcg_hash(input: u32) -> u32 {
@@ -121,6 +142,64 @@ fn random_unit_vector() -> vec3<f32> {
     let a = random_f32() * 6.2831853;
     let r = sqrt(max(0.0, 1.0 - z * z));
     return vec3<f32>(r * cos(a), r * sin(a), z);
+}
+
+fn srgb_to_linear(value: f32) -> f32 {
+    if value <= 0.04045 {
+        return value / 12.92;
+    }
+    return pow((value + 0.055) / 1.055, 2.4);
+}
+
+fn unpack_srgb_texel(packed: u32) -> vec3<f32> {
+    let scale: f32 = 1.0 / 255.0;
+    let srgb = vec3f(
+        f32(packed & 255u),
+        f32((packed >> 8u) & 255u),
+        f32((packed >> 16u) & 255u)
+    ) * scale;
+    return vec3f(
+        srgb_to_linear(srgb.x),
+        srgb_to_linear(srgb.y),
+        srgb_to_linear(srgb.z)
+    );
+}
+
+fn wrap_texel(value: i32, size: u32) -> u32 {
+    let signed_size = i32(size);
+    return u32(((value % signed_size) + signed_size) % signed_size);
+}
+
+fn read_texture_texel(material: Material, x: i32, y: i32) -> vec3<f32> {
+    let wrapped_x = wrap_texel(x, material.texture_width);
+    let wrapped_y = wrap_texel(y, material.texture_height);
+    let index = material.texture_offset + wrapped_y * material.texture_width + wrapped_x;
+    return unpack_srgb_texel(texture_pixels[index]);
+}
+
+fn sample_base_color(material: Material, uv: vec2<f32>) -> vec3<f32> {
+    if material.texture_width == 0u || material.texture_height == 0u {
+        return material.albedo.xyz;
+    }
+
+    let repeated_uv = fract(uv);
+    let position = repeated_uv * vec2f(
+        f32(material.texture_width),
+        f32(material.texture_height)
+    ) - vec2f(0.5);
+    let base = vec2<i32>(floor(position));
+    let amount = fract(position);
+    let top = mix(
+        read_texture_texel(material, base.x, base.y),
+        read_texture_texel(material, base.x + 1, base.y),
+        amount.x
+    );
+    let bottom = mix(
+        read_texture_texel(material, base.x, base.y + 1),
+        read_texture_texel(material, base.x + 1, base.y + 1),
+        amount.x
+    );
+    return material.albedo.xyz * mix(top, bottom, amount.y);
 }
 
 var<private> MIN_DISTANCE: f32 = 0.001;
@@ -246,7 +325,8 @@ fn hit_sphere(ray: Ray, sphere: Sphere) -> HitRecord {
         vec3<f32>(0, 0, 0),
         vec3<f32>(0, 0, 0),
         false,
-        0
+        0,
+        vec2f(0)
     );
 
     let offset: vec3<f32> = ray.origin - sphere.center_radius.xyz;
@@ -281,17 +361,19 @@ fn hit_sphere(ray: Ray, sphere: Sphere) -> HitRecord {
         point,
         normal,
         front_face,
-        sphere.material_index
+        sphere.material_index,
+        vec2f(0)
     );
 }
 
-fn hit_triangle(ray: Ray, triangle: Triangle) -> HitRecord {
+fn hit_triangle(ray: Ray, triangle: Triangle, attributes: TriangleAttributes) -> HitRecord {
     let no_hit: HitRecord = HitRecord(
         3.4028235e38f,
         vec3<f32>(0, 0, 0),
         vec3<f32>(0, 0, 0),
         false,
-        0
+        0,
+        vec2f(0)
     );
 
     let edge1: vec3<f32> = triangle.v1.xyz - triangle.v0.xyz;
@@ -321,16 +403,33 @@ fn hit_triangle(ray: Ray, triangle: Triangle) -> HitRecord {
         return no_hit;
     }
 
-    let outward_normal: vec3<f32> = normalize(cross(edge1, edge2));
-    let front_face: bool = dot(ray.direction, outward_normal) < 0.0;
+    let geometric_normal: vec3<f32> = normalize(cross(edge1, edge2));
+    let front_face: bool = dot(ray.direction, geometric_normal) < 0.0;
+    let weight0: f32 = 1.0 - u - v;
+    var outward_normal: vec3<f32> = geometric_normal;
+    if (attributes.flags & 1u) != 0u {
+        outward_normal = normalize(
+            weight0 * attributes.n0.xyz
+            + u * attributes.n1.xyz
+            + v * attributes.n2.xyz
+        );
+        if dot(outward_normal, geometric_normal) < 0.0 {
+            outward_normal = -outward_normal;
+        }
+    }
     let normal = select(-1 * outward_normal, outward_normal, front_face);
+    var tex_coord: vec2<f32> = vec2f(0);
+    if (attributes.flags & 2u) != 0u {
+        tex_coord = weight0 * attributes.uv0 + u * attributes.uv1 + v * attributes.uv2;
+    }
 
     return HitRecord(
         distance,
         at(ray, distance),
         normal,
         front_face,
-        triangle.material_index
+        triangle.material_index,
+        tex_coord
     );
 }
 
@@ -342,7 +441,8 @@ fn calc_intersections(ray: Ray) -> HitRecord {
         vec3<f32>(0, 0, 0),
         vec3<f32>(0, 0, 0),
         false,
-        0
+        0,
+        vec2f(0)
     );
 
     for (var i: u32 = 0; i < num_sphere; i++) {
@@ -356,7 +456,7 @@ fn calc_intersections(ray: Ray) -> HitRecord {
 
     for (var i: u32 = 0; i < num_triangle; i++) {
         let triangle: Triangle = triangles[i];
-        let tempRecord: HitRecord = hit_triangle(ray, triangle);
+        let tempRecord: HitRecord = hit_triangle(ray, triangle, triangle_attributes[i]);
 
         if (record.distance > tempRecord.distance) {
             record = tempRecord;
@@ -395,14 +495,15 @@ fn ray_color(ray: Ray) -> vec3<f32> {
 
         switch(material.kind) {
             case 0: { // diffuse
-                radiance += throughput * direct_light(record, material.albedo.xyz);
+                let albedo = sample_base_color(material, record.tex_coord);
+                radiance += throughput * direct_light(record, albedo);
 
                 var direction: vec3<f32> = record.normal + random_unit_vector();
                 if dot(direction, direction) < EPSILON {
                     direction = record.normal;
                 }
                 temp_ray = Ray(record.point, normalize(direction));
-                attenuation = material.albedo.xyz;
+                attenuation = albedo;
                 include_emissive = false;
             }
             case 1: { // metal

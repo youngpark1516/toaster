@@ -51,10 +51,26 @@ pub struct GpuTriangle {
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
+pub struct GpuTriangleAttributes {
+    pub n0: [f32; 4],
+    pub n1: [f32; 4],
+    pub n2: [f32; 4],
+
+    pub uv0: [f32; 2],
+    pub uv1: [f32; 2],
+    pub uv2: [f32; 2],
+    pub flags: u32,
+    pub _pad0: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 pub struct GpuMaterial {
     // 0 = diffuse, 1 = metal, 2 = dielectric, 3 = emissive
     pub kind: u32,
-    pub _pad0: [u32; 3],
+    pub texture_offset: u32,
+    pub texture_width: u32,
+    pub texture_height: u32,
 
     pub albedo: [f32; 4],
 
@@ -89,6 +105,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<GpuCamera>(), 64);
         assert_eq!(std::mem::size_of::<GpuSphere>(), 32);
         assert_eq!(std::mem::size_of::<GpuTriangle>(), 64);
+        assert_eq!(std::mem::size_of::<GpuTriangleAttributes>(), 80);
         assert_eq!(std::mem::size_of::<GpuMaterial>(), 48);
         assert_eq!(std::mem::size_of::<GpuLight>(), 96);
     }

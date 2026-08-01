@@ -1,13 +1,17 @@
 use crate::{
     animation::{validate_animation, Animation},
     material::Material,
-    object::{Sphere, Triangle},
+    object::{Sphere, Triangle, TriangleAttributes},
     scene::{Background, CameraSettings, RenderSettings, Scene},
+    texture::Texture,
 };
 use anyhow::{bail, Context, Result};
 use glam::Vec3;
 use serde::Deserialize;
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 #[derive(Deserialize)]
 struct SceneFile {
@@ -78,6 +82,11 @@ enum ObjectFile {
         material: String,
         group: Option<String>,
     },
+    Mesh {
+        path: PathBuf,
+        material: Option<String>,
+        group: Option<String>,
+    },
 }
 
 fn default_up() -> Vec3 {
@@ -90,10 +99,10 @@ pub fn load_scene(path: impl AsRef<Path>) -> Result<Scene> {
         .with_context(|| format!("failed to read scene {}", path.display()))?;
     let file: SceneFile = serde_json::from_str(&contents)
         .with_context(|| format!("failed to parse scene {}", path.display()))?;
-    build_scene(file)
+    build_scene(file, path.parent().unwrap_or_else(|| Path::new(".")))
 }
 
-fn build_scene(file: SceneFile) -> Result<Scene> {
+fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
     if file.render.width == 0 || file.render.height == 0 {
         bail!("render width and height must be greater than zero");
     }
@@ -167,6 +176,8 @@ fn build_scene(file: SceneFile) -> Result<Scene> {
 
     let mut spheres = Vec::with_capacity(file.objects.len());
     let mut triangles = Vec::with_capacity(file.objects.len());
+    let mut triangle_attributes = Vec::with_capacity(file.objects.len());
+    let mut textures = Vec::new();
     for object in file.objects {
         match object {
             ObjectFile::Sphere {
@@ -194,13 +205,7 @@ fn build_scene(file: SceneFile) -> Result<Scene> {
                 material,
                 group,
             } => {
-                if vertices.iter().any(|vertex| !vertex.is_finite()) {
-                    bail!("triangle vertices must be finite");
-                }
-                let edges = [vertices[1] - vertices[0], vertices[2] - vertices[0]];
-                if edges[0].cross(edges[1]).length_squared() <= f32::EPSILON {
-                    bail!("triangle vertices must not be collinear");
-                }
+                validate_triangle(vertices)?;
                 let material_index = material_names.get(&material).copied().with_context(|| {
                     format!("triangle references unknown material '{material}'")
                 })?;
@@ -209,6 +214,120 @@ fn build_scene(file: SceneFile) -> Result<Scene> {
                     material_index,
                     group: validate_group(group)?,
                 });
+                triangle_attributes.push(TriangleAttributes::default());
+            }
+            ObjectFile::Mesh {
+                path,
+                material,
+                group,
+            } => {
+                let material_override = material
+                    .as_ref()
+                    .map(|material| {
+                        material_names.get(material).copied().with_context(|| {
+                            format!("mesh references unknown material '{material}'")
+                        })
+                    })
+                    .transpose()?;
+                let group = validate_group(group)?;
+                let mesh_path = if path.is_absolute() {
+                    path
+                } else {
+                    asset_root.join(path)
+                };
+                let mesh = toaster_assets::load_gltf(&mesh_path).with_context(|| {
+                    format!("failed to load mesh object {}", mesh_path.display())
+                })?;
+
+                let imported_materials = if material_override.is_none() {
+                    let texture_base = textures.len();
+                    for texture in &mesh.textures {
+                        textures.push(Texture::new(
+                            texture.width,
+                            texture.height,
+                            texture.rgba8.clone(),
+                        )?);
+                    }
+                    mesh.materials
+                        .iter()
+                        .map(|material| {
+                            let albedo = material.base_color_factor.truncate();
+                            match material.base_color_texture {
+                                Some(texture_index) => {
+                                    let texture_index = texture_base + texture_index;
+                                    if texture_index >= textures.len() {
+                                        bail!("glTF material references an unknown texture");
+                                    }
+                                    materials.push(Material::TexturedDiffuse {
+                                        albedo,
+                                        texture_index,
+                                    });
+                                }
+                                None => materials.push(Material::Diffuse { albedo }),
+                            }
+                            Ok(materials.len() - 1)
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                } else {
+                    Vec::new()
+                };
+                let default_material = if material_override.is_none()
+                    && mesh
+                        .triangles
+                        .iter()
+                        .any(|triangle| triangle.material_index.is_none())
+                {
+                    materials.push(Material::Diffuse { albedo: Vec3::ONE });
+                    Some(materials.len() - 1)
+                } else {
+                    None
+                };
+
+                for (triangle_index, (mesh_triangle, vertices)) in mesh
+                    .triangles
+                    .iter()
+                    .zip(mesh.triangle_vertices())
+                    .enumerate()
+                {
+                    let positions = vertices.map(|vertex| vertex.position);
+                    validate_triangle(positions).with_context(|| {
+                        format!(
+                            "mesh {} contains invalid triangle {}",
+                            mesh_path.display(),
+                            triangle_index
+                        )
+                    })?;
+                    let normals = collect_options(vertices.map(|vertex| vertex.normal));
+                    let tex_coords = collect_options(vertices.map(|vertex| vertex.tex_coord));
+                    let material_index = match material_override {
+                        Some(material_index) => material_index,
+                        None => match mesh_triangle.material_index {
+                            Some(material_index) => *imported_materials
+                                .get(material_index)
+                                .context("glTF primitive references an unknown material")?,
+                            None => default_material
+                                .expect("a default glTF material was created when required"),
+                        },
+                    };
+                    if matches!(materials[material_index], Material::TexturedDiffuse { .. })
+                        && tex_coords.is_none()
+                    {
+                        bail!(
+                            "mesh {} triangle {} uses a base-color texture without TEXCOORD_0",
+                            mesh_path.display(),
+                            triangle_index
+                        );
+                    }
+                    triangles.push(Triangle {
+                        vertices: positions,
+                        material_index,
+                        group: group.clone(),
+                    });
+                    triangle_attributes.push(TriangleAttributes {
+                        normals,
+                        tex_coords,
+                    });
+                }
             }
         }
     }
@@ -235,10 +354,16 @@ fn build_scene(file: SceneFile) -> Result<Scene> {
         materials,
         spheres,
         triangles,
+        triangle_attributes,
+        textures,
         animation,
     };
     validate_animation(&scene)?;
     Ok(scene)
+}
+
+fn collect_options<T: Copy>(values: [Option<T>; 3]) -> Option<[T; 3]> {
+    Some([values[0]?, values[1]?, values[2]?])
 }
 
 fn validate_group(group: Option<String>) -> Result<Option<String>> {
@@ -246,6 +371,17 @@ fn validate_group(group: Option<String>) -> Result<Option<String>> {
         bail!("object group name must not be empty");
     }
     Ok(group)
+}
+
+fn validate_triangle(vertices: [Vec3; 3]) -> Result<()> {
+    if vertices.iter().any(|vertex| !vertex.is_finite()) {
+        bail!("triangle vertices must be finite");
+    }
+    let edges = [vertices[1] - vertices[0], vertices[2] - vertices[0]];
+    if edges[0].cross(edges[1]).length_squared() <= f32::EPSILON {
+        bail!("triangle vertices must not be collinear");
+    }
+    Ok(())
 }
 
 fn validate_albedo(name: &str, albedo: Vec3) -> Result<()> {
@@ -264,7 +400,7 @@ mod tests {
     use super::*;
 
     fn parse(text: &str) -> Result<Scene> {
-        build_scene(serde_json::from_str(text)?)
+        build_scene(serde_json::from_str(text)?, Path::new("."))
     }
 
     #[test]
@@ -441,5 +577,51 @@ mod tests {
             .iter()
             .all(|triangle| triangle.group.as_deref() == Some("cube")));
         assert_eq!(scene.animation.tracks.len(), 1);
+    }
+
+    #[test]
+    fn loads_relative_gltf_mesh_with_material_and_group() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes/008_gltf_tetrahedron.json");
+        let scene = load_scene(path).unwrap();
+
+        assert_eq!(scene.triangles.len(), 6);
+        let imported = &scene.triangles[2..];
+        assert!(imported.iter().all(|triangle| triangle.material_index == 1));
+        assert!(imported
+            .iter()
+            .all(|triangle| triangle.group.as_deref() == Some("tetrahedron")));
+        assert_eq!(imported[0].vertices[0], Vec3::new(0.0, 0.75, -2.0));
+
+        let animated = scene.evaluate_at(0.5).unwrap();
+        assert_ne!(animated.triangles[2].vertices, scene.triangles[2].vertices);
+    }
+
+    #[test]
+    fn imports_gltf_base_color_texture_when_material_override_is_omitted() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes/009_gltf_textured_quad.json");
+        let scene = load_scene(path).unwrap();
+
+        assert_eq!(scene.triangles.len(), 4);
+        assert_eq!(scene.triangle_attributes.len(), 4);
+        assert!(scene.triangle_attributes[0].normals.is_some());
+        assert!(scene.triangle_attributes[0].tex_coords.is_some());
+        assert_eq!(scene.textures.len(), 1);
+        assert_eq!(scene.materials.len(), 2);
+        assert_eq!(
+            scene.materials[1],
+            Material::TexturedDiffuse {
+                albedo: Vec3::new(0.8, 1.0, 0.6),
+                texture_index: 0,
+            }
+        );
+        assert!(scene.triangles[..2]
+            .iter()
+            .all(|triangle| triangle.material_index == 1));
+
+        let animated = scene.evaluate_at(2.0).unwrap();
+        let rotated_normal = animated.triangle_attributes[0].normals.unwrap()[0];
+        assert!(rotated_normal.abs_diff_eq(Vec3::X, 1e-5));
     }
 }

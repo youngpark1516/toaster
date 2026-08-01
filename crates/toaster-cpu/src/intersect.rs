@@ -1,5 +1,5 @@
 use toaster_core::ray::Ray;
-use toaster_scene::{Scene, Sphere, Triangle};
+use toaster_scene::{Scene, Sphere, Triangle, TriangleAttributes};
 
 #[derive(Clone, Copy, Debug)]
 pub struct HitRecord {
@@ -8,6 +8,7 @@ pub struct HitRecord {
     pub normal: glam::Vec3,
     pub front_face: bool,
     pub material_index: usize,
+    pub tex_coord: glam::Vec2,
 }
 
 pub fn intersect_sphere(
@@ -48,12 +49,29 @@ pub fn intersect_sphere(
         normal,
         front_face,
         material_index: sphere.material_index,
+        tex_coord: glam::Vec2::ZERO,
     })
 }
 
 pub fn intersect_triangle(
     ray: &Ray,
     triangle: &Triangle,
+    min_distance: f32,
+    max_distance: f32,
+) -> Option<HitRecord> {
+    intersect_triangle_with_attributes(
+        ray,
+        triangle,
+        TriangleAttributes::default(),
+        min_distance,
+        max_distance,
+    )
+}
+
+fn intersect_triangle_with_attributes(
+    ray: &Ray,
+    triangle: &Triangle,
+    attributes: TriangleAttributes,
     min_distance: f32,
     max_distance: f32,
 ) -> Option<HitRecord> {
@@ -85,8 +103,20 @@ pub fn intersect_triangle(
         return None;
     }
 
-    let outward_normal = edge1.cross(edge2).normalize();
-    let front_face = ray.direction.dot(outward_normal) < 0.0;
+    let geometric_normal = edge1.cross(edge2).normalize();
+    let front_face = ray.direction.dot(geometric_normal) < 0.0;
+    let weight0 = 1.0 - u - v;
+    let mut outward_normal = attributes
+        .normals
+        .map(|normals| (weight0 * normals[0] + u * normals[1] + v * normals[2]).normalize())
+        .unwrap_or(geometric_normal);
+    if outward_normal.dot(geometric_normal) < 0.0 {
+        outward_normal = -outward_normal;
+    }
+    let tex_coord = attributes
+        .tex_coords
+        .map(|tex_coords| weight0 * tex_coords[0] + u * tex_coords[1] + v * tex_coords[2])
+        .unwrap_or(glam::Vec2::ZERO);
     Some(HitRecord {
         distance,
         point: ray.at(distance),
@@ -97,6 +127,7 @@ pub fn intersect_triangle(
         },
         front_face,
         material_index: triangle.material_index,
+        tex_coord,
     })
 }
 
@@ -109,8 +140,15 @@ pub fn intersect_scene(ray: &Ray, scene: &Scene, min_distance: f32) -> Option<Hi
             hit = Some(candidate);
         }
     }
-    for triangle in &scene.triangles {
-        if let Some(candidate) = intersect_triangle(ray, triangle, min_distance, closest) {
+    for (triangle_index, triangle) in scene.triangles.iter().enumerate() {
+        let attributes = scene
+            .triangle_attributes
+            .get(triangle_index)
+            .copied()
+            .unwrap_or_default();
+        if let Some(candidate) =
+            intersect_triangle_with_attributes(ray, triangle, attributes, min_distance, closest)
+        {
             closest = candidate.distance;
             hit = Some(candidate);
         }
@@ -191,6 +229,8 @@ mod tests {
                 sphere(Vec3::new(0.0, 0.0, -2.0), 0.5, 1),
             ],
             triangles: Vec::new(),
+            triangle_attributes: Vec::new(),
+            textures: Vec::new(),
             animation: Default::default(),
         };
         assert_eq!(
@@ -246,5 +286,38 @@ mod tests {
             f32::INFINITY,
         )
         .is_none());
+    }
+
+    #[test]
+    fn triangle_interpolates_smooth_normal_and_texture_coordinates() {
+        let triangle = Triangle {
+            vertices: [
+                Vec3::new(-1.0, -1.0, -2.0),
+                Vec3::new(1.0, -1.0, -2.0),
+                Vec3::new(0.0, 1.0, -2.0),
+            ],
+            material_index: 0,
+            group: None,
+        };
+        let attributes = TriangleAttributes {
+            normals: Some([Vec3::Z, Vec3::Z, Vec3::Z]),
+            tex_coords: Some([
+                glam::Vec2::new(0.0, 0.0),
+                glam::Vec2::new(1.0, 0.0),
+                glam::Vec2::new(0.5, 1.0),
+            ]),
+        };
+
+        let hit = intersect_triangle_with_attributes(
+            &Ray::new(Vec3::ZERO, -Vec3::Z),
+            &triangle,
+            attributes,
+            0.001,
+            f32::INFINITY,
+        )
+        .unwrap();
+
+        assert!(hit.normal.abs_diff_eq(Vec3::Z, 1e-6));
+        assert!(hit.tex_coord.abs_diff_eq(glam::Vec2::new(0.5, 0.5), 1e-6));
     }
 }

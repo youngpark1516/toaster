@@ -1,5 +1,5 @@
 //! GPU buffer layouts.
-use crate::gpu_types::{GpuLight, GpuRenderParams, GpuSphere, GpuTriangle};
+use crate::gpu_types::{GpuLight, GpuRenderParams, GpuSphere, GpuTriangle, GpuTriangleAttributes};
 use crate::scene_upload::SceneGpuData;
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
@@ -29,8 +29,10 @@ pub struct SceneGpuBuffers {
     pub camera: wgpu::Buffer,
     pub spheres: wgpu::Buffer,
     pub triangles: wgpu::Buffer,
+    pub triangle_attributes: wgpu::Buffer,
     pub materials: wgpu::Buffer,
     pub lights: wgpu::Buffer,
+    pub texture_pixels: wgpu::Buffer,
     pub output_size: u64,
     pub params_size: u64,
 }
@@ -130,6 +132,18 @@ pub fn create_scene_gpu_buffers(device: &wgpu::Device, scene: &SceneGpuData) -> 
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
     });
 
+    let dummy_triangle_attributes = [GpuTriangleAttributes::zeroed()];
+    let triangle_attribute_data = if scene.triangle_attributes.is_empty() {
+        &dummy_triangle_attributes[..]
+    } else {
+        &scene.triangle_attributes
+    };
+    let triangle_attributes_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Scene Triangle Attributes Buffer"),
+        contents: bytemuck::cast_slice(triangle_attribute_data),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
+
     let materials_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Scene Materials Buffer"),
         contents: bytemuck::cast_slice(&scene.materials),
@@ -148,6 +162,18 @@ pub fn create_scene_gpu_buffers(device: &wgpu::Device, scene: &SceneGpuData) -> 
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
     });
 
+    let dummy_texture_pixel = [0xffff_ffff_u32];
+    let texture_data = if scene.texture_pixels.is_empty() {
+        &dummy_texture_pixel[..]
+    } else {
+        &scene.texture_pixels
+    };
+    let texture_pixels_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Scene Texture Pixels Buffer"),
+        contents: bytemuck::cast_slice(texture_data),
+        usage: wgpu::BufferUsages::STORAGE,
+    });
+
     SceneGpuBuffers {
         output: output_buffer,
         readback: readback_buffer,
@@ -155,8 +181,10 @@ pub fn create_scene_gpu_buffers(device: &wgpu::Device, scene: &SceneGpuData) -> 
         camera: camera_buffer,
         spheres: spheres_buffer,
         triangles: triangles_buffer,
+        triangle_attributes: triangle_attributes_buffer,
         materials: materials_buffer,
         lights: lights_buffer,
+        texture_pixels: texture_pixels_buffer,
         output_size,
         params_size,
     }

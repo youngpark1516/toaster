@@ -3,15 +3,20 @@ use glam::Vec3;
 use std::path::Path;
 use toaster_scene::{Background, Material, Scene};
 
-use crate::gpu_types::{GpuCamera, GpuLight, GpuMaterial, GpuRenderParams, GpuSphere, GpuTriangle};
+use crate::gpu_types::{
+    GpuCamera, GpuLight, GpuMaterial, GpuRenderParams, GpuSphere, GpuTriangle,
+    GpuTriangleAttributes,
+};
 
 pub struct SceneGpuData {
     pub params: GpuRenderParams,
     pub camera: GpuCamera,
     pub spheres: Vec<GpuSphere>,
     pub triangles: Vec<GpuTriangle>,
+    pub triangle_attributes: Vec<GpuTriangleAttributes>,
     pub materials: Vec<GpuMaterial>,
     pub lights: Vec<GpuLight>,
+    pub texture_pixels: Vec<u32>,
 }
 
 pub fn load_scene_gpu(path: impl AsRef<Path>) -> Result<SceneGpuData> {
@@ -25,6 +30,9 @@ pub fn scene_to_gpu(scene: &Scene) -> Result<SceneGpuData> {
     }
     if scene.materials.is_empty() {
         bail!("GPU renderer requires at least one material");
+    }
+    if scene.triangle_attributes.len() != scene.triangles.len() {
+        bail!("triangle attribute count must match triangle count");
     }
 
     let sphere_count = u32::try_from(scene.spheres.len()).context("too many spheres for GPU")?;
@@ -75,12 +83,51 @@ pub fn scene_to_gpu(scene: &Scene) -> Result<SceneGpuData> {
         })
         .collect::<Result<Vec<_>>>()?;
 
+    let triangle_attributes = scene
+        .triangle_attributes
+        .iter()
+        .map(|attributes| {
+            let mut flags = 0_u32;
+            let normals = attributes.normals.unwrap_or([Vec3::ZERO; 3]);
+            if attributes.normals.is_some() {
+                flags |= 1;
+            }
+            let tex_coords = attributes.tex_coords.unwrap_or([glam::Vec2::ZERO; 3]);
+            if attributes.tex_coords.is_some() {
+                flags |= 2;
+            }
+            GpuTriangleAttributes {
+                n0: vec4(normals[0]),
+                n1: vec4(normals[1]),
+                n2: vec4(normals[2]),
+                uv0: tex_coords[0].to_array(),
+                uv1: tex_coords[1].to_array(),
+                uv2: tex_coords[2].to_array(),
+                flags,
+                _pad0: 0,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut texture_pixels = Vec::new();
+    let mut texture_metadata = Vec::with_capacity(scene.textures.len());
+    for texture in &scene.textures {
+        let offset = u32::try_from(texture_pixels.len()).context("texture atlas is too large")?;
+        texture_metadata.push((offset, texture.width, texture.height));
+        texture_pixels.extend(
+            texture
+                .rgba8
+                .chunks_exact(4)
+                .map(|pixel| u32::from_le_bytes([pixel[0], pixel[1], pixel[2], pixel[3]])),
+        );
+    }
+
     let materials = scene
         .materials
         .iter()
         .copied()
-        .map(material_to_gpu)
-        .collect();
+        .map(|material| material_to_gpu(material, &texture_metadata))
+        .collect::<Result<Vec<_>>>()?;
     let (lights, total_light_area) = lights_to_gpu(scene)?;
     let light_count = u32::try_from(lights.len()).context("too many lights for GPU")?;
 
@@ -105,8 +152,10 @@ pub fn scene_to_gpu(scene: &Scene) -> Result<SceneGpuData> {
         camera,
         spheres,
         triangles,
+        triangle_attributes,
         materials,
         lights,
+        texture_pixels,
     })
 }
 
@@ -128,20 +177,39 @@ pub fn make_camera(position: Vec3, look_at: Vec3, up: Vec3, fov: f32, aspect: f3
     }
 }
 
-fn material_to_gpu(material: Material) -> GpuMaterial {
-    let (kind, albedo, params) = match material {
-        Material::Diffuse { albedo } => (0, albedo, [0.0; 4]),
-        Material::Metal { albedo, roughness } => (1, albedo, [roughness, 0.0, 0.0, 0.0]),
-        Material::Dielectric { ior } => (2, Vec3::ONE, [0.0, ior, 0.0, 0.0]),
-        Material::Emissive { color, strength } => (3, color, [0.0, 0.0, strength, 0.0]),
+fn material_to_gpu(
+    material: Material,
+    texture_metadata: &[(u32, u32, u32)],
+) -> Result<GpuMaterial> {
+    let (kind, albedo, params, texture) = match material {
+        Material::Diffuse { albedo } => (0, albedo, [0.0; 4], None),
+        Material::TexturedDiffuse {
+            albedo,
+            texture_index,
+        } => (
+            0,
+            albedo,
+            [0.0; 4],
+            Some(
+                *texture_metadata
+                    .get(texture_index)
+                    .context("material references an unknown texture")?,
+            ),
+        ),
+        Material::Metal { albedo, roughness } => (1, albedo, [roughness, 0.0, 0.0, 0.0], None),
+        Material::Dielectric { ior } => (2, Vec3::ONE, [0.0, ior, 0.0, 0.0], None),
+        Material::Emissive { color, strength } => (3, color, [0.0, 0.0, strength, 0.0], None),
     };
+    let (texture_offset, texture_width, texture_height) = texture.unwrap_or((0, 0, 0));
 
-    GpuMaterial {
+    Ok(GpuMaterial {
         kind,
-        _pad0: [0; 3],
+        texture_offset,
+        texture_width,
+        texture_height,
         albedo: [albedo.x, albedo.y, albedo.z, 1.0],
         params,
-    }
+    })
 }
 
 fn vec4(value: Vec3) -> [f32; 4] {
@@ -324,6 +392,38 @@ mod tests {
     }
 
     #[test]
+    fn uploads_imported_gltf_triangles_without_a_special_render_path() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes/008_gltf_tetrahedron.json");
+        let scene = load_scene_gpu(path).unwrap();
+
+        assert_eq!(scene.params.sphere_count, 1);
+        assert_eq!(scene.params.triangle_count, 6);
+        assert_eq!(scene.triangles[2].material_index, 1);
+        assert_eq!(scene.triangles[2].v0, [0.0, 0.75, -2.0, 0.0]);
+        assert_eq!(scene.params.light_count, 1);
+    }
+
+    #[test]
+    fn uploads_textured_gltf_material_and_triangle_attributes() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes/009_gltf_textured_quad.json");
+        let scene = load_scene_gpu(path).unwrap();
+
+        assert_eq!(scene.params.triangle_count, 4);
+        assert_eq!(scene.triangle_attributes.len(), 4);
+        assert_eq!(scene.triangle_attributes[0].flags, 3);
+        assert_eq!(scene.triangle_attributes[0].n0, [0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(scene.triangle_attributes[0].uv0, [0.0, 1.0]);
+        assert_eq!(scene.materials[1].texture_offset, 0);
+        assert_eq!(scene.materials[1].texture_width, 2);
+        assert_eq!(scene.materials[1].texture_height, 2);
+        assert_eq!(scene.texture_pixels.len(), 4);
+        assert_eq!(scene.texture_pixels[0], 0xff00_00ff);
+        assert_eq!(scene.params.light_count, 2);
+    }
+
+    #[test]
     fn uploads_no_lights_scene_with_zero_light_count() {
         let scene = Scene {
             camera: toaster_scene::CameraSettings {
@@ -347,6 +447,8 @@ mod tests {
                 group: None,
             }],
             triangles: Vec::new(),
+            triangle_attributes: Vec::new(),
+            textures: Vec::new(),
             animation: Default::default(),
         };
         let gpu_scene = scene_to_gpu(&scene).unwrap();

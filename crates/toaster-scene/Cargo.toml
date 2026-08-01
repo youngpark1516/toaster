@@ -9,4 +9,4 @@ anyhow.workspace = true
 glam.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-
+toaster-assets = { path = "../toaster-assets" }

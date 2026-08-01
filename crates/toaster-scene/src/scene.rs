@@ -1,7 +1,8 @@
 use crate::{
     animation::Animation,
     material::Material,
-    object::{Sphere, Triangle},
+    object::{Sphere, Triangle, TriangleAttributes},
+    texture::Texture,
 };
 use glam::Vec3;
 
@@ -12,6 +13,8 @@ pub struct Scene {
     pub materials: Vec<Material>,
     pub spheres: Vec<Sphere>,
     pub triangles: Vec<Triangle>,
+    pub triangle_attributes: Vec<TriangleAttributes>,
+    pub textures: Vec<Texture>,
     pub animation: Animation,
 }
 

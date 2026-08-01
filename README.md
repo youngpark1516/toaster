@@ -117,12 +117,53 @@ cargo run -p toaster-cli -- cpu-render scenes/003_cornell_box.json \
   --out out/cornell-preview.png --width 400 --height 400 --samples 32
 ```
 
+### glTF meshes
+
+Scene files can load triangle geometry from `.gltf` and `.glb` assets. Mesh paths
+are resolved relative to the scene file and glTF node transforms are applied
+during loading. Set `material` to override every imported primitive with a named
+Toaster material:
+
+```json
+{
+  "type": "mesh",
+  "path": "../assets/models/tetrahedron.gltf",
+  "material": "porcelain",
+  "group": "tetrahedron"
+}
+```
+
+Omit `material` to use each primitive's glTF base-color factor and texture.
+`NORMAL` and `TEXCOORD_0` attributes are interpolated at ray hits:
+
+```json
+{
+  "type": "mesh",
+  "path": "../assets/models/textured_quad.gltf",
+  "group": "textured_quad"
+}
+```
+
+Try the included textured animation in the live preview:
+
+```sh
+cargo run --release -p toaster-cli -- stream-preview \
+  scenes/009_gltf_textured_quad.json --fps 12 --loop-duration 8
+```
+
+The current importer supports triangle primitives, node transforms, smooth
+normals, UV set zero, and 8-bit base-color textures. Metallic-roughness shading,
+normal maps, alpha modes, skinning, morph targets, and non-triangle primitives
+remain deferred.
+
 ## Milestones
 
 1. ✅ CPU sphere path tracer and material scattering
 2. ✅ Emissive materials, initial triangles, and Cornell box
-3. `wgpu` compute renderer and image readback
-4. Triangle meshes and BVH acceleration
-5. glTF assets, procedural scenes, and browser preview
+3. ✅ `wgpu` compute renderer and image readback
+4. Triangle meshes and BVH acceleration (in progress)
+5. Initial glTF geometry import and browser preview (procedural scenes remain)
 
-See [the roadmap](docs/roadmap.md) and [architecture](docs/architecture.md) for more detail.
+See the [project guide](docs/project_guide.md) for the complete operational
+snapshot, or the shorter [roadmap](docs/roadmap.md) and
+[architecture](docs/architecture.md) notes for focused context.

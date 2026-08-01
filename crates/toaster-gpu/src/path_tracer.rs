@@ -193,6 +193,11 @@ pub async fn render_gpu_animation_with_sink(
                 0,
                 bytemuck::cast_slice(&scene.triangles),
             );
+            context.queue.write_buffer(
+                &buffers.triangle_attributes,
+                0,
+                bytemuck::cast_slice(&scene.triangle_attributes),
+            );
         }
         if !scene.lights.is_empty() {
             context

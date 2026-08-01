@@ -18,7 +18,10 @@ Add triangles, construct a CPU BVH, flatten it into GPU-friendly buffers, and me
 
 ## Phase 4: Assets and procedural scenes
 
-Import glTF meshes, add textures and environment lighting, then build reusable procedural scene generators.
+Initial glTF/GLB import now includes triangle geometry, node transforms, smooth
+normals, UVs, base-color factors and textures, relative scene paths, material
+overrides, and animation groups. Next, add environment lighting, then reusable
+procedural scene generators.
 
 ## Phase 5: Preview server
 
