@@ -6,8 +6,8 @@
     "fov_degrees": 40.0
   },
   "render": {
-    "width": 1200,
-    "height": 1200,
+    "width": 480,
+    "height": 480,
     "samples": 64,
     "max_bounces": 12,
     "background": "black"
