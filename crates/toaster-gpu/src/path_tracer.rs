@@ -1,5 +1,5 @@
 //! Compute path-tracing pipeline.
-use anyhow::{ensure, Context, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use image::RgbaImage;
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -14,6 +14,7 @@ use crate::pipeline::{
 };
 use crate::readback::readback_pixels;
 use crate::scene_upload::{scene_to_gpu, scene_to_gpu_frame};
+use crate::video_output::FfmpegVideoWriter;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FramePacing {
@@ -65,6 +66,35 @@ impl FrameSink for PngFrameSink<'_> {
     }
 }
 
+struct VideoFrameSink {
+    writer: Option<FfmpegVideoWriter>,
+}
+
+impl VideoFrameSink {
+    fn finish(mut self) -> Result<()> {
+        self.writer
+            .take()
+            .context("video writer is unavailable")?
+            .finish()
+    }
+}
+
+impl FrameSink for VideoFrameSink {
+    fn deliver(&mut self, frame: CompletedFrame<'_>) -> Result<()> {
+        let output_start = Instant::now();
+        self.writer
+            .as_mut()
+            .context("video writer is unavailable")?
+            .write_frame(frame.image)?;
+        println!(
+            "Submitted video frame {} in {:.3}s",
+            frame.index,
+            output_start.elapsed().as_secs_f64()
+        );
+        Ok(())
+    }
+}
+
 pub async fn render_scene_gpu(scene_path: &Path, out_path: &Path) -> Result<()> {
     render_scene_gpu_animation(scene_path, out_path, AnimationConfig::single_frame()).await
 }
@@ -83,6 +113,43 @@ pub async fn render_scene_gpu_animation(
     };
     render_scene_gpu_animation_with_sink(scene_path, animation, FramePacing::Unpaced, &mut sink)
         .await
+}
+
+pub async fn render_scene_gpu_video(
+    scene_path: &Path,
+    video_path: &Path,
+    animation: AnimationConfig,
+) -> Result<()> {
+    let fps = animation
+        .fps()
+        .context("video export requires an animated render with --fps")?;
+    ensure!(
+        animation.frame_limit().is_some(),
+        "video export requires a finite --duration or --frames"
+    );
+
+    let source_scene = toaster_scene::load_scene(scene_path)?;
+    let mut sink = VideoFrameSink {
+        writer: Some(FfmpegVideoWriter::start(
+            video_path,
+            source_scene.render.width,
+            source_scene.render.height,
+            fps,
+        )?),
+    };
+    let render_result =
+        render_gpu_animation_with_sink(&source_scene, animation, FramePacing::Unpaced, &mut sink)
+            .await;
+    let finish_result = sink.finish();
+
+    match (render_result, finish_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(render_error), Ok(())) => Err(render_error),
+        (Ok(()), Err(finish_error)) => Err(finish_error),
+        (Err(render_error), Err(finish_error)) => Err(anyhow!(
+            "{render_error:#}; video finalization also failed: {finish_error:#}"
+        )),
+    }
 }
 
 pub async fn render_scene_gpu_animation_with_sink(

@@ -2,6 +2,7 @@
 /out/*
 !/out/.gitkeep
 *.png
+*.mp4
 *.exr
 *.hdr
 !assets/environments/studio_test.hdr

@@ -11,6 +11,11 @@
 
 Dependencies point inward toward core data. Renderer-specific code stays out of scene descriptions, and GPU concerns remain isolated from the CPU reference implementation.
 
+GPU animation readback has two output paths over the same render loop. The PNG
+path writes each completed frame as a numbered image. The MP4 path converts the
+same floating-point pixels to RGBA8 and streams them to an FFmpeg child process;
+FFmpeg performs H.264 encoding and container finalization without temporary PNGs.
+
 glTF import stops at renderer-independent indexed geometry, vertex attributes,
 and base-color image data. `toaster-scene` resolves mesh paths relative to the
 scene document, applies an optional Toaster material override, and expands
@@ -25,4 +30,9 @@ the GPU uploader copies the same pixels into a read-only storage buffer. CPU and
 WGSL use the same latitude-longitude mapping, horizontal wrap, vertical clamp,
 bilinear filtering, intensity, and yaw rotation.
 
-The live preview path keeps rendering and HTTP transport separate. `toaster-gpu` produces completed RGBA frames through a reusable sink, `toaster-cli` JPEG-encodes and publishes them, and `toaster-server` broadcasts only the latest JPEG through a Tokio watch channel. A separate latest-value status channel feeds `/status` and the browser metrics display. Slow browser clients therefore drop superseded frames instead of blocking the GPU render loop.
+The live preview and video export paths keep rendering and transport separate.
+`toaster-gpu` produces completed RGBA frames through a reusable sink. The CLI
+either JPEG-encodes and publishes them through `toaster-server`, or sends their
+RGBA8 bytes directly to FFmpeg. A separate latest-value status channel feeds
+`/status` and the browser metrics display. Slow browser clients therefore drop
+superseded frames instead of blocking the GPU render loop.
