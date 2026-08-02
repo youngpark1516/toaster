@@ -36,6 +36,7 @@ pub fn render(scene: &Scene) -> ImageBuffer {
                     &mut rng,
                     settings.max_bounces,
                     true,
+                    None,
                 );
             }
             image.set_pixel(x, y, color / settings.samples as f32);
@@ -51,7 +52,7 @@ pub fn ray_color<R: Rng + ?Sized>(
     remaining_depth: u32,
 ) -> Vec3 {
     let lights = AreaLights::collect(scene);
-    ray_color_inner(ray, scene, &lights, rng, remaining_depth, true)
+    ray_color_inner(ray, scene, &lights, rng, remaining_depth, true, None)
 }
 
 fn ray_color_inner<R: Rng + ?Sized>(
@@ -61,6 +62,7 @@ fn ray_color_inner<R: Rng + ?Sized>(
     rng: &mut R,
     remaining_depth: u32,
     include_emission: bool,
+    environment_bsdf_pdf: Option<f32>,
 ) -> Vec3 {
     if remaining_depth == 0 {
         return Vec3::ZERO;
@@ -85,9 +87,13 @@ fn ray_color_inner<R: Rng + ?Sized>(
                     rng,
                     remaining_depth - 1,
                     next_include_emission,
+                    scatter.bsdf_pdf,
                 );
             let direct = match material {
-                Material::Diffuse { albedo } => direct_light(&hit, albedo, scene, lights, rng),
+                Material::Diffuse { albedo } => {
+                    direct_area_light(&hit, albedo, scene, lights, rng)
+                        + direct_environment(&hit, albedo, scene, rng)
+                }
                 _ => Vec3::ZERO,
             };
             return direct + indirect;
@@ -102,15 +108,21 @@ fn ray_color_inner<R: Rng + ?Sized>(
             Vec3::ONE.lerp(Vec3::new(0.35, 0.65, 1.0), blend)
         }
         Background::Black => Vec3::ZERO,
-        Background::Environment => scene
-            .environment
-            .as_ref()
-            .expect("scene loader provides an environment map")
-            .sample(ray.direction),
+        Background::Environment => {
+            let environment = scene
+                .environment
+                .as_ref()
+                .expect("scene loader provides an environment map");
+            let radiance = environment.sample(ray.direction);
+            let mis_weight = environment_bsdf_pdf.map_or(1.0, |bsdf_pdf| {
+                power_heuristic(bsdf_pdf, environment.pdf_solid_angle(ray.direction))
+            });
+            radiance * mis_weight
+        }
     }
 }
 
-fn direct_light<R: Rng + ?Sized>(
+fn direct_area_light<R: Rng + ?Sized>(
     hit: &HitRecord,
     albedo: Vec3,
     scene: &Scene,
@@ -148,10 +160,59 @@ fn direct_light<R: Rng + ?Sized>(
         / (distance_squared * light.pdf_area)
 }
 
+fn direct_environment<R: Rng + ?Sized>(
+    hit: &HitRecord,
+    albedo: Vec3,
+    scene: &Scene,
+    rng: &mut R,
+) -> Vec3 {
+    if scene.render.background != Background::Environment {
+        return Vec3::ZERO;
+    }
+    let environment = scene
+        .environment
+        .as_ref()
+        .expect("scene loader provides an environment map");
+    let Some(sample) = environment.sample_importance(
+        rng.random::<f32>(),
+        rng.random::<f32>(),
+        rng.random::<f32>(),
+    ) else {
+        return Vec3::ZERO;
+    };
+
+    let surface_cosine = hit.normal.dot(sample.direction).max(0.0);
+    if surface_cosine <= 0.0 || sample.pdf_solid_angle <= 0.0 {
+        return Vec3::ZERO;
+    }
+
+    let shadow_ray = Ray::new(hit.point + hit.normal * RAY_EPSILON, sample.direction);
+    if intersect_scene(&shadow_ray, scene, RAY_EPSILON).is_some() {
+        return Vec3::ZERO;
+    }
+
+    let bsdf_pdf = surface_cosine / std::f32::consts::PI;
+    let mis_weight = power_heuristic(sample.pdf_solid_angle, bsdf_pdf);
+    let diffuse_brdf = albedo / std::f32::consts::PI;
+    diffuse_brdf * sample.radiance * surface_cosine * mis_weight / sample.pdf_solid_angle
+}
+
+fn power_heuristic(first_pdf: f32, second_pdf: f32) -> f32 {
+    let first_squared = first_pdf * first_pdf;
+    let second_squared = second_pdf * second_pdf;
+    let denominator = first_squared + second_squared;
+    if denominator > 0.0 {
+        first_squared / denominator
+    } else {
+        0.0
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct Scatter {
     ray: Ray,
     attenuation: Vec3,
+    bsdf_pdf: Option<f32>,
 }
 
 fn scatter<R: Rng + ?Sized>(
@@ -169,6 +230,9 @@ fn scatter<R: Rng + ?Sized>(
             Some(Scatter {
                 ray: Ray::new(hit.point, direction.normalize()),
                 attenuation: albedo,
+                bsdf_pdf: Some(
+                    hit.normal.dot(direction.normalize()).max(0.0) / std::f32::consts::PI,
+                ),
             })
         }
         Material::TexturedDiffuse { albedo, .. } => {
@@ -179,6 +243,9 @@ fn scatter<R: Rng + ?Sized>(
             Some(Scatter {
                 ray: Ray::new(hit.point, direction.normalize()),
                 attenuation: albedo,
+                bsdf_pdf: Some(
+                    hit.normal.dot(direction.normalize()).max(0.0) / std::f32::consts::PI,
+                ),
             })
         }
         Material::Metal { albedo, roughness } => {
@@ -190,6 +257,7 @@ fn scatter<R: Rng + ?Sized>(
             Some(Scatter {
                 ray: Ray::new(hit.point, direction.normalize()),
                 attenuation: albedo,
+                bsdf_pdf: None,
             })
         }
         Material::Dielectric { ior } => {
@@ -209,6 +277,7 @@ fn scatter<R: Rng + ?Sized>(
             Some(Scatter {
                 ray: Ray::new(hit.point, direction.normalize()),
                 attenuation,
+                bsdf_pdf: None,
             })
         }
         Material::Emissive { .. } => None,
@@ -565,7 +634,7 @@ mod tests {
         let scene = direct_light_scene(false);
         let lights = AreaLights::collect(&scene);
         let mut rng = StdRng::seed_from_u64(11);
-        let color = direct_light(
+        let color = direct_area_light(
             &test_hit(Vec3::Y, true),
             Vec3::splat(0.5),
             &scene,
@@ -580,7 +649,7 @@ mod tests {
         let scene = direct_light_scene(true);
         let lights = AreaLights::collect(&scene);
         let mut rng = StdRng::seed_from_u64(11);
-        let color = direct_light(
+        let color = direct_area_light(
             &test_hit(Vec3::Y, true),
             Vec3::splat(0.5),
             &scene,
@@ -588,6 +657,55 @@ mod tests {
             &mut rng,
         );
         assert_eq!(color, Vec3::ZERO);
+    }
+
+    #[test]
+    fn direct_environment_sampling_contributes_when_visible() {
+        let mut scene = test_scene(Vec3::ONE);
+        scene.spheres.clear();
+        scene.render.background = Background::Environment;
+        scene.environment =
+            Some(EnvironmentMap::new(1, 1, vec![Vec3::splat(2.0)], 1.0, 0.0).unwrap());
+        let mut rng = StdRng::seed_from_u64(12);
+        let hit = test_hit(Vec3::Y, true);
+        let mut sum = Vec3::ZERO;
+        for _ in 0..64 {
+            sum += direct_environment(&hit, Vec3::splat(0.5), &scene, &mut rng);
+        }
+
+        assert!(sum.cmpgt(Vec3::ZERO).all());
+    }
+
+    #[test]
+    fn environment_miss_uses_bsdf_mis_weight() {
+        let mut scene = test_scene(Vec3::ONE);
+        scene.render.background = Background::Environment;
+        scene.environment = Some(EnvironmentMap::new(1, 1, vec![Vec3::ONE], 1.0, 0.0).unwrap());
+        let ray = Ray::new(Vec3::ZERO, Vec3::X);
+        let bsdf_pdf = 1.0 / std::f32::consts::PI;
+        let environment_pdf = scene.environment.as_ref().unwrap().pdf_solid_angle(Vec3::X);
+        let expected = Vec3::splat(power_heuristic(bsdf_pdf, environment_pdf));
+        let mut rng = StdRng::seed_from_u64(13);
+
+        let color = ray_color_inner(
+            &ray,
+            &scene,
+            &AreaLights::default(),
+            &mut rng,
+            1,
+            true,
+            Some(bsdf_pdf),
+        );
+
+        assert!(color.abs_diff_eq(expected, 1e-6));
+    }
+
+    #[test]
+    fn power_heuristic_is_normalized() {
+        let first = power_heuristic(0.25, 0.75);
+        let second = power_heuristic(0.75, 0.25);
+        assert!((first + second - 1.0).abs() < 1e-6);
+        assert_eq!(power_heuristic(0.0, 0.0), 0.0);
     }
 
     #[test]

@@ -171,14 +171,14 @@ fn scene_to_gpu_inner(scene: &Scene, include_static_pixels: bool) -> Result<Scen
                 environment
                     .pixels
                     .iter()
-                    .map(|pixel| [pixel.x, pixel.y, pixel.z, 0.0])
+                    .zip(environment.importance_entries())
+                    .map(|(pixel, importance)| [pixel.x, pixel.y, pixel.z, importance[0]])
                     .collect()
             })
             .unwrap_or_default()
     } else {
         Vec::new()
     };
-
     Ok(SceneGpuData {
         params: GpuRenderParams {
             width: scene.render.width,
@@ -526,6 +526,7 @@ mod tests {
         assert_eq!(scene.params.environment_intensity, 8.0);
         assert_eq!(scene.params.environment_rotation_degrees, 20.0);
         assert_eq!(scene.environment_pixels.len(), 8);
+        assert!((scene.environment_pixels.last().unwrap()[3] - 1.0).abs() < 1e-6);
         assert!(scene
             .environment_pixels
             .iter()

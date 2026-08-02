@@ -243,6 +243,78 @@ fn sample_environment(direction: vec3<f32>) -> vec3<f32> {
     return mix(top, bottom, amount.y) * params.environment_intensity;
 }
 
+fn environment_probability(index: u32) -> f32 {
+    var previous_cdf = 0.0;
+    if index > 0u {
+        previous_cdf = environment_pixels[index - 1u].w;
+    }
+    return max(0.0, environment_pixels[index].w - previous_cdf);
+}
+
+fn environment_pdf(direction: vec3<f32>) -> f32 {
+    let unit_direction = normalize(direction);
+    let u = fract(
+        atan2(unit_direction.z, unit_direction.x) / (2.0 * PI)
+            + 0.5
+            + params.environment_rotation_degrees / 360.0
+    );
+    let theta = acos(clamp(unit_direction.y, -1.0, 1.0));
+    let v = theta / PI;
+    let x = min(u32(floor(u * f32(params.environment_width))), params.environment_width - 1u);
+    let y = min(u32(floor(v * f32(params.environment_height))), params.environment_height - 1u);
+    let probability = environment_probability(y * params.environment_width + x);
+    let sin_theta = sin(theta);
+    if probability <= 0.0 || sin_theta <= 0.0 {
+        return 0.0;
+    }
+    return probability * f32(params.environment_width * params.environment_height)
+        / (2.0 * PI * PI * sin_theta);
+}
+
+struct EnvironmentDirectionSample {
+    direction: vec3<f32>,
+    radiance: vec3<f32>,
+    pdf: f32,
+};
+
+fn sample_environment_importance() -> EnvironmentDirectionSample {
+    let count = params.environment_width * params.environment_height;
+    if count == 0u || environment_pixels[count - 1u].w <= 0.0 {
+        return EnvironmentDirectionSample(vec3f(0), vec3f(0), 0.0);
+    }
+
+    let selection_value = min(random_f32(), 0.99999994);
+    var low = 0u;
+    var high = count;
+    while low < high {
+        let middle = low + (high - low) / 2u;
+        if environment_pixels[middle].w <= selection_value {
+            low = middle + 1u;
+        } else {
+            high = middle;
+        }
+    }
+
+    let index = min(low, count - 1u);
+    let x = index % params.environment_width;
+    let y = index / params.environment_width;
+    let jitter = min(vec2f(random_f32(), random_f32()), vec2f(0.99999994));
+    let u = (f32(x) + jitter.x) / f32(params.environment_width);
+    let v = (f32(y) + jitter.y) / f32(params.environment_height);
+    let theta = PI * v;
+    let phi = 2.0 * PI * (
+        u - 0.5 - params.environment_rotation_degrees / 360.0
+    );
+    let sin_theta = sin(theta);
+    let direction = vec3f(sin_theta * cos(phi), cos(theta), sin_theta * sin(phi));
+    let probability = environment_probability(index);
+    if probability <= 0.0 || sin_theta <= 0.0 {
+        return EnvironmentDirectionSample(direction, vec3f(0), 0.0);
+    }
+    let pdf = probability * f32(count) / (2.0 * PI * PI * sin_theta);
+    return EnvironmentDirectionSample(direction, sample_environment(direction), pdf);
+}
+
 var<private> MIN_DISTANCE: f32 = 0.001;
 var<private> MAX_DISTANCE: f32 = 10000; //ARBITRARY MAGIC NUMBER, CHANGE LATER?
 var<private> EPSILON: f32 = 1e-8;
@@ -325,6 +397,37 @@ fn direct_light(hit: HitRecord, albedo: vec3<f32>) ->vec3<f32> {
 
     return diffuse_brdf * emissive_material.albedo.xyz * emissive_material.params.z
         * surface_cosine * light_cosine * params.total_light_area / (distance_squared);
+}
+
+fn power_heuristic(first_pdf: f32, second_pdf: f32) -> f32 {
+    let first_squared = first_pdf * first_pdf;
+    let second_squared = second_pdf * second_pdf;
+    let denominator = first_squared + second_squared;
+    if denominator <= 0.0 {
+        return 0.0;
+    }
+    return first_squared / denominator;
+}
+
+fn direct_environment(hit: HitRecord, albedo: vec3<f32>) -> vec3<f32> {
+    if params.background_kind != 2u {
+        return vec3f(0);
+    }
+    let sample = sample_environment_importance();
+    let surface_cosine = max(0.0, dot(hit.normal, sample.direction));
+    if surface_cosine <= 0.0 || sample.pdf <= 0.0 {
+        return vec3f(0);
+    }
+
+    let shadow_ray = Ray(hit.point + hit.normal * MIN_DISTANCE, sample.direction);
+    if calc_intersections(shadow_ray).distance <= MAX_DISTANCE {
+        return vec3f(0);
+    }
+
+    let bsdf_pdf = surface_cosine / PI;
+    let mis_weight = power_heuristic(sample.pdf, bsdf_pdf);
+    let diffuse_brdf = albedo / PI;
+    return diffuse_brdf * sample.radiance * surface_cosine * mis_weight / sample.pdf;
 }
 
 @compute @workgroup_size(8, 8, 1)
@@ -515,6 +618,8 @@ fn ray_color(ray: Ray) -> vec3<f32> {
     var radiance: vec3<f32> = vec3f(0,0,0);
     var break_loop: bool = false;
     var include_emissive: bool = true;
+    var previous_was_diffuse: bool = false;
+    var previous_bsdf_pdf: f32 = 0.0;
 
     for (var i: u32 = 0; i < max_bounces; i++) {
         let record: HitRecord = calc_intersections(cur_ray);
@@ -524,7 +629,14 @@ fn ray_color(ray: Ray) -> vec3<f32> {
                 let lerp_t: f32 = (normalize(cur_ray.direction).y + 1.0) * 0.5;
                 radiance += throughput * mix(vec3f(1.0, 1.0, 1.0), vec3f(0.35, 0.65, 1.0), lerp_t);
             } else if params.background_kind == 2u {
-                radiance += throughput * sample_environment(cur_ray.direction);
+                var mis_weight = 1.0;
+                if previous_was_diffuse {
+                    mis_weight = power_heuristic(
+                        previous_bsdf_pdf,
+                        environment_pdf(cur_ray.direction)
+                    );
+                }
+                radiance += throughput * sample_environment(cur_ray.direction) * mis_weight;
             }
             break;
         }
@@ -540,6 +652,7 @@ fn ray_color(ray: Ray) -> vec3<f32> {
             case 0: { // diffuse
                 let albedo = sample_base_color(material, record.tex_coord);
                 radiance += throughput * direct_light(record, albedo);
+                radiance += throughput * direct_environment(record, albedo);
 
                 var direction: vec3<f32> = record.normal + random_unit_vector();
                 if dot(direction, direction) < EPSILON {
@@ -548,6 +661,8 @@ fn ray_color(ray: Ray) -> vec3<f32> {
                 temp_ray = Ray(record.point, normalize(direction));
                 attenuation = albedo;
                 include_emissive = false;
+                previous_was_diffuse = true;
+                previous_bsdf_pdf = max(0.0, dot(record.normal, temp_ray.direction)) / PI;
             }
             case 1: { // metal
                 let reflected = reflect_vec(cur_ray.direction, record.normal);
@@ -562,6 +677,7 @@ fn ray_color(ray: Ray) -> vec3<f32> {
                 );
                 attenuation = material.albedo.xyz;
                 include_emissive = true;
+                previous_was_diffuse = false;
             }
             case 2: { // dielectric
                 let refraction_ratio: f32 = select(
@@ -582,6 +698,7 @@ fn ray_color(ray: Ray) -> vec3<f32> {
                 temp_ray = Ray(record.point, normalize(direction));
                 attenuation = vec3f(1, 1, 1);
                 include_emissive = true;
+                previous_was_diffuse = false;
             }
             case 3: { // emissive
                 if include_emissive {

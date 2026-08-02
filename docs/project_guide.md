@@ -339,19 +339,13 @@ tracks are translation and axis/pivot rotation with linear or step interpolation
 - There is no authentication or multi-render orchestration.
 - The CPU renderer is single-threaded.
 - There is no temporal accumulation, reprojection, or denoiser.
-- Environment lighting has no luminance importance sampling yet, so diffuse
-  illumination can require many samples.
 
 ## Next milestone
 
-The next coherent optimization is **environment-map importance sampling**:
+Environment-map importance sampling is complete: CPU and GPU renderers share a
+luminance-and-latitude distribution, directly sample the environment at diffuse
+surfaces, and use the power heuristic to combine environment and BSDF paths
+without bias.
 
-1. Build a luminance-weighted distribution that includes the latitude sine term.
-2. Sample environment directions directly for diffuse surfaces.
-3. Combine direct environment samples and BSDF samples with multiple importance
-   sampling to avoid bias and reduce noise around bright map regions.
-4. Mirror the distribution and PDF calculations on CPU and GPU, with statistical
-   and image-level tests.
-
-After that, the logical sequence is progressive accumulation and denoising,
-expanded PBR material inputs, then procedural scene generation.
+The next logical sequence is progressive accumulation and denoising, expanded
+PBR material inputs, then procedural scene generation.

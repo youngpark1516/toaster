@@ -13,6 +13,14 @@ pub struct EnvironmentMap {
     pub pixels: Arc<[Vec3]>,
     pub intensity: f32,
     pub rotation_degrees: f32,
+    importance_cdf: Arc<[f32]>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EnvironmentSample {
+    pub direction: Vec3,
+    pub radiance: Vec3,
+    pub pdf_solid_angle: f32,
 }
 
 impl EnvironmentMap {
@@ -52,12 +60,15 @@ impl EnvironmentMap {
             "environment rotation_degrees must be finite"
         );
 
+        let importance_cdf = build_importance_distribution(width, height, &pixels, intensity);
+
         Ok(Self {
             width,
             height,
             pixels,
             intensity,
             rotation_degrees: rotation_degrees.rem_euclid(360.0),
+            importance_cdf,
         })
     }
 
@@ -121,10 +132,133 @@ impl EnvironmentMap {
         top.lerp(bottom, amount_y) * self.intensity
     }
 
+    /// Draws a direction from the luminance-weighted lat-long distribution.
+    ///
+    /// `selection`, `jitter_u`, and `jitter_v` are expected to be uniform random
+    /// values in `[0, 1)`. Keeping randomness outside this renderer-neutral type
+    /// lets the CPU and GPU use exactly the same distribution.
+    pub fn sample_importance(
+        &self,
+        selection: f32,
+        jitter_u: f32,
+        jitter_v: f32,
+    ) -> Option<EnvironmentSample> {
+        if self.importance_cdf.last().copied().unwrap_or(0.0) <= 0.0 {
+            return None;
+        }
+
+        let selection = unit_interval(selection);
+        let index = self
+            .importance_cdf
+            .partition_point(|&cumulative| cumulative <= selection)
+            .min(self.importance_cdf.len() - 1);
+        let x = index % self.width as usize;
+        let y = index / self.width as usize;
+        let u = (x as f32 + unit_interval(jitter_u)) / self.width as f32;
+        let v = (y as f32 + unit_interval(jitter_v)) / self.height as f32;
+        let theta = PI * v;
+        let phi = 2.0 * PI * (u - 0.5 - self.rotation_degrees / 360.0);
+        let sin_theta = theta.sin();
+        let direction = Vec3::new(sin_theta * phi.cos(), theta.cos(), sin_theta * phi.sin());
+        let pdf_solid_angle = self.texel_pdf_solid_angle(index, sin_theta);
+
+        Some(EnvironmentSample {
+            direction,
+            radiance: self.sample(direction),
+            pdf_solid_angle,
+        })
+    }
+
+    /// Returns the probability density per steradian for a world-space
+    /// direction under the importance distribution.
+    pub fn pdf_solid_angle(&self, direction: Vec3) -> f32 {
+        let Some((u, v, sin_theta)) = self.direction_to_uv(direction) else {
+            return 0.0;
+        };
+        let x = (u * self.width as f32).floor() as usize % self.width as usize;
+        let y = ((v * self.height as f32).floor() as usize).min(self.height as usize - 1);
+        self.texel_pdf_solid_angle(y * self.width as usize + x, sin_theta)
+    }
+
+    /// Normalized cumulative probability and per-texel probability pairs used
+    /// by GPU renderers to mirror [`Self::sample_importance`].
+    pub fn importance_entries(&self) -> impl Iterator<Item = [f32; 2]> + '_ {
+        self.importance_cdf.iter().scan(0.0, |previous, &cdf| {
+            let probability = (cdf - *previous).max(0.0);
+            *previous = cdf;
+            Some([cdf, probability])
+        })
+    }
+
+    fn direction_to_uv(&self, direction: Vec3) -> Option<(f32, f32, f32)> {
+        let direction = direction.normalize_or_zero();
+        if direction == Vec3::ZERO {
+            return None;
+        }
+        let u = (direction.z.atan2(direction.x) / (2.0 * PI) + 0.5 + self.rotation_degrees / 360.0)
+            .rem_euclid(1.0);
+        let theta = direction.y.clamp(-1.0, 1.0).acos();
+        Some((u, theta / PI, theta.sin()))
+    }
+
+    fn texel_pdf_solid_angle(&self, index: usize, sin_theta: f32) -> f32 {
+        let previous_cdf = index
+            .checked_sub(1)
+            .map_or(0.0, |previous| self.importance_cdf[previous]);
+        let probability = (self.importance_cdf[index] - previous_cdf).max(0.0);
+        if probability <= 0.0 || sin_theta <= 0.0 {
+            return 0.0;
+        }
+        probability * self.width as f32 * self.height as f32 / (2.0 * PI * PI * sin_theta)
+    }
+
     fn texel(&self, x: i32, y: i32) -> Vec3 {
         let x = x.rem_euclid(self.width as i32) as usize;
         let y = y.clamp(0, self.height as i32 - 1) as usize;
         self.pixels[y * self.width as usize + x]
+    }
+}
+
+fn build_importance_distribution(
+    width: u32,
+    height: u32,
+    pixels: &[Vec3],
+    intensity: f32,
+) -> Arc<[f32]> {
+    let mut weights = Vec::with_capacity(pixels.len());
+    let mut total = 0.0_f64;
+    for (index, pixel) in pixels.iter().enumerate() {
+        let y = index / width as usize;
+        let theta = PI as f64 * (y as f64 + 0.5) / height as f64;
+        let luminance = 0.2126 * pixel.x as f64 + 0.7152 * pixel.y as f64 + 0.0722 * pixel.z as f64;
+        let weight = luminance * theta.sin() * intensity as f64;
+        weights.push(weight);
+        total += weight;
+    }
+
+    if total <= 0.0 || !total.is_finite() {
+        return vec![0.0; pixels.len()].into();
+    }
+
+    let mut accumulated = 0.0_f64;
+    let mut cdf: Vec<f32> = weights
+        .iter()
+        .map(|weight| {
+            accumulated += weight / total;
+            accumulated as f32
+        })
+        .collect();
+    if let Some(last) = cdf.last_mut() {
+        *last = 1.0;
+    }
+    cdf.into()
+}
+
+fn unit_interval(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(0.0, 1.0 - f32::EPSILON)
+    } else {
+        0.0
     }
 }
 
@@ -191,6 +325,111 @@ mod tests {
         let environment = EnvironmentMap::load(&path, 1.0, 0.0).unwrap();
         std::fs::remove_file(path).unwrap();
         assert!(environment.pixels[0].abs_diff_eq(Vec3::new(0.21586, 0.0, 1.0), 1e-4));
+    }
+
+    #[test]
+    fn importance_distribution_favors_bright_texels_and_latitude() {
+        let environment = EnvironmentMap::new(
+            2,
+            3,
+            vec![
+                Vec3::ONE,
+                Vec3::splat(10.0),
+                Vec3::ONE,
+                Vec3::ONE,
+                Vec3::ONE,
+                Vec3::ONE,
+            ],
+            1.0,
+            0.0,
+        )
+        .unwrap();
+        let entries: Vec<_> = environment.importance_entries().collect();
+
+        assert!(entries[1][1] > entries[0][1] * 9.9);
+        assert!(entries[2][1] > entries[0][1]);
+        assert!((entries.last().unwrap()[0] - 1.0).abs() < 1e-6);
+        assert!((entries.iter().map(|entry| entry[1]).sum::<f32>() - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn importance_sample_and_direction_pdf_agree() {
+        let environment = EnvironmentMap::new(
+            4,
+            2,
+            vec![
+                Vec3::splat(0.1),
+                Vec3::splat(0.1),
+                Vec3::splat(8.0),
+                Vec3::splat(0.1),
+                Vec3::splat(0.1),
+                Vec3::splat(0.1),
+                Vec3::splat(0.1),
+                Vec3::splat(0.1),
+            ],
+            2.0,
+            35.0,
+        )
+        .unwrap();
+
+        let sample = environment.sample_importance(0.5, 0.37, 0.61).unwrap();
+        assert!(sample.direction.is_normalized());
+        assert!(sample.pdf_solid_angle > 0.0);
+        assert!(
+            (sample.pdf_solid_angle - environment.pdf_solid_angle(sample.direction)).abs() < 1e-5
+        );
+        assert!(sample
+            .radiance
+            .abs_diff_eq(environment.sample(sample.direction), 1e-6));
+    }
+
+    #[test]
+    fn importance_sampling_frequencies_match_texel_probabilities() {
+        let environment = EnvironmentMap::new(
+            3,
+            2,
+            vec![
+                Vec3::splat(1.0),
+                Vec3::splat(4.0),
+                Vec3::splat(2.0),
+                Vec3::splat(3.0),
+                Vec3::splat(1.0),
+                Vec3::splat(5.0),
+            ],
+            1.0,
+            27.0,
+        )
+        .unwrap();
+        let expected: Vec<_> = environment
+            .importance_entries()
+            .map(|entry| entry[1])
+            .collect();
+        let sample_count = 10_000;
+        let mut counts = vec![0_usize; expected.len()];
+
+        for sample_index in 0..sample_count {
+            let selection = (sample_index as f32 + 0.5) / sample_count as f32;
+            let sample = environment.sample_importance(selection, 0.5, 0.5).unwrap();
+            let (u, v, _) = environment.direction_to_uv(sample.direction).unwrap();
+            let x = (u * environment.width as f32).floor() as usize;
+            let y = (v * environment.height as f32).floor() as usize;
+            counts[y * environment.width as usize + x] += 1;
+        }
+
+        for (count, probability) in counts.into_iter().zip(expected) {
+            let observed = count as f32 / sample_count as f32;
+            assert!((observed - probability).abs() <= 2.0 / sample_count as f32);
+        }
+    }
+
+    #[test]
+    fn black_or_disabled_environment_has_no_importance_samples() {
+        let black = EnvironmentMap::new(2, 1, vec![Vec3::ZERO; 2], 1.0, 0.0).unwrap();
+        let disabled = EnvironmentMap::new(1, 1, vec![Vec3::ONE], 0.0, 0.0).unwrap();
+
+        assert!(black.sample_importance(0.5, 0.5, 0.5).is_none());
+        assert_eq!(black.pdf_solid_angle(Vec3::X), 0.0);
+        assert!(disabled.sample_importance(0.5, 0.5, 0.5).is_none());
     }
 
     #[test]

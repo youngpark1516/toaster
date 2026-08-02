@@ -203,9 +203,11 @@ cargo run -p toaster-cli -- stream-preview scenes/010_environment_map.json \
 ```
 
 HDR pixels remain linear floating-point radiance. PNG and JPEG environment maps
-are converted from sRGB to linear color. This first version samples the map when
-rays miss; importance sampling the environment for cleaner diffuse lighting is a
-future optimization.
+are converted from sRGB to linear color. To reduce diffuse-lighting noise,
+Toaster builds a luminance-weighted distribution with the latitude sine term,
+samples bright environment regions directly, and combines those samples with
+cosine-weighted diffuse paths using multiple importance sampling (MIS). The CPU
+and GPU renderers use the same distribution and PDF convention.
 
 ## Milestones
 
@@ -215,6 +217,7 @@ future optimization.
 4. Triangle meshes and BVH acceleration (in progress)
 5. ✅ Initial glTF geometry import and browser preview
 6. ✅ HDR/PNG/JPEG environment-map lighting
+7. ✅ Environment-map importance sampling and MIS
 
 See the [project guide](docs/project_guide.md) for the complete operational
 snapshot, or the shorter [roadmap](docs/roadmap.md) and
