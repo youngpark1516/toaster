@@ -1,4 +1,4 @@
-// Sphere path-tracing compute shader placeholder.
+// Compute path tracer for spheres and triangles.
 
 struct RenderParams {
     width: u32,
@@ -320,11 +320,11 @@ fn sample_environment_importance() -> EnvironmentDirectionSample {
     return EnvironmentDirectionSample(direction, sample_environment(direction), pdf);
 }
 
-var<private> MIN_DISTANCE: f32 = 0.001;
-var<private> MAX_DISTANCE: f32 = 10000; //ARBITRARY MAGIC NUMBER, CHANGE LATER?
-var<private> EPSILON: f32 = 1e-8;
-
-const PI : f32 = 3.14159265359;
+const MIN_DISTANCE: f32 = 0.001;
+// Finite far bound shared by primary, continuation, and shadow-ray queries.
+const MAX_DISTANCE: f32 = 10000.0;
+const EPSILON: f32 = 1e-8;
+const PI: f32 = 3.14159265359;
 
 fn sample_light() -> Light {
     let random_area_sample: f32 = random_f32() * params.total_light_area;

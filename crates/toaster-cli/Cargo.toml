@@ -16,4 +16,4 @@ toaster-scene = { path = "../toaster-scene" }
 toaster-gpu = { path = "../toaster-gpu" }
 toaster-server = { path = "../toaster-server" }
 tokio.workspace = true
-pollster = "0.4"
+pollster.workspace = true

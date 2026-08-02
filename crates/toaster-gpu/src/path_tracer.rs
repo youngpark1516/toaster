@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::animation::{frame_output_path, AnimationConfig};
 use crate::buffers::create_scene_gpu_buffers;
 use crate::device::create_gpu_context;
-use crate::dispatch::dispatch_compute_2d;
+use crate::dispatch::{dispatch_compute_2d, ComputeDispatch};
 use crate::image_output::{pixels_to_rgba_image, save_rgba_image_to_png};
 use crate::pipeline::{
     create_pathtrace_bind_group, create_pathtrace_bind_group_layout, create_pipeline, load_shader,
@@ -274,7 +274,7 @@ async fn render_gpu_with_sink(
 
     while animation
         .frame_limit()
-        .map_or(true, |frame_limit| frame < frame_limit)
+        .is_none_or(|frame_limit| frame < frame_limit)
     {
         if !sink.should_continue() {
             println!("GPU render stopped before frame {frame}.");
@@ -345,17 +345,17 @@ async fn render_gpu_with_sink(
 
         let dispatch_start = Instant::now();
 
-        dispatch_compute_2d(
-            &context.device,
-            &context.queue,
-            &pipeline,
-            &bind_group,
-            &buffers.output,
-            &buffers.readback,
-            buffers.output_size,
-            scene.params.width,
-            scene.params.height,
-        )?;
+        dispatch_compute_2d(ComputeDispatch {
+            device: &context.device,
+            queue: &context.queue,
+            pipeline: &pipeline,
+            bind_group: &bind_group,
+            output: &buffers.output,
+            readback: &buffers.readback,
+            output_size: buffers.output_size,
+            width: scene.params.width,
+            height: scene.params.height,
+        })?;
 
         println!(
             "Frame {} GPU dispatch + wait time: {:.3}s",
@@ -413,7 +413,7 @@ async fn render_gpu_with_sink(
             .context("render frame index exceeded the supported range")?;
         let has_next_frame = animation
             .frame_limit()
-            .map_or(true, |frame_limit| next_frame < frame_limit);
+            .is_none_or(|frame_limit| next_frame < frame_limit);
         if !has_next_frame || !sink.should_continue() {
             break;
         }

@@ -17,7 +17,8 @@ impl Camera {
         fov_degrees: f32,
         aspect_ratio: f32,
     ) -> Result<Self, &'static str> {
-        if !(0.0..180.0).contains(&fov_degrees) || aspect_ratio <= 0.0 {
+        if !(0.0..180.0).contains(&fov_degrees) || !aspect_ratio.is_finite() || aspect_ratio <= 0.0
+        {
             return Err("camera FOV and aspect ratio must be positive and finite");
         }
 
@@ -64,5 +65,11 @@ mod tests {
     fn center_ray_points_at_target() {
         let camera = Camera::new(Vec3::ZERO, -Vec3::Z, Vec3::Y, 60.0, 1.0).unwrap();
         assert!(camera.ray(0.5, 0.5).direction.abs_diff_eq(-Vec3::Z, 1e-6));
+    }
+
+    #[test]
+    fn rejects_non_finite_aspect_ratio() {
+        assert!(Camera::new(Vec3::ZERO, -Vec3::Z, Vec3::Y, 60.0, f32::NAN).is_err());
+        assert!(Camera::new(Vec3::ZERO, -Vec3::Z, Vec3::Y, 60.0, f32::INFINITY).is_err());
     }
 }
