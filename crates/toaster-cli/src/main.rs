@@ -28,12 +28,12 @@ fn main() -> anyhow::Result<()> {
         Command::GpuRender {
             scene_path,
             out,
+            video,
             fps,
             duration,
             frames,
         } => {
             println!("Scene: {}", scene_path.display());
-            println!("Output: {}", out.display());
 
             let animation = resolve_animation(fps, duration, frames)?;
             match animation.fps() {
@@ -41,11 +41,26 @@ fn main() -> anyhow::Result<()> {
                 None => println!("Animation: single frame at time 0"),
             }
 
-            pollster::block_on(toaster_gpu::render_scene_gpu_animation(
-                &scene_path,
-                &out,
-                animation,
-            ))?;
+            match (out, video) {
+                (Some(out), None) => {
+                    println!("PNG output: {}", out.display());
+                    pollster::block_on(toaster_gpu::render_scene_gpu_animation(
+                        &scene_path,
+                        &out,
+                        animation,
+                    ))?;
+                }
+                (None, Some(video)) => {
+                    println!("Video output: {}", video.display());
+                    pollster::block_on(toaster_gpu::render_scene_gpu_video(
+                        &scene_path,
+                        &video,
+                        animation,
+                    ))?;
+                    println!("Saved video to {}", video.display());
+                }
+                _ => unreachable!("clap requires exactly one GPU output"),
+            }
         }
         Command::Server { host, port } => {
             println!("Server placeholder: http://{host}:{port}");

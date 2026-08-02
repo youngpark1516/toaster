@@ -2,6 +2,7 @@
 /out/*
 !/out/.gitkeep
 *.png
+*.mp4
 *.exr
 *.hdr
 *.tmp
@@ -14,4 +15,3 @@
 .cluster/
 cluster.local.*
 local.toml
-

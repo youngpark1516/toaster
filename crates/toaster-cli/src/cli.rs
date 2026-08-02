@@ -24,8 +24,19 @@ pub enum Command {
     GpuRender {
         scene_path: PathBuf,
 
-        #[arg(long)]
-        out: PathBuf,
+        /// PNG output path. Animated renders write a numbered PNG sequence.
+        #[arg(long, required_unless_present = "video", conflicts_with = "video")]
+        out: Option<PathBuf>,
+
+        /// Encode completed frames directly into an H.264 MP4 using FFmpeg.
+        #[arg(
+            long,
+            value_name = "MP4",
+            required_unless_present = "out",
+            conflicts_with = "out",
+            requires = "fps"
+        )]
+        video: Option<PathBuf>,
 
         /// Frames rendered per second. Required for animated output.
         #[arg(long)]
@@ -124,5 +135,50 @@ mod tests {
         ] {
             assert!(Cli::try_parse_from(args).is_ok());
         }
+    }
+
+    #[test]
+    fn parses_video_output_and_rejects_conflicting_outputs() {
+        let cli = Cli::try_parse_from([
+            "toaster",
+            "gpu-render",
+            "scene.json",
+            "--video",
+            "animation.mp4",
+            "--fps",
+            "24",
+            "--duration",
+            "2",
+        ])
+        .unwrap();
+        let Command::GpuRender { out, video, .. } = cli.command else {
+            panic!("expected gpu-render command");
+        };
+        assert!(out.is_none());
+        assert_eq!(video, Some(PathBuf::from("animation.mp4")));
+
+        assert!(Cli::try_parse_from([
+            "toaster",
+            "gpu-render",
+            "scene.json",
+            "--out",
+            "frames.png",
+            "--video",
+            "animation.mp4",
+            "--fps",
+            "24",
+            "--frames",
+            "2",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from(["toaster", "gpu-render", "scene.json"]).is_err());
+        assert!(Cli::try_parse_from([
+            "toaster",
+            "gpu-render",
+            "scene.json",
+            "--video",
+            "animation.mp4"
+        ])
+        .is_err());
     }
 }

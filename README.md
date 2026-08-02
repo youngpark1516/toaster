@@ -43,6 +43,27 @@ cargo run -p toaster-cli -- gpu-render scenes/004_mesh.json \
 
 Multi-frame output is numbered from `cube_0000.png`. Omitting all timing flags renders one frame at time zero; partial or conflicting timing options are rejected rather than defaulted.
 
+### MP4 video export
+
+To encode completed GPU frames directly into an H.264 MP4, install FFmpeg and
+make sure `ffmpeg` is available on `PATH`:
+
+```sh
+ffmpeg -version
+
+cargo run -p toaster-cli -- gpu-render scenes/006_rotating_cube.json \
+  --video out/cube.mp4 --fps 24 --duration 4
+```
+
+`--frames` works in place of `--duration`. Video mode streams raw RGBA frames
+to FFmpeg and does not create intermediate PNGs. It uses H.264 (`libx264`), CRF
+18, and `yuv420p` for broad browser and player compatibility. `--video` accepts
+an `.mp4` path and conflicts with the existing `--out` PNG option.
+
+On a cluster, FFmpeg may need to be loaded through the module system first. If
+the executable has a nonstandard name or location, set `TOASTER_FFMPEG` to its
+path before running Toaster.
+
 ### Render setting overrides
 
 Scene render settings are used by default. Override any combination of resolution, samples, and path depth from the command line:

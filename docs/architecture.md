@@ -11,3 +11,7 @@
 
 Dependencies point inward toward core data. Renderer-specific code stays out of scene descriptions, and GPU concerns remain isolated from the CPU reference implementation.
 
+GPU animation readback has two output paths over the same render loop. The PNG
+path writes each completed frame as a numbered image. The MP4 path converts the
+same floating-point pixels to RGBA8 and streams them to an FFmpeg child process;
+FFmpeg performs H.264 encoding and container finalization without temporary PNGs.
