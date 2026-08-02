@@ -28,10 +28,33 @@ curl --fail http://127.0.0.1:7878/healthz
 
 Open <http://127.0.0.1:7878/> to view the browser preview. The page reads its MJPEG data from `/stream`.
 
+The live metrics used by the page are also available directly:
+
+```sh
+curl --fail http://127.0.0.1:7878/status
+```
+
 For an indefinite preview, omit `--duration`; stop it with Ctrl+C:
 
 ```sh
 cargo run -p toaster-cli -- stream-preview scenes/006_rotating_cube.json --fps 12
+```
+
+For a lower-cost looping mesh preview:
+
+```sh
+cargo run -p toaster-cli -- stream-preview scenes/004_mesh.json \
+  --fps 12 --width 800 --height 800 --samples 16 --max-bounces 6 \
+  --loop-duration 2
+```
+
+Add bounded adaptive sampling when maintaining the requested FPS matters more than a fixed sample count:
+
+```sh
+cargo run -p toaster-cli -- stream-preview scenes/004_mesh.json \
+  --fps 12 --width 800 --height 800 --max-bounces 6 \
+  --samples 16 --adaptive-samples --min-samples 2 --max-samples 32 \
+  --loop-duration 2
 ```
 
 No preview frames are saved to disk. Existing `gpu-render --out ...` commands continue to provide PNG output.

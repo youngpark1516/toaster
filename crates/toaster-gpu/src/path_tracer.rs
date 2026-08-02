@@ -13,7 +13,7 @@ use crate::pipeline::{
     create_pathtrace_bind_group, create_pathtrace_bind_group_layout, create_pipeline, load_shader,
 };
 use crate::readback::readback_pixels;
-use crate::scene_upload::scene_to_gpu;
+use crate::scene_upload::{scene_to_gpu, scene_to_gpu_frame};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FramePacing {
@@ -26,6 +26,9 @@ pub struct CompletedFrame<'a> {
     pub time_seconds: f32,
     pub width: u32,
     pub height: u32,
+    pub samples: u32,
+    pub max_bounces: u32,
+    pub render_time: Duration,
     pub image: &'a RgbaImage,
 }
 
@@ -34,6 +37,10 @@ pub trait FrameSink {
 
     fn should_continue(&self) -> bool {
         true
+    }
+
+    fn samples_for_frame(&self) -> Option<u32> {
+        None
     }
 }
 
@@ -84,14 +91,19 @@ pub async fn render_scene_gpu_animation_with_sink(
     pacing: FramePacing,
     sink: &mut dyn FrameSink,
 ) -> Result<()> {
-    if pacing == FramePacing::RealTime {
-        ensure!(
-            animation.fps().is_some(),
-            "real-time frame pacing requires an FPS"
-        );
-    }
-
+    validate_pacing(animation, pacing)?;
     let source_scene = toaster_scene::load_scene(scene_path)?;
+    render_gpu_animation_with_sink(&source_scene, animation, pacing, sink).await
+}
+
+pub async fn render_gpu_animation_with_sink(
+    source_scene: &toaster_scene::Scene,
+    animation: AnimationConfig,
+    pacing: FramePacing,
+    sink: &mut dyn FrameSink,
+) -> Result<()> {
+    validate_pacing(animation, pacing)?;
+
     let initial_scene = source_scene.evaluate_at(0.0)?;
     let mut scene = scene_to_gpu(&initial_scene)?;
     let generation_started_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
@@ -154,7 +166,14 @@ pub async fn render_scene_gpu_animation_with_sink(
         let frame_start = Instant::now();
         let time_seconds = animation.time_for_frame(frame);
         let evaluated = source_scene.evaluate_at(time_seconds)?;
-        scene = scene_to_gpu(&evaluated)?;
+        scene = scene_to_gpu_frame(&evaluated)?;
+        if let Some(samples) = sink.samples_for_frame() {
+            ensure!(
+                samples > 0,
+                "frame sink sample count must be greater than zero"
+            );
+            scene.params.samples = samples;
+        }
         scene.params.frame_index = frame;
 
         context
@@ -173,6 +192,11 @@ pub async fn render_scene_gpu_animation_with_sink(
                 &buffers.triangles,
                 0,
                 bytemuck::cast_slice(&scene.triangles),
+            );
+            context.queue.write_buffer(
+                &buffers.triangle_attributes,
+                0,
+                bytemuck::cast_slice(&scene.triangle_attributes),
             );
         }
         if !scene.lights.is_empty() {
@@ -213,11 +237,15 @@ pub async fn render_scene_gpu_animation_with_sink(
         );
 
         let image = pixels_to_rgba_image(&pixels, scene.params.width, scene.params.height)?;
+        let render_time = frame_start.elapsed();
         sink.deliver(CompletedFrame {
             index: frame,
             time_seconds,
             width: scene.params.width,
             height: scene.params.height,
+            samples: scene.params.samples,
+            max_bounces: scene.params.max_bounces,
+            render_time,
             image: &image,
         })?;
 
@@ -260,6 +288,16 @@ fn frame_deadline_offset(frame: u32, fps: u32) -> Duration {
     Duration::from_secs_f64(frame as f64 / fps as f64)
 }
 
+fn validate_pacing(animation: AnimationConfig, pacing: FramePacing) -> Result<()> {
+    if pacing == FramePacing::RealTime {
+        ensure!(
+            animation.fps().is_some(),
+            "real-time frame pacing requires an FPS"
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,6 +326,9 @@ mod tests {
             time_seconds: 0.0,
             width: 1,
             height: 1,
+            samples: 1,
+            max_bounces: 1,
+            render_time: Duration::from_millis(1),
             image: &image,
         })
         .unwrap();

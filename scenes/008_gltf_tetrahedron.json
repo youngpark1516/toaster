@@ -1,0 +1,59 @@
+{
+  "camera": {
+    "position": [0.0, 0.6, 3.5],
+    "look_at": [0.0, -0.1, -2.0],
+    "up": [0.0, 1.0, 0.0],
+    "fov_degrees": 38.0
+  },
+  "render": {
+    "width": 480,
+    "height": 480,
+    "samples": 16,
+    "max_bounces": 8,
+    "background": "black"
+  },
+  "materials": [
+    { "name": "ground", "type": "diffuse", "albedo": [0.45, 0.45, 0.48] },
+    { "name": "porcelain", "type": "diffuse", "albedo": [0.22, 0.48, 0.90] },
+    { "name": "light", "type": "emissive", "color": [1.0, 0.92, 0.78], "strength": 12.0 }
+  ],
+  "objects": [
+    {
+      "type": "triangle",
+      "vertices": [[-4.0, -0.76, 1.0], [4.0, -0.76, -6.0], [4.0, -0.76, 1.0]],
+      "material": "ground"
+    },
+    {
+      "type": "triangle",
+      "vertices": [[-4.0, -0.76, 1.0], [-4.0, -0.76, -6.0], [4.0, -0.76, -6.0]],
+      "material": "ground"
+    },
+    {
+      "type": "mesh",
+      "path": "../assets/models/tetrahedron.gltf",
+      "material": "porcelain",
+      "group": "tetrahedron"
+    },
+    {
+      "type": "sphere",
+      "center": [0.0, 3.0, -1.0],
+      "radius": 0.6,
+      "material": "light"
+    }
+  ],
+  "animation": {
+    "tracks": [
+      {
+        "type": "rotation",
+        "target": { "type": "group", "name": "tetrahedron" },
+        "axis": [0.0, 1.0, 0.0],
+        "pivot": [0.0, 0.0, -2.0],
+        "interpolation": "linear",
+        "keyframes": [
+          { "time": 0.0, "degrees": 0.0 },
+          { "time": 4.0, "degrees": 360.0 }
+        ]
+      }
+    ]
+  }
+}

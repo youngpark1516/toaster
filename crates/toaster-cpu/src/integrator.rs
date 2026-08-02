@@ -67,7 +67,7 @@ fn ray_color_inner<R: Rng + ?Sized>(
     }
 
     if let Some(hit) = intersect_scene(ray, scene, RAY_EPSILON) {
-        let material = scene.materials[hit.material_index];
+        let material = material_at_hit(scene.materials[hit.material_index], &hit, scene);
         if let Material::Emissive { color, strength } = material {
             return if include_emission {
                 color * strength
@@ -102,6 +102,11 @@ fn ray_color_inner<R: Rng + ?Sized>(
             Vec3::ONE.lerp(Vec3::new(0.35, 0.65, 1.0), blend)
         }
         Background::Black => Vec3::ZERO,
+        Background::Environment => scene
+            .environment
+            .as_ref()
+            .expect("scene loader provides an environment map")
+            .sample(ray.direction),
     }
 }
 
@@ -166,6 +171,16 @@ fn scatter<R: Rng + ?Sized>(
                 attenuation: albedo,
             })
         }
+        Material::TexturedDiffuse { albedo, .. } => {
+            let mut direction = hit.normal + random_unit_vector(rng);
+            if direction.length_squared() < 1e-8 {
+                direction = hit.normal;
+            }
+            Some(Scatter {
+                ray: Ray::new(hit.point, direction.normalize()),
+                attenuation: albedo,
+            })
+        }
         Material::Metal { albedo, roughness } => {
             let reflected = reflect(incoming.direction.normalize(), hit.normal);
             let direction = reflected + roughness.clamp(0.0, 1.0) * random_in_unit_sphere(rng);
@@ -197,6 +212,18 @@ fn scatter<R: Rng + ?Sized>(
             })
         }
         Material::Emissive { .. } => None,
+    }
+}
+
+fn material_at_hit(material: Material, hit: &HitRecord, scene: &Scene) -> Material {
+    match material {
+        Material::TexturedDiffuse {
+            albedo,
+            texture_index,
+        } => Material::Diffuse {
+            albedo: albedo * scene.textures[texture_index].sample_linear(hit.tex_coord),
+        },
+        material => material,
     }
 }
 
@@ -238,7 +265,9 @@ fn random_in_unit_sphere<R: Rng + ?Sized>(rng: &mut R) -> Vec3 {
 mod tests {
     use super::*;
     use rand::SeedableRng;
-    use toaster_scene::{Background, CameraSettings, Material, RenderSettings, Sphere, Triangle};
+    use toaster_scene::{
+        Background, CameraSettings, EnvironmentMap, Material, RenderSettings, Sphere, Triangle,
+    };
 
     fn test_scene(albedo: Vec3) -> Scene {
         Scene {
@@ -263,6 +292,9 @@ mod tests {
                 group: None,
             }],
             triangles: Vec::new(),
+            triangle_attributes: Vec::new(),
+            textures: Vec::new(),
+            environment: None,
             animation: Default::default(),
         }
     }
@@ -274,6 +306,7 @@ mod tests {
             normal,
             front_face,
             material_index: 0,
+            tex_coord: glam::Vec2::ZERO,
         }
     }
 
@@ -332,6 +365,12 @@ mod tests {
             ],
             spheres: Vec::new(),
             triangles,
+            triangle_attributes: vec![
+                toaster_scene::TriangleAttributes::default();
+                if blocked { 3 } else { 1 }
+            ],
+            textures: Vec::new(),
+            environment: None,
             animation: Default::default(),
         }
     }
@@ -368,6 +407,19 @@ mod tests {
             4,
         );
         assert!(color.abs_diff_eq(Vec3::new(0.35, 0.65, 1.0), 1e-6));
+    }
+
+    #[test]
+    fn miss_samples_environment_radiance() {
+        let mut scene = test_scene(Vec3::ONE);
+        scene.render.background = Background::Environment;
+        scene.environment =
+            Some(EnvironmentMap::new(1, 1, vec![Vec3::new(3.0, 2.0, 1.0)], 0.5, 0.0).unwrap());
+        let mut rng = StdRng::seed_from_u64(1);
+
+        let color = ray_color(&Ray::new(Vec3::ZERO, Vec3::X), &scene, &mut rng, 1);
+
+        assert_eq!(color, Vec3::new(1.5, 1.0, 0.5));
     }
 
     #[test]
@@ -544,5 +596,19 @@ mod tests {
         let image = render(&scene);
         assert_eq!((image.width(), image.height()), (5, 5));
         assert_ne!(image.pixel(2, 2), image.pixel(0, 0));
+    }
+
+    #[test]
+    fn gltf_base_color_factor_modulates_bilinear_srgb_texture_sample() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/009_gltf_textured_quad.json");
+        let scene = toaster_scene::load_scene(path).unwrap();
+        let hit = intersect_scene(&Ray::new(Vec3::ZERO, -Vec3::Z), &scene, RAY_EPSILON).unwrap();
+        let material = material_at_hit(scene.materials[hit.material_index], &hit, &scene);
+
+        let Material::Diffuse { albedo } = material else {
+            panic!("expected sampled diffuse material");
+        };
+        assert!(albedo.abs_diff_eq(Vec3::new(0.4, 0.5, 0.15), 1e-5));
     }
 }

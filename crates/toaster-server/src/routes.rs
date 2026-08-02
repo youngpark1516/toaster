@@ -1,11 +1,11 @@
-use crate::FramePublisher;
+use crate::{FramePublisher, PreviewStatus};
 use axum::{
     body::{Body, Bytes},
     extract::State,
     http::{header, HeaderValue},
     response::{Html, Response},
     routing::get,
-    Router,
+    Json, Router,
 };
 use std::{convert::Infallible, sync::Arc};
 use tokio_stream::{wrappers::WatchStream, StreamExt};
@@ -17,9 +17,29 @@ const INDEX_HTML: &str = r#"<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Toaster Live Preview</title>
+  <style>
+    body { margin: 1rem; font-family: monospace; background: #111; color: #eee; }
+    img { display: block; max-width: 100%; max-height: 80vh; }
+  </style>
 </head>
 <body>
   <img src="/stream" alt="Toaster live preview">
+  <pre id="status">Waiting for the first frame...</pre>
+  <script>
+    const statusElement = document.getElementById("status");
+    async function refreshStatus() {
+      try {
+        const status = await fetch("/status", { cache: "no-store" }).then(response => response.json());
+        statusElement.textContent = status
+          ? `frame ${status.frame_index} | animation ${status.animation_time_seconds.toFixed(2)}s | ${status.width}x${status.height} | ${status.samples} spp${status.adaptive_sampling ? ` → ${status.next_samples} (${status.sample_adjustment})` : ""} | ${status.max_bounces} bounces | render ${status.render_time_ms.toFixed(1)}ms | ${status.effective_fps.toFixed(2)}/${status.target_fps} fps`
+          : "Waiting for the first frame...";
+      } catch (error) {
+        statusElement.textContent = `Status unavailable: ${error}`;
+      }
+    }
+    refreshStatus();
+    setInterval(refreshStatus, 1000);
+  </script>
 </body>
 </html>
 "#;
@@ -28,6 +48,7 @@ pub fn router(publisher: FramePublisher) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/stream", get(stream))
+        .route("/status", get(status))
         .route("/healthz", get(healthz))
         .with_state(publisher)
 }
@@ -38,6 +59,10 @@ async fn index() -> Html<&'static str> {
 
 async fn healthz() -> &'static str {
     "ok\n"
+}
+
+async fn status(State(publisher): State<FramePublisher>) -> Json<Option<PreviewStatus>> {
+    Json(publisher.latest_status())
 }
 
 async fn stream(State(publisher): State<FramePublisher>) -> Response<Body> {
@@ -84,6 +109,7 @@ mod tests {
         let page = runtime.block_on(index());
 
         assert!(page.0.contains(r#"<img src="/stream""#));
+        assert!(page.0.contains(r#"fetch("/status""#));
     }
 
     #[test]
@@ -115,6 +141,31 @@ mod tests {
         let latest = runtime.block_on(frames.next()).unwrap().unwrap();
 
         assert_eq!(latest.as_ref(), &[4, 5]);
+    }
+
+    #[test]
+    fn status_returns_latest_render_metrics() {
+        let publisher = FramePublisher::new();
+        let expected = PreviewStatus {
+            frame_index: 7,
+            animation_time_seconds: 0.5,
+            render_time_ms: 42.0,
+            effective_fps: 11.5,
+            target_fps: 12,
+            width: 800,
+            height: 600,
+            samples: 16,
+            next_samples: 12,
+            max_bounces: 6,
+            adaptive_sampling: true,
+            sample_adjustment: "reducing: over frame budget".to_owned(),
+        };
+        publisher.publish_frame(vec![1, 2, 3].into(), expected.clone());
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let Json(actual) = runtime.block_on(status(State(publisher)));
+
+        assert_eq!(actual, Some(expected));
     }
 
     #[test]

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 pub struct AnimationConfig {
     fps: Option<u32>,
     frame_limit: Option<u32>,
+    loop_duration_seconds: Option<f32>,
 }
 
 impl AnimationConfig {
@@ -12,6 +13,7 @@ impl AnimationConfig {
         Self {
             fps: None,
             frame_limit: Some(1),
+            loop_duration_seconds: None,
         }
     }
 
@@ -27,6 +29,7 @@ impl AnimationConfig {
         Ok(Self {
             fps: Some(fps),
             frame_limit: Some(frame_count as u32),
+            loop_duration_seconds: None,
         })
     }
 
@@ -38,6 +41,7 @@ impl AnimationConfig {
         Ok(Self {
             fps: Some(fps),
             frame_limit: Some(frame_count),
+            loop_duration_seconds: None,
         })
     }
 
@@ -46,7 +50,16 @@ impl AnimationConfig {
         Ok(Self {
             fps: Some(fps),
             frame_limit: None,
+            loop_duration_seconds: None,
         })
+    }
+
+    pub fn with_loop_duration(mut self, duration_seconds: f32) -> Result<Self> {
+        if !duration_seconds.is_finite() || duration_seconds <= 0.0 {
+            bail!("loop duration must be finite and greater than zero");
+        }
+        self.loop_duration_seconds = Some(duration_seconds);
+        Ok(self)
     }
 
     pub fn frame_limit(&self) -> Option<u32> {
@@ -54,11 +67,17 @@ impl AnimationConfig {
     }
 
     pub fn time_for_frame(&self, frame: u32) -> f32 {
-        self.fps.map_or(0.0, |fps| frame as f32 / fps as f32)
+        let time = self.fps.map_or(0.0, |fps| frame as f32 / fps as f32);
+        self.loop_duration_seconds
+            .map_or(time, |duration| time % duration)
     }
 
     pub fn fps(&self) -> Option<u32> {
         self.fps
+    }
+
+    pub fn loop_duration(&self) -> Option<f32> {
+        self.loop_duration_seconds
     }
 }
 
@@ -124,11 +143,33 @@ mod tests {
     }
 
     #[test]
+    fn loop_duration_wraps_animation_time_without_wrapping_frame_count() {
+        let animation = AnimationConfig::indefinite(4)
+            .unwrap()
+            .with_loop_duration(2.0)
+            .unwrap();
+
+        assert_eq!(animation.time_for_frame(7), 1.75);
+        assert_eq!(animation.time_for_frame(8), 0.0);
+        assert_eq!(animation.time_for_frame(10), 0.5);
+        assert_eq!(animation.frame_limit(), None);
+        assert_eq!(animation.loop_duration(), Some(2.0));
+    }
+
+    #[test]
     fn rejects_invalid_timing() {
         assert!(AnimationConfig::from_duration(0, 1.0).is_err());
         assert!(AnimationConfig::from_duration(24, f32::NAN).is_err());
         assert!(AnimationConfig::from_duration(24, 0.0).is_err());
         assert!(AnimationConfig::from_frame_count(24, 0).is_err());
         assert!(AnimationConfig::indefinite(0).is_err());
+        assert!(AnimationConfig::indefinite(24)
+            .unwrap()
+            .with_loop_duration(f32::NAN)
+            .is_err());
+        assert!(AnimationConfig::indefinite(24)
+            .unwrap()
+            .with_loop_duration(0.0)
+            .is_err());
     }
 }
