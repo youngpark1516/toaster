@@ -27,4 +27,6 @@ GPU. Next, add reusable procedural scene generators and expand PBR inputs.
 
 ## Phase 5: Preview server
 
-Serve render status and images through a small browser-facing service without turning Toaster into a full editor.
+The browser-facing service provides latest-frame MJPEG transport, render status,
+adaptive samples per frame, and opt-in static progressive GPU accumulation.
+Animated frames remain independent so different scene poses are never mixed.

@@ -20,6 +20,11 @@ struct RenderParams {
     environment_height: u32,
     environment_intensity: f32,
     environment_rotation_degrees: f32,
+
+    accumulated_samples: u32,
+    _pad2: u32,
+    _pad3: u32,
+    _pad4: u32,
 };
 
 struct Camera {
@@ -460,7 +465,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         color += vec4f(ray_color(ray), 1.0);
     }
-    output[idx] = color / f32(num_samples);
+    let batch_average = color / f32(num_samples);
+    if params.accumulated_samples == 0u {
+        output[idx] = batch_average;
+    } else {
+        let previous_samples = f32(params.accumulated_samples);
+        let total_samples = previous_samples + f32(num_samples);
+        output[idx] = (
+            output[idx] * previous_samples + batch_average * f32(num_samples)
+        ) / total_samples;
+    }
 }
 
 fn hit_sphere(ray: Ray, sphere: Sphere) -> HitRecord {

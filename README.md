@@ -113,6 +113,31 @@ cargo run -p toaster-cli -- stream-preview scenes/004_mesh.json \
 
 Without `--adaptive-samples`, the preview keeps using the fixed scene or `--samples` value.
 
+For a static scene, progressive mode accumulates small batches in linear color
+until it reaches a target quality:
+
+```sh
+cargo run -p toaster-cli -- stream-preview scenes/010_environment_map.json \
+  --progressive --batch-samples 2 --target-samples 256 \
+  --fps 12
+```
+
+With only `--progressive`, batches default to 1 spp and the target defaults to
+the scene's sample count. `--samples` and `--loop-duration` are intentionally
+unavailable in this mode, and scenes containing animation tracks are rejected so
+different poses are never averaged together. After reaching the target, Toaster
+does no more GPU work but keeps the final image and `/status` available until
+Ctrl+C or `--duration` expires.
+
+Adaptive progressive preview adjusts the batch size while preserving the exact
+target:
+
+```sh
+cargo run -p toaster-cli -- stream-preview scenes/010_environment_map.json \
+  --progressive --batch-samples 2 --target-samples 256 \
+  --adaptive-samples --min-samples 1 --max-samples 8 --fps 12
+```
+
 For a renderer running on a remote GPU machine, forward the loopback-bound server over SSH:
 
 ```sh
@@ -218,6 +243,7 @@ and GPU renderers use the same distribution and PDF convention.
 5. ✅ Initial glTF geometry import and browser preview
 6. ✅ HDR/PNG/JPEG environment-map lighting
 7. ✅ Environment-map importance sampling and MIS
+8. ✅ Static progressive GPU preview accumulation
 
 See the [project guide](docs/project_guide.md) for the complete operational
 snapshot, or the shorter [roadmap](docs/roadmap.md) and

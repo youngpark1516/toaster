@@ -11,6 +11,12 @@ use toaster_scene::RenderSettings;
 
 const STREAM_JPEG_QUALITY: u8 = 90;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProgressivePreview {
+    batch_samples: u32,
+    target_samples: u32,
+}
+
 #[derive(Debug)]
 struct AdaptiveSampling {
     min_samples: u32,
@@ -81,6 +87,8 @@ struct ServerFrameSink {
     stop: Arc<AtomicBool>,
     target_fps: u32,
     adaptive_sampling: Option<AdaptiveSampling>,
+    fixed_batch_samples: Option<u32>,
+    progressive_target_samples: Option<u32>,
     last_published_at: Option<Instant>,
 }
 
@@ -90,13 +98,22 @@ impl toaster_gpu::FrameSink for ServerFrameSink {
         let jpeg =
             toaster_gpu::image_output::encode_rgba_image_to_jpeg(frame.image, STREAM_JPEG_QUALITY)?;
         let measured_frame_time = frame.render_time + encode_started_at.elapsed();
-        let (next_samples, sample_adjustment) =
-            if let Some(adaptive_sampling) = &mut self.adaptive_sampling {
-                let adjustment = adaptive_sampling.observe(measured_frame_time);
-                (adaptive_sampling.current_samples, adjustment)
-            } else {
-                (frame.samples, "fixed")
-            };
+        let progress_complete = self
+            .progressive_target_samples
+            .is_some_and(|target| frame.accumulated_samples >= target);
+        let (desired_next_samples, sample_adjustment) = if progress_complete {
+            (0, "complete")
+        } else if let Some(adaptive_sampling) = &mut self.adaptive_sampling {
+            let adjustment = adaptive_sampling.observe(measured_frame_time);
+            (adaptive_sampling.current_samples, adjustment)
+        } else {
+            (self.fixed_batch_samples.unwrap_or(frame.samples), "fixed")
+        };
+        let next_samples = self
+            .progressive_target_samples
+            .map_or(desired_next_samples, |target| {
+                desired_next_samples.min(target.saturating_sub(frame.accumulated_samples))
+            });
         let published_at = Instant::now();
         let effective_fps = self
             .last_published_at
@@ -117,16 +134,39 @@ impl toaster_gpu::FrameSink for ServerFrameSink {
                 width: frame.width,
                 height: frame.height,
                 samples: frame.samples,
+                progressive: self.progressive_target_samples.is_some(),
+                accumulated_samples: frame.accumulated_samples,
+                target_samples: self.progressive_target_samples,
+                progress_complete,
                 next_samples,
                 max_bounces: frame.max_bounces,
                 adaptive_sampling: self.adaptive_sampling.is_some(),
                 sample_adjustment: sample_adjustment.to_owned(),
             },
         );
-        println!(
-            "Published preview frame {} ({}x{}, {} spp -> {}) at {:.3}s.",
-            frame.index, frame.width, frame.height, frame.samples, next_samples, frame.time_seconds
-        );
+        if let Some(target_samples) = self.progressive_target_samples {
+            println!(
+                "Published progressive frame {} ({}x{}, {} spp batch, {}/{} accumulated, next {}) at {:.3}s.",
+                frame.index,
+                frame.width,
+                frame.height,
+                frame.samples,
+                frame.accumulated_samples,
+                target_samples,
+                next_samples,
+                frame.time_seconds
+            );
+        } else {
+            println!(
+                "Published preview frame {} ({}x{}, {} spp -> {}) at {:.3}s.",
+                frame.index,
+                frame.width,
+                frame.height,
+                frame.samples,
+                next_samples,
+                frame.time_seconds
+            );
+        }
         Ok(())
     }
 
@@ -138,6 +178,7 @@ impl toaster_gpu::FrameSink for ServerFrameSink {
         self.adaptive_sampling
             .as_ref()
             .map(|sampling| sampling.current_samples)
+            .or(self.fixed_batch_samples)
     }
 }
 
@@ -210,18 +251,35 @@ fn main() -> anyhow::Result<()> {
             duration,
             loop_duration,
             overrides,
+            progressive,
+            batch_samples,
+            target_samples,
             adaptive_samples,
             min_samples,
             max_samples,
         } => {
             let animation = resolve_preview_animation(fps, duration, loop_duration)?;
             let mut scene = toaster_scene::load_scene(&scene_path)?;
+            let progressive = resolve_progressive_preview(
+                progressive,
+                batch_samples,
+                target_samples,
+                overrides.samples,
+                loop_duration,
+                &scene,
+            )?;
             apply_overrides(&mut scene.render, overrides)?;
+            let (initial_samples, default_max_samples) = progressive.map_or(
+                (scene.render.samples, scene.render.samples),
+                |progressive| (progressive.batch_samples, progressive.target_samples),
+            );
             let adaptive_sampling = resolve_adaptive_sampling(
                 adaptive_samples,
                 min_samples,
                 max_samples,
-                scene.render.samples,
+                initial_samples,
+                default_max_samples,
+                progressive.map(|config| config.target_samples),
                 fps,
             )?;
             println!("Scene: {}", scene_path.display());
@@ -244,13 +302,26 @@ fn main() -> anyhow::Result<()> {
             if let Some(loop_duration) = animation.loop_duration() {
                 println!("Animation loop: {loop_duration:.3}s");
             }
+            if let Some(progressive) = progressive {
+                println!(
+                    "Progressive preview: {} spp batches, {} spp target",
+                    progressive.batch_samples, progressive.target_samples
+                );
+            }
             if let Some(sampling) = &adaptive_sampling {
                 println!(
                     "Adaptive samples: {}..={}, starting at {}",
                     sampling.min_samples, sampling.max_samples, sampling.current_samples
                 );
             }
-            render_stream_preview(&scene, animation, adaptive_sampling, &host, port)?;
+            render_stream_preview(
+                &scene,
+                animation,
+                adaptive_sampling,
+                progressive,
+                &host,
+                port,
+            )?;
         }
         Command::Server { host, port } => {
             let runtime = tokio::runtime::Runtime::new()?;
@@ -268,6 +339,7 @@ fn render_stream_preview(
     scene: &toaster_scene::Scene,
     animation: toaster_gpu::AnimationConfig,
     adaptive_sampling: Option<AdaptiveSampling>,
+    progressive: Option<ProgressivePreview>,
     host: &str,
     port: u16,
 ) -> anyhow::Result<()> {
@@ -303,16 +375,32 @@ fn render_stream_preview(
                 .fps()
                 .expect("real-time preview animation has an FPS"),
             adaptive_sampling,
+            fixed_batch_samples: progressive.map(|config| config.batch_samples),
+            progressive_target_samples: progressive.map(|config| config.target_samples),
             last_published_at: None,
         };
 
-        let render_result = toaster_gpu::render_gpu_animation_with_sink(
-            scene,
-            animation,
-            toaster_gpu::FramePacing::RealTime,
-            &mut sink,
-        )
-        .await;
+        let render_result = match progressive {
+            Some(progressive) => {
+                toaster_gpu::render_gpu_progressive_with_sink(
+                    scene,
+                    animation,
+                    toaster_gpu::FramePacing::RealTime,
+                    toaster_gpu::ProgressiveRenderConfig::new(progressive.target_samples)?,
+                    &mut sink,
+                )
+                .await
+            }
+            None => {
+                toaster_gpu::render_gpu_animation_with_sink(
+                    scene,
+                    animation,
+                    toaster_gpu::FramePacing::RealTime,
+                    &mut sink,
+                )
+                .await
+            }
+        };
 
         stop.store(true, Ordering::Relaxed);
         signal.abort();
@@ -334,11 +422,57 @@ fn render_stream_preview(
     })
 }
 
+fn resolve_progressive_preview(
+    enabled: bool,
+    batch_samples: Option<u32>,
+    target_samples: Option<u32>,
+    sample_override: Option<u32>,
+    loop_duration: Option<f32>,
+    scene: &toaster_scene::Scene,
+) -> anyhow::Result<Option<ProgressivePreview>> {
+    if !enabled {
+        anyhow::ensure!(
+            batch_samples.is_none() && target_samples.is_none(),
+            "--batch-samples and --target-samples require --progressive"
+        );
+        return Ok(None);
+    }
+
+    anyhow::ensure!(
+        sample_override.is_none(),
+        "--samples cannot be used with --progressive; use --batch-samples and --target-samples"
+    );
+    anyhow::ensure!(
+        loop_duration.is_none(),
+        "--loop-duration cannot be used with --progressive"
+    );
+    anyhow::ensure!(
+        scene.animation.tracks.is_empty(),
+        "--progressive requires a scene without animation tracks"
+    );
+
+    let config = ProgressivePreview {
+        batch_samples: batch_samples.unwrap_or(1),
+        target_samples: target_samples.unwrap_or(scene.render.samples),
+    };
+    anyhow::ensure!(
+        config.batch_samples > 0 && config.target_samples > 0,
+        "progressive sample counts must be greater than zero"
+    );
+    anyhow::ensure!(
+        config.batch_samples <= config.target_samples,
+        "--batch-samples must be less than or equal to --target-samples"
+    );
+    Ok(Some(config))
+}
+
 fn resolve_adaptive_sampling(
     enabled: bool,
     min_samples: Option<u32>,
     max_samples: Option<u32>,
-    scene_samples: u32,
+    initial_samples: u32,
+    default_max_samples: u32,
+    sample_ceiling: Option<u32>,
     target_fps: u32,
 ) -> anyhow::Result<Option<AdaptiveSampling>> {
     if !enabled {
@@ -349,10 +483,23 @@ fn resolve_adaptive_sampling(
         return Ok(None);
     }
 
+    if let Some(sample_ceiling) = sample_ceiling {
+        let resolved_min = min_samples.unwrap_or(1);
+        let resolved_max = max_samples.unwrap_or(default_max_samples);
+        anyhow::ensure!(
+            resolved_min <= sample_ceiling && resolved_max <= sample_ceiling,
+            "adaptive sample bounds cannot exceed the progressive target"
+        );
+        anyhow::ensure!(
+            resolved_min <= initial_samples && initial_samples <= resolved_max,
+            "progressive batch samples must fall within the adaptive sample bounds"
+        );
+    }
+
     AdaptiveSampling::new(
-        scene_samples,
+        initial_samples,
         min_samples.unwrap_or(1),
-        max_samples.unwrap_or(scene_samples),
+        max_samples.unwrap_or(default_max_samples),
         target_fps,
     )
     .map(Some)
@@ -548,18 +695,60 @@ mod tests {
 
     #[test]
     fn adaptive_sampling_resolves_defaults_and_validates_bounds() {
-        let sampling = resolve_adaptive_sampling(true, None, None, 24, 12)
+        let sampling = resolve_adaptive_sampling(true, None, None, 24, 24, None, 12)
             .unwrap()
             .unwrap();
         assert_eq!(sampling.min_samples, 1);
         assert_eq!(sampling.max_samples, 24);
         assert_eq!(sampling.current_samples, 24);
 
-        assert!(resolve_adaptive_sampling(true, Some(16), Some(8), 12, 12).is_err());
-        assert!(resolve_adaptive_sampling(false, Some(1), None, 12, 12).is_err());
-        assert!(resolve_adaptive_sampling(false, None, None, 12, 12)
-            .unwrap()
-            .is_none());
+        assert!(resolve_adaptive_sampling(true, Some(16), Some(8), 12, 12, None, 12).is_err());
+        assert!(resolve_adaptive_sampling(false, Some(1), None, 12, 12, None, 12).is_err());
+        assert!(
+            resolve_adaptive_sampling(false, None, None, 12, 12, None, 12)
+                .unwrap()
+                .is_none()
+        );
+        assert!(resolve_adaptive_sampling(true, None, Some(17), 2, 16, Some(16), 12).is_err());
+    }
+
+    #[test]
+    fn resolves_progressive_defaults_and_rejects_incompatible_scenes() {
+        let static_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/010_environment_map.json");
+        let static_scene = toaster_scene::load_scene(static_path).unwrap();
+        let defaults =
+            resolve_progressive_preview(true, None, None, None, None, &static_scene).unwrap();
+        assert_eq!(
+            defaults,
+            Some(ProgressivePreview {
+                batch_samples: 1,
+                target_samples: static_scene.render.samples,
+            })
+        );
+        assert_eq!(
+            resolve_progressive_preview(true, Some(4), Some(64), None, None, &static_scene,)
+                .unwrap(),
+            Some(ProgressivePreview {
+                batch_samples: 4,
+                target_samples: 64,
+            })
+        );
+
+        assert!(
+            resolve_progressive_preview(true, Some(65), Some(64), None, None, &static_scene,)
+                .is_err()
+        );
+        assert!(
+            resolve_progressive_preview(true, None, None, Some(2), None, &static_scene).is_err()
+        );
+
+        let animated_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/006_rotating_cube.json");
+        let animated_scene = toaster_scene::load_scene(animated_path).unwrap();
+        assert!(
+            resolve_progressive_preview(true, None, None, None, None, &animated_scene).is_err()
+        );
     }
 
     #[test]

@@ -201,6 +201,8 @@ fn scene_to_gpu_inner(scene: &Scene, include_static_pixels: bool) -> Result<Scen
             environment_height,
             environment_intensity,
             environment_rotation_degrees,
+            accumulated_samples: 0,
+            _pad1: [0; 3],
         },
         camera,
         spheres,

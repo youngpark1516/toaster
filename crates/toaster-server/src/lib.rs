@@ -41,7 +41,12 @@ pub struct PreviewStatus {
     pub target_fps: u32,
     pub width: u32,
     pub height: u32,
+    /// Samples rendered by the most recent update.
     pub samples: u32,
+    pub progressive: bool,
+    pub accumulated_samples: u32,
+    pub target_samples: Option<u32>,
+    pub progress_complete: bool,
     pub next_samples: u32,
     pub max_bounces: u32,
     pub adaptive_sampling: bool,
