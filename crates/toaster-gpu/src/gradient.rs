@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use crate::buffers::{create_pixel_buffers, RenderParams};
 use crate::device::create_gpu_context;
-use crate::dispatch::dispatch_compute_2d;
+use crate::dispatch::{dispatch_compute_2d, ComputeDispatch};
 use crate::image_output::save_pixels_to_png;
 use crate::pipeline::{create_bind_group, create_bind_group_layout, create_pipeline, load_shader};
 use crate::readback::readback_pixels;
@@ -50,17 +50,17 @@ pub async fn render_gradient(out_path: &Path) -> Result<()> {
     let pipeline = create_pipeline(&context.device, &shader, &bind_group_layout);
     println!("Compute pipeline created.");
 
-    dispatch_compute_2d(
-        &context.device,
-        &context.queue,
-        &pipeline,
-        &bind_group,
-        &buffers.output,
-        &buffers.readback,
-        buffers.output_size,
-        params.width,
-        params.height,
-    )?;
+    dispatch_compute_2d(ComputeDispatch {
+        device: &context.device,
+        queue: &context.queue,
+        pipeline: &pipeline,
+        bind_group: &bind_group,
+        output: &buffers.output,
+        readback: &buffers.readback,
+        output_size: buffers.output_size,
+        width: params.width,
+        height: params.height,
+    })?;
     println!("Compute dispatch completed successfully.");
 
     let pixels = readback_pixels(&context.device, &buffers.readback)?;

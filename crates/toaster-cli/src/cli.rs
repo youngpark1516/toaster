@@ -74,8 +74,28 @@ pub enum Command {
         duration: Option<f32>,
 
         /// Wrap animation time at this interval while frame indices continue increasing.
-        #[arg(long, value_parser = parse_positive_f32)]
+        #[arg(long, value_parser = parse_positive_f32, conflicts_with = "progressive")]
         loop_duration: Option<f32>,
+
+        /// Accumulate batches for a static scene until a target sample count is reached.
+        #[arg(long, conflicts_with = "samples")]
+        progressive: bool,
+
+        /// Samples added by each progressive update. Defaults to 1.
+        #[arg(
+            long,
+            requires = "progressive",
+            value_parser = clap::value_parser!(u32).range(1..)
+        )]
+        batch_samples: Option<u32>,
+
+        /// Total samples accumulated by a progressive preview. Defaults to the scene setting.
+        #[arg(
+            long,
+            requires = "progressive",
+            value_parser = clap::value_parser!(u32).range(1..)
+        )]
+        target_samples: Option<u32>,
 
         #[command(flatten)]
         overrides: RenderOverrides,
@@ -361,6 +381,73 @@ mod tests {
                 "stream-preview",
                 "scene.json",
                 "--min-samples",
+                "2",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+    }
+
+    #[test]
+    fn parses_progressive_preview_options_and_rejects_conflicts() {
+        let defaults =
+            Cli::try_parse_from(["toaster", "stream-preview", "scene.json", "--progressive"])
+                .unwrap();
+        let Command::StreamPreview {
+            progressive,
+            batch_samples,
+            target_samples,
+            ..
+        } = defaults.command
+        else {
+            panic!("expected stream-preview command");
+        };
+        assert!(progressive);
+        assert_eq!(batch_samples, None);
+        assert_eq!(target_samples, None);
+
+        let explicit = Cli::try_parse_from([
+            "toaster",
+            "stream-preview",
+            "scene.json",
+            "--progressive",
+            "--batch-samples",
+            "2",
+            "--target-samples",
+            "256",
+        ]);
+        assert!(explicit.is_ok());
+
+        for args in [
+            vec![
+                "toaster",
+                "stream-preview",
+                "scene.json",
+                "--batch-samples",
+                "2",
+            ],
+            vec![
+                "toaster",
+                "stream-preview",
+                "scene.json",
+                "--progressive",
+                "--batch-samples",
+                "0",
+            ],
+            vec![
+                "toaster",
+                "stream-preview",
+                "scene.json",
+                "--progressive",
+                "--samples",
+                "2",
+            ],
+            vec![
+                "toaster",
+                "stream-preview",
+                "scene.json",
+                "--progressive",
+                "--loop-duration",
                 "2",
             ],
         ] {

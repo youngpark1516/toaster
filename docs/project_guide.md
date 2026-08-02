@@ -185,6 +185,26 @@ cargo run --release -p toaster-cli -- stream-preview \
 If even one sample exceeds the frame budget, adaptive sampling cannot reach the
 target FPS; lower resolution or bounce depth is then required.
 
+### Static progressive preview
+
+Progressive mode publishes an increasingly clean static image while preserving
+the normal latest-frame streaming behavior:
+
+```sh
+cargo run --release -p toaster-cli -- stream-preview \
+  scenes/010_environment_map.json \
+  --progressive --batch-samples 2 --target-samples 256 --fps 12
+```
+
+The batch defaults to 1 spp and the target defaults to the scene sample count.
+The browser and `/status` report both the latest batch and accumulated sample
+counts. Once the target is exact, the GPU becomes idle while the server holds the
+final image until Ctrl+C or the finite preview duration ends. Adaptive sampling
+may adjust batch size and clamps its final batch to the remaining target.
+
+Progressive mode rejects animation tracks, `--loop-duration`, and `--samples`;
+use `--batch-samples` and `--target-samples` for its separate controls.
+
 ### Standalone server
 
 ```sh
@@ -338,20 +358,16 @@ tracks are translation and axis/pivot rotation with linear or step interpolation
 - Preview frames are JPEG images, not a modern low-latency video codec.
 - There is no authentication or multi-render orchestration.
 - The CPU renderer is single-threaded.
-- There is no temporal accumulation, reprojection, or denoiser.
-- Environment lighting has no luminance importance sampling yet, so diffuse
-  illumination can require many samples.
+- Progressive accumulation is static-only; animated previews have no temporal
+  accumulation, reprojection, or denoiser.
 
 ## Next milestone
 
-The next coherent optimization is **environment-map importance sampling**:
+Environment-map importance sampling is complete: CPU and GPU renderers share a
+luminance-and-latitude distribution, directly sample the environment at diffuse
+surfaces, and use the power heuristic to combine environment and BSDF paths
+without bias.
 
-1. Build a luminance-weighted distribution that includes the latitude sine term.
-2. Sample environment directions directly for diffuse surfaces.
-3. Combine direct environment samples and BSDF samples with multiple importance
-   sampling to avoid bias and reduce noise around bright map regions.
-4. Mirror the distribution and PDF calculations on CPU and GPU, with statistical
-   and image-level tests.
-
-After that, the logical sequence is progressive accumulation and denoising,
-expanded PBR material inputs, then procedural scene generation.
+After the separately developed BVH is integrated, the next major subsystem is
+deterministic rigid-body physics. Denoising, expanded PBR material inputs, and
+procedural scene generation remain later rendering and content milestones.

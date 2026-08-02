@@ -30,9 +30,14 @@ const INDEX_HTML: &str = r#"<!doctype html>
     async function refreshStatus() {
       try {
         const status = await fetch("/status", { cache: "no-store" }).then(response => response.json());
-        statusElement.textContent = status
-          ? `frame ${status.frame_index} | animation ${status.animation_time_seconds.toFixed(2)}s | ${status.width}x${status.height} | ${status.samples} spp${status.adaptive_sampling ? ` → ${status.next_samples} (${status.sample_adjustment})` : ""} | ${status.max_bounces} bounces | render ${status.render_time_ms.toFixed(1)}ms | ${status.effective_fps.toFixed(2)}/${status.target_fps} fps`
-          : "Waiting for the first frame...";
+        if (!status) {
+          statusElement.textContent = "Waiting for the first frame...";
+          return;
+        }
+        const samples = status.progressive
+          ? `${status.samples} spp batch | ${status.accumulated_samples}/${status.target_samples} spp accumulated${status.progress_complete ? " (complete)" : ` → ${status.next_samples}`}`
+          : `${status.samples} spp${status.adaptive_sampling ? ` → ${status.next_samples} (${status.sample_adjustment})` : ""}`;
+        statusElement.textContent = `frame ${status.frame_index} | animation ${status.animation_time_seconds.toFixed(2)}s | ${status.width}x${status.height} | ${samples} | ${status.max_bounces} bounces | render ${status.render_time_ms.toFixed(1)}ms | ${status.effective_fps.toFixed(2)}/${status.target_fps} fps`;
       } catch (error) {
         statusElement.textContent = `Status unavailable: ${error}`;
       }
@@ -110,6 +115,7 @@ mod tests {
 
         assert!(page.0.contains(r#"<img src="/stream""#));
         assert!(page.0.contains(r#"fetch("/status""#));
+        assert!(page.0.contains("status.accumulated_samples"));
     }
 
     #[test]
@@ -155,6 +161,10 @@ mod tests {
             width: 800,
             height: 600,
             samples: 16,
+            progressive: true,
+            accumulated_samples: 64,
+            target_samples: Some(256),
+            progress_complete: false,
             next_samples: 12,
             max_bounces: 6,
             adaptive_sampling: true,
@@ -166,6 +176,38 @@ mod tests {
         let Json(actual) = runtime.block_on(status(State(publisher)));
 
         assert_eq!(actual, Some(expected));
+    }
+
+    #[test]
+    fn completed_progressive_status_and_frame_remain_latest() {
+        let publisher = FramePublisher::new();
+        let expected = PreviewStatus {
+            frame_index: 3,
+            animation_time_seconds: 0.0,
+            render_time_ms: 5.0,
+            effective_fps: 12.0,
+            target_fps: 12,
+            width: 2,
+            height: 2,
+            samples: 1,
+            progressive: true,
+            accumulated_samples: 5,
+            target_samples: Some(5),
+            progress_complete: true,
+            next_samples: 0,
+            max_bounces: 2,
+            adaptive_sampling: false,
+            sample_adjustment: "complete".to_owned(),
+        };
+        publisher.publish_frame(vec![9, 8, 7].into(), expected.clone());
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let Json(actual) = runtime.block_on(status(State(publisher.clone())));
+        let mut frames = WatchStream::new(publisher.subscribe());
+        let latest = runtime.block_on(frames.next()).unwrap().unwrap();
+
+        assert_eq!(actual, Some(expected));
+        assert_eq!(latest.as_ref(), &[9, 8, 7]);
     }
 
     #[test]

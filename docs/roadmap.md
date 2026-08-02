@@ -21,9 +21,12 @@ Add triangles, construct a CPU BVH, flatten it into GPU-friendly buffers, and me
 Initial glTF/GLB import now includes triangle geometry, node transforms, smooth
 normals, UVs, base-color factors and textures, relative scene paths, material
 overrides, animation groups, and equirectangular HDR/PNG/JPEG environment
-lighting. Next, add importance sampling for bright environment regions, then
-reusable procedural scene generators.
+lighting. Luminance-weighted environment sampling and diffuse multiple
+importance sampling now reduce noise around bright map regions on both CPU and
+GPU. Next, add reusable procedural scene generators and expand PBR inputs.
 
 ## Phase 5: Preview server
 
-Serve render status and images through a small browser-facing service without turning Toaster into a full editor.
+The browser-facing service provides latest-frame MJPEG transport, render status,
+adaptive samples per frame, and opt-in static progressive GPU accumulation.
+Animated frames remain independent so different scene poses are never mixed.

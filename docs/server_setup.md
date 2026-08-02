@@ -57,6 +57,17 @@ cargo run -p toaster-cli -- stream-preview scenes/004_mesh.json \
   --loop-duration 2
 ```
 
+For a static scene, accumulate progressive batches up to an exact target:
+
+```sh
+cargo run -p toaster-cli -- stream-preview scenes/010_environment_map.json \
+  --progressive --batch-samples 2 --target-samples 256 \
+  --adaptive-samples --min-samples 1 --max-samples 8 --fps 12
+```
+
+The last partial batch is clamped to the target. After convergence, the server
+continues serving the final frame until Ctrl+C or `--duration` expires.
+
 No preview frames are saved to disk. Existing `gpu-render --out ...` commands continue to provide PNG output.
 
 To view a loopback-bound preview from a local browser while rendering remotely:

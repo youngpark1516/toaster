@@ -22,6 +22,9 @@ pub struct GpuRenderParams {
     pub environment_height: u32,
     pub environment_intensity: f32,
     pub environment_rotation_degrees: f32,
+
+    pub accumulated_samples: u32,
+    pub _pad1: [u32; 3],
 }
 
 #[repr(C)]
@@ -106,7 +109,7 @@ mod tests {
 
     #[test]
     fn gpu_types_match_wgsl_layout_sizes() {
-        assert_eq!(std::mem::size_of::<GpuRenderParams>(), 64);
+        assert_eq!(std::mem::size_of::<GpuRenderParams>(), 80);
         assert_eq!(std::mem::size_of::<GpuCamera>(), 64);
         assert_eq!(std::mem::size_of::<GpuSphere>(), 32);
         assert_eq!(std::mem::size_of::<GpuTriangle>(), 64);

@@ -36,3 +36,10 @@ either JPEG-encodes and publishes them through `toaster-server`, or sends their
 RGBA8 bytes directly to FFmpeg. A separate latest-value status channel feeds
 `/status` and the browser metrics display. Slow browser clients therefore drop
 superseded frames instead of blocking the GPU render loop.
+
+Static progressive preview reuses the path tracer's read/write output buffer as
+a persistent linear-color running average. Each dispatch supplies its previous
+sample count through the render uniform, and the completed-frame sink reports
+both batch and accumulated counts. No extra storage binding or CPU-side float
+accumulation is required. Independent PNG, video, and animated-preview frames set
+the previous count to zero and retain their existing behavior.

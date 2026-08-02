@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::animation::{frame_output_path, AnimationConfig};
 use crate::buffers::create_scene_gpu_buffers;
 use crate::device::create_gpu_context;
-use crate::dispatch::dispatch_compute_2d;
+use crate::dispatch::{dispatch_compute_2d, ComputeDispatch};
 use crate::image_output::{pixels_to_rgba_image, save_rgba_image_to_png};
 use crate::pipeline::{
     create_pathtrace_bind_group, create_pathtrace_bind_group_layout, create_pipeline, load_shader,
@@ -22,12 +22,34 @@ pub enum FramePacing {
     RealTime,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProgressiveRenderConfig {
+    target_samples: u32,
+}
+
+impl ProgressiveRenderConfig {
+    pub fn new(target_samples: u32) -> Result<Self> {
+        ensure!(
+            target_samples > 0,
+            "progressive target samples must be greater than zero"
+        );
+        Ok(Self { target_samples })
+    }
+
+    pub fn target_samples(self) -> u32 {
+        self.target_samples
+    }
+}
+
 pub struct CompletedFrame<'a> {
     pub index: u32,
     pub time_seconds: f32,
     pub width: u32,
     pub height: u32,
+    /// Samples rendered by this dispatch.
     pub samples: u32,
+    /// Total samples represented by `image` after this dispatch.
+    pub accumulated_samples: u32,
     pub max_bounces: u32,
     pub render_time: Duration,
     pub image: &'a RgbaImage,
@@ -169,6 +191,34 @@ pub async fn render_gpu_animation_with_sink(
     pacing: FramePacing,
     sink: &mut dyn FrameSink,
 ) -> Result<()> {
+    render_gpu_with_sink(source_scene, animation, pacing, None, sink).await
+}
+
+pub async fn render_gpu_progressive_with_sink(
+    source_scene: &toaster_scene::Scene,
+    schedule: AnimationConfig,
+    pacing: FramePacing,
+    config: ProgressiveRenderConfig,
+    sink: &mut dyn FrameSink,
+) -> Result<()> {
+    ensure!(
+        source_scene.animation.tracks.is_empty(),
+        "progressive preview requires a scene without animation tracks"
+    );
+    ensure!(
+        schedule.loop_duration().is_none(),
+        "progressive preview does not support an animation loop duration"
+    );
+    render_gpu_with_sink(source_scene, schedule, pacing, Some(config), sink).await
+}
+
+async fn render_gpu_with_sink(
+    source_scene: &toaster_scene::Scene,
+    animation: AnimationConfig,
+    pacing: FramePacing,
+    progressive: Option<ProgressiveRenderConfig>,
+    sink: &mut dyn FrameSink,
+) -> Result<()> {
     validate_pacing(animation, pacing)?;
 
     let initial_scene = source_scene.evaluate_at(0.0)?;
@@ -220,10 +270,11 @@ pub async fn render_gpu_animation_with_sink(
 
     let pacing_started_at = Instant::now();
     let mut frame = 0_u32;
+    let mut accumulated_samples = 0_u32;
 
     while animation
         .frame_limit()
-        .map_or(true, |frame_limit| frame < frame_limit)
+        .is_none_or(|frame_limit| frame < frame_limit)
     {
         if !sink.should_continue() {
             println!("GPU render stopped before frame {frame}.");
@@ -231,17 +282,37 @@ pub async fn render_gpu_animation_with_sink(
         }
 
         let frame_start = Instant::now();
-        let time_seconds = animation.time_for_frame(frame);
-        let evaluated = source_scene.evaluate_at(time_seconds)?;
-        scene = scene_to_gpu_frame(&evaluated)?;
-        if let Some(samples) = sink.samples_for_frame() {
-            ensure!(
-                samples > 0,
-                "frame sink sample count must be greater than zero"
-            );
-            scene.params.samples = samples;
-        }
+        let time_seconds = if progressive.is_some() {
+            0.0
+        } else {
+            animation.time_for_frame(frame)
+        };
+        scene = if progressive.is_some() {
+            scene_to_gpu_frame(&initial_scene)?
+        } else {
+            let evaluated = source_scene.evaluate_at(time_seconds)?;
+            scene_to_gpu_frame(&evaluated)?
+        };
+        let requested_samples = sink.samples_for_frame().unwrap_or(scene.params.samples);
+        ensure!(
+            requested_samples > 0,
+            "frame sink sample count must be greater than zero"
+        );
+        scene.params.samples = match progressive {
+            Some(config) => progressive_batch(
+                requested_samples,
+                accumulated_samples,
+                config.target_samples(),
+            )?
+            .context("progressive render is already complete")?,
+            None => requested_samples,
+        };
         scene.params.frame_index = frame;
+        scene.params.accumulated_samples = if progressive.is_some() {
+            accumulated_samples
+        } else {
+            0
+        };
 
         context
             .queue
@@ -274,17 +345,17 @@ pub async fn render_gpu_animation_with_sink(
 
         let dispatch_start = Instant::now();
 
-        dispatch_compute_2d(
-            &context.device,
-            &context.queue,
-            &pipeline,
-            &bind_group,
-            &buffers.output,
-            &buffers.readback,
-            buffers.output_size,
-            scene.params.width,
-            scene.params.height,
-        )?;
+        dispatch_compute_2d(ComputeDispatch {
+            device: &context.device,
+            queue: &context.queue,
+            pipeline: &pipeline,
+            bind_group: &bind_group,
+            output: &buffers.output,
+            readback: &buffers.readback,
+            output_size: buffers.output_size,
+            width: scene.params.width,
+            height: scene.params.height,
+        })?;
 
         println!(
             "Frame {} GPU dispatch + wait time: {:.3}s",
@@ -305,12 +376,20 @@ pub async fn render_gpu_animation_with_sink(
 
         let image = pixels_to_rgba_image(&pixels, scene.params.width, scene.params.height)?;
         let render_time = frame_start.elapsed();
+        let completed_samples = if progressive.is_some() {
+            accumulated_samples
+                .checked_add(scene.params.samples)
+                .context("progressive accumulated sample count overflowed")?
+        } else {
+            scene.params.samples
+        };
         sink.deliver(CompletedFrame {
             index: frame,
             time_seconds,
             width: scene.params.width,
             height: scene.params.height,
             samples: scene.params.samples,
+            accumulated_samples: completed_samples,
             max_bounces: scene.params.max_bounces,
             render_time,
             image: &image,
@@ -322,12 +401,19 @@ pub async fn render_gpu_animation_with_sink(
             frame_start.elapsed().as_secs_f64()
         );
 
+        accumulated_samples = completed_samples;
+        if progressive.is_some_and(|config| accumulated_samples >= config.target_samples()) {
+            println!("Progressive preview reached {accumulated_samples} accumulated samples.");
+            hold_completed_preview(animation, pacing, pacing_started_at, sink)?;
+            break;
+        }
+
         let next_frame = frame
             .checked_add(1)
             .context("render frame index exceeded the supported range")?;
         let has_next_frame = animation
             .frame_limit()
-            .map_or(true, |frame_limit| next_frame < frame_limit);
+            .is_none_or(|frame_limit| next_frame < frame_limit);
         if !has_next_frame || !sink.should_continue() {
             break;
         }
@@ -351,8 +437,67 @@ pub async fn render_gpu_animation_with_sink(
     Ok(())
 }
 
+fn hold_completed_preview(
+    animation: AnimationConfig,
+    pacing: FramePacing,
+    pacing_started_at: Instant,
+    sink: &dyn FrameSink,
+) -> Result<()> {
+    if pacing != FramePacing::RealTime || !sink.should_continue() {
+        return Ok(());
+    }
+
+    const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(50);
+    let deadline = match animation.frame_limit() {
+        Some(frame_limit) => {
+            let fps = animation
+                .fps()
+                .context("real-time frame pacing requires an FPS")?;
+            Some(pacing_started_at + frame_deadline_offset(frame_limit, fps))
+        }
+        None => None,
+    };
+
+    while sink.should_continue() {
+        let delay = match deadline {
+            Some(deadline) => match deadline.checked_duration_since(Instant::now()) {
+                Some(remaining) => remaining.min(CANCELLATION_POLL_INTERVAL),
+                None => break,
+            },
+            None => CANCELLATION_POLL_INTERVAL,
+        };
+        std::thread::sleep(delay);
+    }
+    Ok(())
+}
+
 fn frame_deadline_offset(frame: u32, fps: u32) -> Duration {
     Duration::from_secs_f64(frame as f64 / fps as f64)
+}
+
+fn progressive_batch(
+    requested_samples: u32,
+    accumulated_samples: u32,
+    target_samples: u32,
+) -> Result<Option<u32>> {
+    ensure!(
+        requested_samples > 0,
+        "sample batch must be greater than zero"
+    );
+    ensure!(
+        target_samples > 0,
+        "sample target must be greater than zero"
+    );
+    ensure!(
+        accumulated_samples <= target_samples,
+        "accumulated samples exceed the progressive target"
+    );
+    if accumulated_samples == target_samples {
+        return Ok(None);
+    }
+    Ok(Some(
+        requested_samples.min(target_samples - accumulated_samples),
+    ))
 }
 
 fn validate_pacing(animation: AnimationConfig, pacing: FramePacing) -> Result<()> {
@@ -394,6 +539,7 @@ mod tests {
             width: 1,
             height: 1,
             samples: 1,
+            accumulated_samples: 1,
             max_bounces: 1,
             render_time: Duration::from_millis(1),
             image: &image,
@@ -426,5 +572,37 @@ mod tests {
         assert!(error
             .to_string()
             .contains("real-time frame pacing requires an FPS"));
+    }
+
+    #[test]
+    fn progressive_config_and_batches_validate_and_clamp() {
+        assert!(ProgressiveRenderConfig::new(0).is_err());
+        assert_eq!(ProgressiveRenderConfig::new(5).unwrap().target_samples(), 5);
+        assert_eq!(progressive_batch(2, 0, 5).unwrap(), Some(2));
+        assert_eq!(progressive_batch(2, 2, 5).unwrap(), Some(2));
+        assert_eq!(progressive_batch(2, 4, 5).unwrap(), Some(1));
+        assert_eq!(progressive_batch(2, 5, 5).unwrap(), None);
+        assert!(progressive_batch(0, 0, 5).is_err());
+        assert!(progressive_batch(1, 6, 5).is_err());
+    }
+
+    #[test]
+    fn progressive_render_rejects_animation_before_gpu_setup() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scenes/006_rotating_cube.json");
+        let scene = toaster_scene::load_scene(path).unwrap();
+        let mut sink = RecordingSink::default();
+        let error = pollster::block_on(render_gpu_progressive_with_sink(
+            &scene,
+            AnimationConfig::indefinite(12).unwrap(),
+            FramePacing::RealTime,
+            ProgressiveRenderConfig::new(16).unwrap(),
+            &mut sink,
+        ))
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("requires a scene without animation tracks"));
     }
 }
