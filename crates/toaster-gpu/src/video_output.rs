@@ -1,7 +1,7 @@
 //! MP4 output by streaming raw completed frames into FFmpeg.
 
-use crate::image_output::pixels_to_rgba8;
 use anyhow::{bail, Context, Result};
+use image::RgbaImage;
 use std::{
     ffi::OsStr,
     io::Write,
@@ -83,17 +83,11 @@ impl FfmpegVideoWriter {
         })
     }
 
-    pub(crate) fn write_frame(
-        &mut self,
-        pixels: &[[f32; 4]],
-        width: u32,
-        height: u32,
-    ) -> Result<()> {
-        let rgba8 = pixels_to_rgba8(pixels, width, height)?;
+    pub(crate) fn write_frame(&mut self, image: &RgbaImage) -> Result<()> {
         self.stdin
             .as_mut()
             .context("ffmpeg input was already closed")?
-            .write_all(&rgba8)
+            .write_all(image.as_raw())
             .context("ffmpeg stopped accepting video frames")
     }
 
@@ -137,7 +131,8 @@ mod tests {
         let mut writer =
             FfmpegVideoWriter::start_with_program(program.as_os_str(), &output, 1, 1, 24).unwrap();
 
-        writer.write_frame(&[[1.0, 0.5, 0.0, 1.0]], 1, 1).unwrap();
+        let image = RgbaImage::from_raw(1, 1, vec![255, 128, 0, 255]).unwrap();
+        writer.write_frame(&image).unwrap();
         writer.finish().unwrap();
         fs::remove_file(program).unwrap();
     }

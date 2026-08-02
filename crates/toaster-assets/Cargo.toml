@@ -7,4 +7,4 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 glam.workspace = true
-
+gltf.workspace = true

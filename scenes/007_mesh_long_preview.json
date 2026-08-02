@@ -6,10 +6,10 @@
     "fov_degrees": 40.0
   },
   "render": {
-    "width": 480,
-    "height": 480,
-    "samples": 64,
-    "max_bounces": 12,
+    "width": 600,
+    "height": 600,
+    "samples": 32,
+    "max_bounces": 8,
     "background": "black"
   },
   "materials": [
@@ -67,7 +67,7 @@
         "interpolation": "linear",
         "keyframes": [
           { "time": 0.0, "degrees": 0.0 },
-          { "time": 2.0, "degrees": 360.0 }
+          { "time": 120.0, "degrees": 21600.0 }
         ]
       },
       {
@@ -78,8 +78,10 @@
         "interpolation": "linear",
         "keyframes": [
           { "time": 0.0, "degrees": 0.0 },
-          { "time": 1.0, "degrees": 15.0 },
-          { "time": 2.0, "degrees": 0.0 }
+          { "time": 30.0, "degrees": 15.0 },
+          { "time": 60.0, "degrees": 0.0 },
+          { "time": 90.0, "degrees": -15.0 },
+          { "time": 120.0, "degrees": 0.0 }
         ]
       }
     ]

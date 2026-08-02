@@ -123,6 +123,9 @@ impl Scene {
 }
 
 pub(crate) fn validate_animation(scene: &Scene) -> Result<()> {
+    if scene.triangle_attributes.len() != scene.triangles.len() {
+        bail!("triangle attribute count must match triangle count");
+    }
     let groups: HashSet<&str> = scene
         .spheres
         .iter()
@@ -287,10 +290,19 @@ fn apply_rotation(
                     sphere.center = rotate_point(sphere.center);
                 }
             }
-            for triangle in &mut scene.triangles {
+            for (triangle, attributes) in scene
+                .triangles
+                .iter_mut()
+                .zip(&mut scene.triangle_attributes)
+            {
                 if triangle.group.as_deref() == Some(name) {
                     for vertex in &mut triangle.vertices {
                         *vertex = rotate_point(*vertex);
+                    }
+                    if let Some(normals) = &mut attributes.normals {
+                        for normal in normals {
+                            *normal = rotation * *normal;
+                        }
                     }
                 }
             }
@@ -338,6 +350,9 @@ mod tests {
                 material_index: 0,
                 group: Some("moving".into()),
             }],
+            triangle_attributes: vec![crate::TriangleAttributes::default()],
+            textures: Vec::new(),
+            environment: None,
             animation: Animation { tracks },
         }
     }

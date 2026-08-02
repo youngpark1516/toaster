@@ -50,6 +50,56 @@ pub enum Command {
         #[arg(long, requires = "fps", conflicts_with = "duration")]
         frames: Option<u32>,
     },
+    StreamPreview {
+        scene_path: PathBuf,
+
+        /// Address used by the preview server.
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+
+        /// Port used by the preview server.
+        #[arg(long, default_value_t = 7878)]
+        port: u16,
+
+        /// Target completed frames per second.
+        #[arg(
+            long,
+            default_value_t = 12,
+            value_parser = clap::value_parser!(u32).range(1..)
+        )]
+        fps: u32,
+
+        /// Optional preview duration in seconds. Omit to run until Ctrl+C.
+        #[arg(long, value_parser = parse_positive_f32)]
+        duration: Option<f32>,
+
+        /// Wrap animation time at this interval while frame indices continue increasing.
+        #[arg(long, value_parser = parse_positive_f32)]
+        loop_duration: Option<f32>,
+
+        #[command(flatten)]
+        overrides: RenderOverrides,
+
+        /// Adjust samples per frame to stay near the target FPS.
+        #[arg(long)]
+        adaptive_samples: bool,
+
+        /// Lowest sample count used by adaptive preview.
+        #[arg(
+            long,
+            requires = "adaptive_samples",
+            value_parser = clap::value_parser!(u32).range(1..)
+        )]
+        min_samples: Option<u32>,
+
+        /// Highest sample count used by adaptive preview.
+        #[arg(
+            long,
+            requires = "adaptive_samples",
+            value_parser = clap::value_parser!(u32).range(1..)
+        )]
+        max_samples: Option<u32>,
+    },
     Server {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
@@ -57,6 +107,16 @@ pub enum Command {
         port: u16,
     },
     Info,
+}
+
+fn parse_positive_f32(value: &str) -> Result<f32, String> {
+    let parsed = value
+        .parse::<f32>()
+        .map_err(|_| format!("invalid floating-point value: {value}"))?;
+    if !parsed.is_finite() || parsed <= 0.0 {
+        return Err("value must be finite and greater than zero".to_owned());
+    }
+    Ok(parsed)
 }
 
 #[derive(Clone, Copy, Debug, Default, Args)]
@@ -178,6 +238,145 @@ mod tests {
             "scene.json",
             "--video",
             "animation.mp4"
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn parses_stream_preview_defaults_and_explicit_options() {
+        let defaults = Cli::try_parse_from(["toaster", "stream-preview", "scene.json"]).unwrap();
+        let Command::StreamPreview {
+            host,
+            port,
+            fps,
+            duration,
+            loop_duration,
+            overrides,
+            adaptive_samples,
+            min_samples,
+            max_samples,
+            ..
+        } = defaults.command
+        else {
+            panic!("expected stream-preview command");
+        };
+        assert_eq!(host, "127.0.0.1");
+        assert_eq!(port, 7878);
+        assert_eq!(fps, 12);
+        assert_eq!(duration, None);
+        assert_eq!(loop_duration, None);
+        assert_eq!(overrides.width, None);
+        assert!(!adaptive_samples);
+        assert_eq!(min_samples, None);
+        assert_eq!(max_samples, None);
+
+        let cli = Cli::try_parse_from([
+            "toaster",
+            "stream-preview",
+            "scene.json",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "9000",
+            "--fps",
+            "24",
+            "--duration",
+            "1.5",
+            "--loop-duration",
+            "2",
+            "--width",
+            "640",
+            "--height",
+            "360",
+            "--samples",
+            "8",
+            "--max-bounces",
+            "4",
+            "--adaptive-samples",
+            "--min-samples",
+            "2",
+            "--max-samples",
+            "32",
+        ])
+        .unwrap();
+
+        let Command::StreamPreview {
+            host,
+            port,
+            fps,
+            duration,
+            loop_duration,
+            overrides,
+            adaptive_samples,
+            min_samples,
+            max_samples,
+            ..
+        } = cli.command
+        else {
+            panic!("expected stream-preview command");
+        };
+        assert_eq!(host, "0.0.0.0");
+        assert_eq!(port, 9000);
+        assert_eq!(fps, 24);
+        assert_eq!(duration, Some(1.5));
+        assert_eq!(loop_duration, Some(2.0));
+        assert_eq!(overrides.width, Some(640));
+        assert_eq!(overrides.height, Some(360));
+        assert_eq!(overrides.samples, Some(8));
+        assert_eq!(overrides.max_bounces, Some(4));
+        assert!(adaptive_samples);
+        assert_eq!(min_samples, Some(2));
+        assert_eq!(max_samples, Some(32));
+    }
+
+    #[test]
+    fn rejects_invalid_stream_preview_timing() {
+        for args in [
+            vec!["toaster", "stream-preview", "scene.json", "--fps", "0"],
+            vec!["toaster", "stream-preview", "scene.json", "--duration", "0"],
+            vec![
+                "toaster",
+                "stream-preview",
+                "scene.json",
+                "--duration",
+                "NaN",
+            ],
+            vec![
+                "toaster",
+                "stream-preview",
+                "scene.json",
+                "--loop-duration",
+                "0",
+            ],
+            vec![
+                "toaster",
+                "stream-preview",
+                "scene.json",
+                "--adaptive-samples",
+                "--min-samples",
+                "0",
+            ],
+            vec![
+                "toaster",
+                "stream-preview",
+                "scene.json",
+                "--min-samples",
+                "2",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+    }
+
+    #[test]
+    fn gpu_render_does_not_accept_preview_options() {
+        assert!(Cli::try_parse_from([
+            "toaster",
+            "gpu-render",
+            "scene.json",
+            "--out",
+            "image.png",
+            "--stream",
         ])
         .is_err());
     }
