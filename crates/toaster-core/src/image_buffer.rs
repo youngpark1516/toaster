@@ -1,3 +1,5 @@
+//! Dense linear-RGB image storage used by the CPU reference renderer.
+
 use crate::color::linear_to_rgb8;
 use anyhow::{Context, Result};
 use glam::Vec3;
@@ -5,6 +7,7 @@ use image::{Rgb, RgbImage};
 use std::path::Path;
 
 #[derive(Clone, Debug)]
+/// A row-major image whose pixels remain in linear floating-point RGB.
 pub struct ImageBuffer {
     width: u32,
     height: u32,
@@ -12,6 +15,7 @@ pub struct ImageBuffer {
 }
 
 impl ImageBuffer {
+    /// Allocates a black image with the requested dimensions.
     pub fn new(width: u32, height: u32) -> Self {
         Self {
             width,
@@ -20,22 +24,38 @@ impl ImageBuffer {
         }
     }
 
+    /// Returns the image width in pixels.
     pub fn width(&self) -> u32 {
         self.width
     }
 
+    /// Returns the image height in pixels.
     pub fn height(&self) -> u32 {
         self.height
     }
 
+    /// Replaces the pixel at `(x, y)` with a linear RGB value.
+    ///
+    /// # Panics
+    ///
+    /// Panics when either coordinate is outside the image.
     pub fn set_pixel(&mut self, x: u32, y: u32, color: Vec3) {
         self.pixels[(y * self.width + x) as usize] = color;
     }
 
+    /// Returns the linear RGB value at `(x, y)`.
+    ///
+    /// # Panics
+    ///
+    /// Panics when either coordinate is outside the image.
     pub fn pixel(&self, x: u32, y: u32) -> Vec3 {
         self.pixels[(y * self.width + x) as usize]
     }
 
+    /// Converts the image to display RGB and saves it as a PNG-compatible image.
+    ///
+    /// Missing parent directories are created. Errors include directory creation
+    /// and image-encoding failures.
     pub fn save_png(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
         if let Some(parent) = path

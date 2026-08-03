@@ -1,3 +1,5 @@
+//! JSON scene deserialization, relative asset resolution, and validation.
+
 use crate::{
     animation::{validate_animation, Animation},
     environment::EnvironmentMap,
@@ -15,44 +17,65 @@ use std::{
 };
 
 #[derive(Deserialize)]
+/// Raw top-level JSON representation before validation and asset expansion.
 struct SceneFile {
+    /// Camera input.
     camera: CameraFile,
+    /// Render input.
     render: RenderFile,
+    /// Named material declarations.
     materials: Vec<MaterialFile>,
+    /// Primitive and mesh declarations.
     objects: Vec<ObjectFile>,
+    /// Optional animation tracks.
     #[serde(default)]
     animation: Animation,
 }
 
 #[derive(Deserialize)]
+/// Raw camera fields accepted from JSON.
 struct CameraFile {
+    /// Camera position.
     position: Vec3,
+    /// Look-at point.
     look_at: Vec3,
+    /// Optional up vector, defaulting to positive Y.
     #[serde(default = "default_up")]
     up: Vec3,
+    /// Vertical field of view, including its legacy alias.
     #[serde(alias = "vertical_fov_degrees")]
     fov_degrees: f32,
 }
 
 #[derive(Deserialize)]
+/// Raw render settings accepted from JSON.
 struct RenderFile {
+    /// Output width.
     width: u32,
+    /// Output height.
     height: u32,
+    /// Samples per pixel, including its legacy alias.
     #[serde(alias = "samples_per_pixel")]
     samples: u32,
+    /// Maximum path depth.
     max_bounces: u32,
+    /// Sky, black, or detailed environment background.
     #[serde(default)]
     background: BackgroundFile,
 }
 
 #[derive(Clone, Deserialize)]
 #[serde(untagged)]
+/// A compact named background or a detailed background object.
 enum BackgroundFile {
+    /// `"sky"` or `"black"`.
     Kind(BackgroundKindFile),
+    /// Structured environment description.
     Detailed(DetailedBackgroundFile),
 }
 
 impl Default for BackgroundFile {
+    /// Uses the procedural sky when a scene omits its background.
     fn default() -> Self {
         Self::Kind(BackgroundKindFile::Sky)
     }
@@ -60,69 +83,118 @@ impl Default for BackgroundFile {
 
 #[derive(Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Compact non-image background choices.
 enum BackgroundKindFile {
+    /// Procedural sky gradient.
     #[default]
     Sky,
+    /// Zero-radiance background.
     Black,
 }
 
 #[derive(Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+/// Structured background variants.
 enum DetailedBackgroundFile {
+    /// Equirectangular image lighting and background.
     Environment {
+        /// Absolute path or path relative to the scene file.
         path: PathBuf,
+        /// Nonnegative radiance multiplier.
         #[serde(default = "default_environment_intensity")]
         intensity: f32,
+        /// Optional yaw rotation in degrees.
         #[serde(default)]
         rotation_degrees: f32,
     },
 }
 
 #[derive(Deserialize)]
+/// Named material declaration used by object references.
 struct MaterialFile {
+    /// Unique nonempty lookup name.
     name: String,
+    /// Tagged material payload.
     #[serde(flatten)]
     material: MaterialData,
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+/// Material variants accepted in scene JSON.
 enum MaterialData {
-    Diffuse { albedo: Vec3 },
-    Metal { albedo: Vec3, roughness: f32 },
-    Dielectric { ior: f32 },
-    Emissive { color: Vec3, strength: f32 },
+    /// Constant Lambertian base color.
+    Diffuse {
+        /// RGB value in `[0, 1]`.
+        albedo: Vec3,
+    },
+    /// Fuzzy specular reflector.
+    Metal {
+        /// RGB reflection tint in `[0, 1]`.
+        albedo: Vec3,
+        /// Finite value clamped into `[0, 1]`.
+        roughness: f32,
+    },
+    /// Ideal glass-like material.
+    Dielectric {
+        /// Positive index of refraction.
+        ior: f32,
+    },
+    /// Surface light source.
+    Emissive {
+        /// RGB emission color in `[0, 1]`.
+        color: Vec3,
+        /// Nonnegative emission multiplier.
+        strength: f32,
+    },
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+/// Object variants accepted in scene JSON.
 enum ObjectFile {
+    /// Analytic sphere.
     Sphere {
+        /// World-space center.
         center: Vec3,
+        /// Positive radius.
         radius: f32,
+        /// Name of a declared Toaster material.
         material: String,
+        /// Optional animation group.
         group: Option<String>,
     },
+    /// Explicit triangle.
     Triangle {
+        /// Three finite non-collinear vertices.
         vertices: [Vec3; 3],
+        /// Name of a declared Toaster material.
         material: String,
+        /// Optional animation group.
         group: Option<String>,
     },
+    /// Imported glTF/GLB triangle mesh.
     Mesh {
+        /// Absolute path or path relative to the scene file.
         path: PathBuf,
+        /// Optional Toaster material overriding imported base colors.
         material: Option<String>,
+        /// Optional animation group assigned to all imported triangles.
         group: Option<String>,
     },
 }
 
+/// Supplies positive Y as the default camera up vector.
 fn default_up() -> Vec3 {
     Vec3::Y
 }
 
+/// Supplies unit intensity as the default environment multiplier.
 fn default_environment_intensity() -> f32 {
     1.0
 }
 
+/// Loads, parses, validates, and expands a JSON scene and its relative assets.
 pub fn load_scene(path: impl AsRef<Path>) -> Result<Scene> {
     let path = path.as_ref();
     let contents = std::fs::read_to_string(path)
@@ -132,6 +204,10 @@ pub fn load_scene(path: impl AsRef<Path>) -> Result<Scene> {
     build_scene(file, path.parent().unwrap_or_else(|| Path::new(".")))
 }
 
+/// Converts deserialized input into renderer-neutral runtime structures.
+///
+/// Imported mesh geometry is expanded into the scene's triangle arrays, while
+/// imported textures and materials are rebased into scene-global indices.
 fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
     if file.render.width == 0 || file.render.height == 0 {
         bail!("render width and height must be greater than zero");
@@ -414,10 +490,12 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
     Ok(scene)
 }
 
+/// Returns three values only when every optional vertex attribute is present.
 fn collect_options<T: Copy>(values: [Option<T>; 3]) -> Option<[T; 3]> {
     Some([values[0]?, values[1]?, values[2]?])
 }
 
+/// Rejects empty group names while preserving absent groups.
 fn validate_group(group: Option<String>) -> Result<Option<String>> {
     if group.as_deref().is_some_and(str::is_empty) {
         bail!("object group name must not be empty");
@@ -425,6 +503,7 @@ fn validate_group(group: Option<String>) -> Result<Option<String>> {
     Ok(group)
 }
 
+/// Ensures triangle vertices are finite and non-collinear.
 fn validate_triangle(vertices: [Vec3; 3]) -> Result<()> {
     if vertices.iter().any(|vertex| !vertex.is_finite()) {
         bail!("triangle vertices must be finite");
@@ -436,10 +515,12 @@ fn validate_triangle(vertices: [Vec3; 3]) -> Result<()> {
     Ok(())
 }
 
+/// Validates a named material's albedo as display-bounded linear RGB.
 fn validate_albedo(name: &str, albedo: Vec3) -> Result<()> {
     validate_color(name, "albedo", albedo)
 }
 
+/// Validates a named RGB field as finite with every channel in `[0, 1]`.
 fn validate_color(name: &str, field: &str, color: Vec3) -> Result<()> {
     if !color.is_finite() || color.cmplt(Vec3::ZERO).any() || color.cmpgt(Vec3::ONE).any() {
         bail!("material '{name}' {field} must be between 0 and 1");

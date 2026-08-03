@@ -6,38 +6,63 @@ use wgpu::util::DeviceExt;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
+/// Uniform parameters for the standalone gradient demonstration.
 pub struct RenderParams {
+    /// Output width.
     pub width: u32,
+    /// Output height.
     pub height: u32,
+    /// Demonstration sample field retained from the original scaffold.
     pub samples: u32,
+    /// Demonstration bounce field retained from the original scaffold.
     pub max_bounces: u32,
 }
 
-// Delete once the scene buffer is fully integrated
+/// Legacy resources used only by the standalone gradient demonstration.
 pub struct GradientBuffers {
+    /// Shader-writable float RGBA output.
     pub output: wgpu::Buffer,
+    /// CPU-mappable copy destination.
     pub readback: wgpu::Buffer,
+    /// Gradient parameter uniform.
     pub params: wgpu::Buffer,
+    /// Output/readback size in bytes.
     pub output_size: u64,
+    /// Uniform size in bytes.
     pub params_size: u64,
 }
 
+/// All persistent buffers bound by the active path-tracing pipeline.
 pub struct SceneGpuBuffers {
+    /// Shader-writable linear float RGBA accumulation buffer.
     pub output: wgpu::Buffer,
+    /// CPU-mappable output copy.
     pub readback: wgpu::Buffer,
+    /// Per-frame [`GpuRenderParams`] uniform.
     pub params: wgpu::Buffer,
+    /// Per-frame camera uniform.
     pub camera: wgpu::Buffer,
+    /// Sphere storage array or one dummy element.
     pub spheres: wgpu::Buffer,
+    /// Triangle storage array or one dummy element.
     pub triangles: wgpu::Buffer,
+    /// Per-triangle shading attributes or one dummy element.
     pub triangle_attributes: wgpu::Buffer,
+    /// Material storage array.
     pub materials: wgpu::Buffer,
+    /// Emissive primitive storage array or one dummy element.
     pub lights: wgpu::Buffer,
+    /// Packed RGBA8 texture atlas or one dummy pixel.
     pub texture_pixels: wgpu::Buffer,
+    /// Float RGB plus importance metadata environment texels or one dummy texel.
     pub environment_pixels: wgpu::Buffer,
+    /// Output/readback size in bytes.
     pub output_size: u64,
+    /// Render-parameter uniform size in bytes.
     pub params_size: u64,
 }
 
+/// Allocates and initializes the legacy gradient buffers.
 pub fn create_pixel_buffers(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -78,6 +103,10 @@ pub fn create_pixel_buffers(
     }
 }
 
+/// Allocates the full path-tracing buffer set from converted scene data.
+///
+/// Empty optional storage arrays receive one zero/dummy element because wgpu
+/// bindings cannot reference zero-sized buffers; shader count fields prevent use.
 pub fn create_scene_gpu_buffers(device: &wgpu::Device, scene: &SceneGpuData) -> SceneGpuBuffers {
     let pixel_count = scene.params.width as u64 * scene.params.height as u64;
     let output_size = pixel_count * std::mem::size_of::<[f32; 4]>() as u64;

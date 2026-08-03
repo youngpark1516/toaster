@@ -1,5 +1,8 @@
+//! Display-color conversion for CPU-rendered images.
+
 use glam::Vec3;
 
+/// Gamma-corrects a linear RGB value with gamma 2.0 and clamps it to 8-bit RGB.
 pub fn linear_to_rgb8(color: Vec3) -> [u8; 3] {
     let gamma_corrected = Vec3::new(
         color.x.max(0.0).sqrt(),

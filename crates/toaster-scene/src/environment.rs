@@ -7,23 +7,38 @@ use image::{ImageFormat, ImageReader};
 use std::{f32::consts::PI, path::Path, sync::Arc};
 
 #[derive(Clone, Debug, PartialEq)]
+/// A validated linear-radiance latitude-longitude environment map.
 pub struct EnvironmentMap {
+    /// Map width in texels.
     pub width: u32,
+    /// Map height in texels.
     pub height: u32,
+    /// Row-major linear RGB radiance before the intensity multiplier.
     pub pixels: Arc<[Vec3]>,
+    /// Nonnegative radiance multiplier.
     pub intensity: f32,
+    /// Normalized yaw rotation in degrees.
     pub rotation_degrees: f32,
+    /// Luminance-and-latitude weighted cumulative distribution.
     importance_cdf: Arc<[f32]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+/// One direction drawn from an environment map's importance distribution.
 pub struct EnvironmentSample {
+    /// Normalized world-space direction toward the environment.
     pub direction: Vec3,
+    /// Bilinearly filtered radiance along `direction`.
     pub radiance: Vec3,
+    /// Sampling probability density per steradian.
     pub pdf_solid_angle: f32,
 }
 
 impl EnvironmentMap {
+    /// Validates map data and builds its importance-sampling distribution.
+    ///
+    /// Dimensions must be nonzero, pixel count must match, radiance must be
+    /// finite and nonnegative, and intensity must be finite and nonnegative.
     pub fn new(
         width: u32,
         height: u32,
@@ -72,6 +87,10 @@ impl EnvironmentMap {
         })
     }
 
+    /// Loads HDR radiance or converts an LDR image from sRGB before validation.
+    ///
+    /// Errors include file access, format detection, decoding, and invalid map
+    /// data reported by [`Self::new`].
     pub fn load(path: impl AsRef<Path>, intensity: f32, rotation_degrees: f32) -> Result<Self> {
         let path = path.as_ref();
         let reader = ImageReader::open(path)
@@ -190,6 +209,7 @@ impl EnvironmentMap {
         })
     }
 
+    /// Maps a finite nonzero world direction to rotated `(u, v, sin(theta))`.
     fn direction_to_uv(&self, direction: Vec3) -> Option<(f32, f32, f32)> {
         let direction = direction.normalize_or_zero();
         if direction == Vec3::ZERO {
@@ -201,6 +221,7 @@ impl EnvironmentMap {
         Some((u, theta / PI, theta.sin()))
     }
 
+    /// Converts one discrete texel probability to density per steradian.
     fn texel_pdf_solid_angle(&self, index: usize, sin_theta: f32) -> f32 {
         let previous_cdf = index
             .checked_sub(1)
@@ -212,6 +233,7 @@ impl EnvironmentMap {
         probability * self.width as f32 * self.height as f32 / (2.0 * PI * PI * sin_theta)
     }
 
+    /// Fetches a texel with horizontal wrapping and vertical clamping.
     fn texel(&self, x: i32, y: i32) -> Vec3 {
         let x = x.rem_euclid(self.width as i32) as usize;
         let y = y.clamp(0, self.height as i32 - 1) as usize;
@@ -219,6 +241,7 @@ impl EnvironmentMap {
     }
 }
 
+/// Builds a normalized CDF weighted by luminance, intensity, and latitude area.
 fn build_importance_distribution(
     width: u32,
     height: u32,
@@ -254,6 +277,7 @@ fn build_importance_distribution(
     cdf.into()
 }
 
+/// Defensively clamps an arbitrary value into the half-open unit interval.
 fn unit_interval(value: f32) -> f32 {
     if value.is_finite() {
         value.clamp(0.0, 1.0 - f32::EPSILON)

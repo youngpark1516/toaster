@@ -1,3 +1,5 @@
+//! CPU reference path integration and material scattering.
+
 use crate::intersect::{intersect_scene, HitRecord};
 use crate::light::AreaLights;
 use glam::Vec3;
@@ -8,6 +10,10 @@ use toaster_scene::{Background, Material, Scene};
 const RENDER_SEED: u64 = 0x0054_4f41_5354_4552;
 const RAY_EPSILON: f32 = 0.001;
 
+/// Renders a complete scene into a deterministic linear-RGB image.
+///
+/// The scene loader is expected to have validated nonzero dimensions, samples,
+/// bounce depth, and camera vectors.
 pub fn render(scene: &Scene) -> ImageBuffer {
     let settings = scene.render;
     let camera = Camera::new(
@@ -48,6 +54,10 @@ pub fn render(scene: &Scene) -> ImageBuffer {
     image
 }
 
+/// Traces one ray with caller-provided randomness and maximum path depth.
+///
+/// This convenience entry point rebuilds the emissive triangle list; full-image
+/// rendering uses an internal path that reuses the list.
 pub fn ray_color<R: Rng + ?Sized>(
     ray: &Ray,
     scene: &Scene,
@@ -58,6 +68,10 @@ pub fn ray_color<R: Rng + ?Sized>(
     ray_color_inner(ray, scene, &lights, rng, remaining_depth, true, None)
 }
 
+/// Recursively integrates emitted, direct, indirect, and background radiance.
+///
+/// `include_emission` prevents double counting explicitly sampled lights, while
+/// `environment_bsdf_pdf` enables MIS when a diffuse path reaches the map.
 fn ray_color_inner<R: Rng + ?Sized>(
     ray: &Ray,
     scene: &Scene,
@@ -125,6 +139,7 @@ fn ray_color_inner<R: Rng + ?Sized>(
     }
 }
 
+/// Estimates one-sample direct illumination from emissive triangles.
 fn direct_area_light<R: Rng + ?Sized>(
     hit: &HitRecord,
     albedo: Vec3,
@@ -163,6 +178,7 @@ fn direct_area_light<R: Rng + ?Sized>(
         / (distance_squared * light.pdf_area)
 }
 
+/// Estimates one-sample direct environment illumination with visibility and MIS.
 fn direct_environment<R: Rng + ?Sized>(
     hit: &HitRecord,
     albedo: Vec3,
@@ -200,6 +216,7 @@ fn direct_environment<R: Rng + ?Sized>(
     diffuse_brdf * sample.radiance * surface_cosine * mis_weight / sample.pdf_solid_angle
 }
 
+/// Returns the balance weight from the squared-PDF power heuristic.
 fn power_heuristic(first_pdf: f32, second_pdf: f32) -> f32 {
     let first_squared = first_pdf * first_pdf;
     let second_squared = second_pdf * second_pdf;
@@ -212,12 +229,17 @@ fn power_heuristic(first_pdf: f32, second_pdf: f32) -> f32 {
 }
 
 #[derive(Clone, Copy, Debug)]
+/// Result of sampling a material's scattering distribution.
 struct Scatter {
+    /// Spawned ray from the hit point.
     ray: Ray,
+    /// Multiplicative path throughput.
     attenuation: Vec3,
+    /// Diffuse solid-angle PDF, or `None` for delta/specular events.
     bsdf_pdf: Option<f32>,
 }
 
+/// Samples the outgoing direction and attenuation for a runtime material.
 fn scatter<R: Rng + ?Sized>(
     incoming: &Ray,
     hit: &HitRecord,
@@ -287,6 +309,7 @@ fn scatter<R: Rng + ?Sized>(
     }
 }
 
+/// Resolves a textured diffuse material to its hit-specific constant albedo.
 fn material_at_hit(material: Material, hit: &HitRecord, scene: &Scene) -> Material {
     match material {
         Material::TexturedDiffuse {
@@ -299,10 +322,12 @@ fn material_at_hit(material: Material, hit: &HitRecord, scene: &Scene) -> Materi
     }
 }
 
+/// Reflects a direction around a surface normal.
 fn reflect(direction: Vec3, normal: Vec3) -> Vec3 {
     direction - 2.0 * direction.dot(normal) * normal
 }
 
+/// Refracts a normalized direction using the supplied index ratio.
 fn refract(direction: Vec3, normal: Vec3, ratio: f32) -> Vec3 {
     let cos_theta = (-direction).dot(normal).min(1.0);
     let perpendicular = ratio * (direction + cos_theta * normal);
@@ -310,15 +335,18 @@ fn refract(direction: Vec3, normal: Vec3, ratio: f32) -> Vec3 {
     perpendicular + parallel
 }
 
+/// Approximates dielectric Fresnel reflectance with Schlick's equation.
 fn reflectance(cosine: f32, refraction_ratio: f32) -> f32 {
     let r0 = ((1.0 - refraction_ratio) / (1.0 + refraction_ratio)).powi(2);
     r0 + (1.0 - r0) * (1.0 - cosine).powi(5)
 }
 
+/// Draws a uniformly distributed unit vector.
 fn random_unit_vector<R: Rng + ?Sized>(rng: &mut R) -> Vec3 {
     random_in_unit_sphere(rng).normalize()
 }
 
+/// Rejection-samples a nonzero point inside the unit sphere.
 fn random_in_unit_sphere<R: Rng + ?Sized>(rng: &mut R) -> Vec3 {
     loop {
         let vector = Vec3::new(

@@ -9,18 +9,27 @@ use std::{
     process::{Child, ChildStdin, Command, Stdio},
 };
 
+/// Owns an FFmpeg child process receiving packed RGBA frames on standard input.
 pub(crate) struct FfmpegVideoWriter {
+    /// Child process, retained until explicit completion or cleanup on drop.
     child: Option<Child>,
+    /// Writable raw-video input pipe.
     stdin: Option<ChildStdin>,
+    /// Destination path used in diagnostics.
     output_path: PathBuf,
 }
 
 impl FfmpegVideoWriter {
+    /// Starts FFmpeg for an RGBA stream with the supplied dimensions and rate.
+    ///
+    /// `TOASTER_FFMPEG` may override the executable. The output must use the
+    /// `.mp4` extension.
     pub(crate) fn start(output_path: &Path, width: u32, height: u32, fps: u32) -> Result<Self> {
         let program = std::env::var_os("TOASTER_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
         Self::start_with_program(&program, output_path, width, height, fps)
     }
 
+    /// Starts a particular encoder program; separated for process-level tests.
     fn start_with_program(
         program: &OsStr,
         output_path: &Path,
@@ -83,6 +92,7 @@ impl FfmpegVideoWriter {
         })
     }
 
+    /// Writes one tightly packed, complete RGBA frame to FFmpeg.
     pub(crate) fn write_frame(&mut self, image: &RgbaImage) -> Result<()> {
         self.stdin
             .as_mut()
@@ -91,6 +101,7 @@ impl FfmpegVideoWriter {
             .context("ffmpeg stopped accepting video frames")
     }
 
+    /// Closes the input stream, waits for FFmpeg, and validates its exit status.
     pub(crate) fn finish(mut self) -> Result<()> {
         self.stdin.take();
         let child = self.child.take().context("ffmpeg process is unavailable")?;
@@ -159,6 +170,7 @@ mod tests {
 }
 
 impl Drop for FfmpegVideoWriter {
+    /// Terminates an unfinished encoder so failures cannot leave a child behind.
     fn drop(&mut self) {
         self.stdin.take();
         if let Some(mut child) = self.child.take() {

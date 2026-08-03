@@ -1,3 +1,5 @@
+//! JSON benchmark reporting, statistics, checksums, and regression comparison.
+
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -7,106 +9,176 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use toaster_gpu::{GpuBenchmarkConfig, GpuBenchmarkResult, GpuFrameTimings};
 use toaster_scene::{Material, Scene};
 
+/// Current on-disk benchmark report schema.
 pub const BENCHMARK_SCHEMA_VERSION: u32 = 1;
 
+/// Complete portable record of one benchmark invocation.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BenchmarkReport {
+    /// Report layout version.
     pub schema_version: u32,
+    /// Creation time measured from the Unix epoch.
     pub created_at_unix_seconds: u64,
+    /// Toaster package version that produced the report.
     pub toaster_version: String,
+    /// Resolved scene settings and counts.
     pub scene: SceneReport,
+    /// Selected GPU and driver identity.
     pub gpu: GpuReport,
+    /// Benchmark scheduling controls.
     pub configuration: BenchmarkConfiguration,
+    /// One-time GPU preparation duration in milliseconds.
     pub setup_ms: f64,
+    /// Every measured, post-warmup frame.
     pub frames: Vec<FrameTimingReport>,
+    /// Stage summaries across measured frames.
     pub summary: TimingSummary,
+    /// Final-frame identity and optional reference path.
     pub image: ImageReport,
 }
 
+/// Resolved scene information required for comparison compatibility.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SceneReport {
+    /// Scene path as supplied for this run.
     pub path: String,
+    /// Render width.
     pub width: u32,
+    /// Render height.
     pub height: u32,
+    /// Samples per independent frame.
     pub samples: u32,
+    /// Maximum path depth.
     pub max_bounces: u32,
+    /// Sphere count.
     pub spheres: usize,
+    /// Triangle count.
     pub triangles: usize,
+    /// Material count.
     pub materials: usize,
+    /// Positive-emission primitive count.
     pub lights: usize,
 }
 
+/// Stable adapter and driver strings recorded with a benchmark.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct GpuReport {
+    /// Adapter name reported by wgpu.
     pub name: String,
+    /// Graphics backend name.
     pub backend: String,
+    /// Adapter class, such as discrete or integrated.
     pub device_type: String,
+    /// Driver name.
     pub driver: String,
+    /// Driver detail/version string.
     pub driver_info: String,
 }
 
+/// Frame schedule and reproducibility settings.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct BenchmarkConfiguration {
+    /// Leading frames excluded from statistics.
     pub warmup_frames: u32,
+    /// Frames retained in the report.
     pub measured_frames: u32,
+    /// Static animation evaluation time.
     pub fixed_animation_time_seconds: f32,
+    /// Static RNG frame seed.
     pub fixed_frame_seed: u32,
 }
 
+/// Millisecond timings for one measured frame.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct FrameTimingReport {
+    /// Scene evaluation and upload duration.
     pub scene_update_upload_ms: f64,
+    /// Dispatch and synchronous wait duration.
     pub dispatch_wait_ms: f64,
+    /// Buffer mapping and copy duration.
     pub readback_ms: f64,
+    /// Floating-point-to-RGBA conversion duration.
     pub conversion_ms: f64,
+    /// Total duration through conversion.
     pub total_ms: f64,
 }
 
+/// Statistical summaries for each measured stage.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct TimingSummary {
+    /// Scene update/upload statistics.
     pub scene_update_upload_ms: TimingStatistics,
+    /// Dispatch/wait statistics.
     pub dispatch_wait_ms: TimingStatistics,
+    /// Readback statistics.
     pub readback_ms: TimingStatistics,
+    /// Conversion statistics.
     pub conversion_ms: TimingStatistics,
+    /// Total-frame statistics.
     pub total_ms: TimingStatistics,
 }
 
+/// Five-number-style timing summary plus arithmetic mean.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct TimingStatistics {
+    /// Smallest sample.
     pub min: f64,
+    /// Arithmetic mean.
     pub mean: f64,
+    /// Conventional midpoint median.
     pub median: f64,
+    /// Nearest-rank 95th percentile.
     pub p95: f64,
+    /// Largest sample.
     pub max: f64,
 }
 
+/// Identity of the final converted image.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ImageReport {
+    /// Image width.
     pub width: u32,
+    /// Image height.
     pub height: u32,
+    /// Lowercase SHA-256 digest of packed RGBA bytes.
     pub rgba_sha256: String,
+    /// Optional PNG reference path recorded by the invocation.
     pub reference_path: Option<String>,
 }
 
+/// Percentage changes from baseline to candidate medians.
 #[derive(Clone, Copy, Debug)]
 pub struct TimingDeltas {
+    /// Setup-time change, or `None` for a zero baseline.
     pub setup_percent: Option<f64>,
+    /// Scene update/upload median change.
     pub scene_update_upload_percent: Option<f64>,
+    /// Dispatch/wait median change.
     pub dispatch_wait_percent: Option<f64>,
+    /// Readback median change.
     pub readback_percent: Option<f64>,
+    /// Conversion median change.
     pub conversion_percent: Option<f64>,
+    /// Total-frame median change.
     pub total_percent: Option<f64>,
 }
 
+/// Compatibility flags and threshold decision for two reports.
 #[derive(Clone, Copy, Debug)]
 pub struct BenchmarkComparison {
+    /// Computed timing changes.
     pub deltas: TimingDeltas,
+    /// Whether adapter name, backend, and device class match.
     pub matching_gpu: bool,
+    /// Whether driver name and detail strings match.
     pub matching_driver: bool,
+    /// Whether final RGBA checksums match.
     pub matching_image_checksum: bool,
+    /// Whether a matching-GPU candidate exceeds the requested total median limit.
     pub exceeds_regression_limit: bool,
 }
 
+/// Builds a schema-versioned report from a renderer benchmark result.
 pub fn build_report(
     scene_path: &Path,
     scene: &Scene,
@@ -171,6 +243,7 @@ pub fn build_report(
     })
 }
 
+/// Saves the final measured frame as a PNG, creating its parent directory.
 pub fn save_reference_image(result: &GpuBenchmarkResult, path: &Path) -> Result<()> {
     create_parent_directory(path)?;
     result
@@ -179,6 +252,7 @@ pub fn save_reference_image(result: &GpuBenchmarkResult, path: &Path) -> Result<
         .with_context(|| format!("failed to save benchmark image {}", path.display()))
 }
 
+/// Writes a pretty-printed report with a trailing newline.
 pub fn write_report(report: &BenchmarkReport, path: &Path) -> Result<()> {
     create_parent_directory(path)?;
     let mut json = serde_json::to_string_pretty(report).context("failed to serialize report")?;
@@ -187,6 +261,7 @@ pub fn write_report(report: &BenchmarkReport, path: &Path) -> Result<()> {
         .with_context(|| format!("failed to write benchmark report {}", path.display()))
 }
 
+/// Reads and deserializes a benchmark report.
 pub fn read_report(path: &Path) -> Result<BenchmarkReport> {
     let contents = fs::read_to_string(path)
         .with_context(|| format!("failed to read benchmark report {}", path.display()))?;
@@ -194,6 +269,7 @@ pub fn read_report(path: &Path) -> Result<BenchmarkReport> {
         .with_context(|| format!("failed to parse benchmark report {}", path.display()))
 }
 
+/// Compares compatible reports and applies an optional median regression limit.
 pub fn compare_reports(
     baseline: &BenchmarkReport,
     candidate: &BenchmarkReport,
@@ -258,6 +334,7 @@ pub fn compare_reports(
 }
 
 impl From<GpuFrameTimings> for FrameTimingReport {
+    /// Converts duration fields to milliseconds.
     fn from(timings: GpuFrameTimings) -> Self {
         Self {
             scene_update_upload_ms: milliseconds(timings.scene_update_upload),
@@ -270,6 +347,7 @@ impl From<GpuFrameTimings> for FrameTimingReport {
 }
 
 impl TimingSummary {
+    /// Summarizes every timing stage across a nonempty frame slice.
     fn from_frames(frames: &[FrameTimingReport]) -> Result<Self> {
         Ok(Self {
             scene_update_upload_ms: statistics(
@@ -283,6 +361,7 @@ impl TimingSummary {
     }
 }
 
+/// Computes sorted min/mean/median/nearest-rank-p95/max statistics.
 fn statistics(values: impl Iterator<Item = f64>) -> Result<TimingStatistics> {
     let mut sorted = values.collect::<Vec<_>>();
     ensure!(!sorted.is_empty(), "cannot summarize empty benchmark data");
@@ -312,14 +391,17 @@ fn statistics(values: impl Iterator<Item = f64>) -> Result<TimingStatistics> {
     })
 }
 
+/// Converts a duration to floating-point milliseconds.
 fn milliseconds(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
 }
 
+/// Computes a lowercase SHA-256 digest for packed RGBA bytes.
 fn rgba_sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+/// Counts emissive spheres and triangles with positive strength.
 fn emissive_object_count(scene: &Scene) -> usize {
     let is_emissive = |material_index: usize| {
         scene.materials.get(material_index).is_some_and(
@@ -338,6 +420,7 @@ fn emissive_object_count(scene: &Scene) -> usize {
             .count()
 }
 
+/// Rejects reports whose resolved settings or geometry counts differ.
 fn ensure_compatible_scene(baseline: &SceneReport, candidate: &SceneReport) -> Result<()> {
     ensure!(
         baseline.width == candidate.width
@@ -353,14 +436,17 @@ fn ensure_compatible_scene(baseline: &SceneReport, candidate: &SceneReport) -> R
     Ok(())
 }
 
+/// Returns the adapter fields defining benchmark GPU identity.
 fn gpu_identity(gpu: &GpuReport) -> (&str, &str, &str) {
     (&gpu.name, &gpu.backend, &gpu.device_type)
 }
 
+/// Computes candidate change relative to a positive baseline.
 fn percent_change(baseline: f64, candidate: f64) -> Option<f64> {
     (baseline > 0.0).then_some((candidate / baseline - 1.0) * 100.0)
 }
 
+/// Creates a nonempty parent directory for an output path.
 fn create_parent_directory(path: &Path) -> Result<()> {
     if let Some(parent) = path
         .parent()

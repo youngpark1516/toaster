@@ -1,8 +1,11 @@
+//! Conversion from linear float GPU pixels to shared RGBA8 images and encoders.
+
 use anyhow::{ensure, Context, Result};
 
 use image::{codecs::jpeg::JpegEncoder, ImageBuffer, Rgba, RgbaImage};
 use std::path::Path;
 
+/// Converts float pixels once and writes the resulting RGBA image to disk.
 pub fn save_pixels_to_png(
     pixels: &[[f32; 4]],
     width: u32,
@@ -13,11 +16,13 @@ pub fn save_pixels_to_png(
     save_rgba_image_to_png(&img, out_path)
 }
 
+/// Saves an already converted RGBA image using the image crate's path format.
 pub fn save_rgba_image_to_png(image: &RgbaImage, out_path: &Path) -> Result<()> {
     image.save(out_path)?;
     Ok(())
 }
 
+/// Converts float pixels and JPEG-encodes them at quality `1..=100`.
 pub fn encode_pixels_to_jpeg(
     pixels: &[[f32; 4]],
     width: u32,
@@ -33,6 +38,7 @@ pub fn encode_pixels_to_jpeg(
     encode_rgba_image_to_jpeg(&img, quality)
 }
 
+/// JPEG-encodes an existing RGBA image at quality `1..=100`.
 pub fn encode_rgba_image_to_jpeg(image: &RgbaImage, quality: u8) -> Result<Vec<u8>> {
     ensure!(
         (1..=100).contains(&quality),
@@ -46,6 +52,7 @@ pub fn encode_rgba_image_to_jpeg(image: &RgbaImage, quality: u8) -> Result<Vec<u
     Ok(jpeg)
 }
 
+/// Validates dimensions and converts row-major float RGBA into an [`RgbaImage`].
 pub fn pixels_to_rgba_image(pixels: &[[f32; 4]], width: u32, height: u32) -> Result<RgbaImage> {
     let pixel_count = (width as usize)
         .checked_mul(height as usize)
@@ -67,6 +74,7 @@ pub fn pixels_to_rgba_image(pixels: &[[f32; 4]], width: u32, height: u32) -> Res
         .context("failed to construct image from pixel buffer")
 }
 
+/// Clamps a normalized float channel and rounds it to the nearest byte.
 fn f32_to_u8(value: f32) -> u8 {
     (value.clamp(0.0, 1.0) * 255.0).round() as u8
 }

@@ -1,7 +1,10 @@
+//! Pinhole camera construction and primary-ray generation.
+
 use crate::ray::Ray;
 use glam::Vec3;
 
 #[derive(Clone, Copy, Debug)]
+/// A validated pinhole camera represented by its viewport basis.
 pub struct Camera {
     origin: Vec3,
     lower_left: Vec3,
@@ -10,6 +13,20 @@ pub struct Camera {
 }
 
 impl Camera {
+    /// Builds a camera looking from `position` toward `look_at`.
+    ///
+    /// Returns an error when the field of view or aspect ratio is invalid, the
+    /// view direction has no length, or `up` is parallel to that direction.
+    ///
+    /// ```
+    /// use glam::Vec3;
+    /// use toaster_core::camera::Camera;
+    ///
+    /// let camera = Camera::new(Vec3::new(0.0, 0.0, 2.0), Vec3::ZERO, Vec3::Y, 45.0, 16.0 / 9.0)?;
+    /// let center_ray = camera.ray(0.5, 0.5);
+    /// assert!(center_ray.direction.z < 0.0);
+    /// # Ok::<(), &'static str>(())
+    /// ```
     pub fn new(
         position: Vec3,
         look_at: Vec3,
@@ -49,6 +66,7 @@ impl Camera {
         })
     }
 
+    /// Returns the normalized primary ray through viewport coordinates `(u, v)`.
     pub fn ray(&self, u: f32, v: f32) -> Ray {
         Ray::new(
             self.origin,

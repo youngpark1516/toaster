@@ -1,6 +1,8 @@
+//! Compute bind-group layouts, bind groups, shader modules, and pipelines.
+
 use crate::buffers::{GradientBuffers, SceneGpuBuffers};
 
-// Delete this once the scene buffer is fully integrated
+/// Creates the legacy two-binding layout used by the gradient demonstration.
 pub fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Bind Group Layout"),
@@ -29,7 +31,7 @@ pub fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout 
     })
 }
 
-// Delete this once the scene buffer is fully integrated
+/// Binds the legacy gradient output and uniform buffers.
 pub fn create_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -51,6 +53,10 @@ pub fn create_bind_group(
     })
 }
 
+/// Creates the active ten-buffer path-tracing bind-group layout.
+///
+/// Binding order must remain synchronized with `pathtrace_spheres.wgsl` and
+/// [`create_pathtrace_bind_group`].
 pub fn create_pathtrace_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Pathtrace Bind Group Layout"),
@@ -169,6 +175,7 @@ pub fn create_pathtrace_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGr
     })
 }
 
+/// Binds every [`SceneGpuBuffers`] resource to the active path-tracing layout.
 pub fn create_pathtrace_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -222,6 +229,7 @@ pub fn create_pathtrace_bind_group(
     })
 }
 
+/// Compiles WGSL source into a labeled shader module.
 pub fn load_shader(device: &wgpu::Device, label: &str, shader_source: &str) -> wgpu::ShaderModule {
     device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),
@@ -229,6 +237,7 @@ pub fn load_shader(device: &wgpu::Device, label: &str, shader_source: &str) -> w
     })
 }
 
+/// Creates a compute pipeline targeting the shader's `main` entry point.
 pub fn create_pipeline(
     device: &wgpu::Device,
     shader: &wgpu::ShaderModule,

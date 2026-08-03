@@ -4,13 +4,28 @@ use anyhow::{ensure, Result};
 use glam::{Vec2, Vec3};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// A tightly packed RGBA8 base-color texture.
 pub struct Texture {
+    /// Texture width in texels.
     pub width: u32,
+    /// Texture height in texels.
     pub height: u32,
+    /// Row-major RGBA8 texels; alpha is retained but currently ignored by shading.
     pub rgba8: Vec<u8>,
 }
 
 impl Texture {
+    /// Validates dimensions and byte length before constructing a texture.
+    ///
+    /// ```
+    /// use glam::Vec2;
+    /// use toaster_scene::Texture;
+    ///
+    /// let texture = Texture::new(1, 1, vec![255, 0, 0, 255])?;
+    /// let red = texture.sample_linear(Vec2::ZERO);
+    /// assert_eq!(red.to_array(), [1.0, 0.0, 0.0]);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     pub fn new(width: u32, height: u32, rgba8: Vec<u8>) -> Result<Self> {
         ensure!(
             width > 0 && height > 0,
@@ -52,6 +67,7 @@ impl Texture {
         top.lerp(bottom, amount_y)
     }
 
+    /// Fetches one wrapped texel and converts its RGB channels from sRGB.
     fn texel_linear(&self, x: i32, y: i32) -> Vec3 {
         let wrapped_x = x.rem_euclid(self.width as i32) as usize;
         let wrapped_y = y.rem_euclid(self.height as i32) as usize;
@@ -64,6 +80,7 @@ impl Texture {
     }
 }
 
+/// Converts one 8-bit sRGB channel to linear intensity.
 pub(crate) fn srgb_to_linear(value: u8) -> f32 {
     let value = value as f32 / 255.0;
     if value <= 0.04045 {

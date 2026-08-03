@@ -17,27 +17,41 @@ use crate::scene_upload::{scene_to_gpu, scene_to_gpu_frame};
 use crate::video_output::FfmpegVideoWriter;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Controls whether completed frames are produced as fast as possible or on deadlines.
 pub enum FramePacing {
+    /// Begin the next frame immediately after the preceding frame is delivered.
     Unpaced,
+    /// Sleep until each `frame_index / fps` deadline when rendering is ahead.
     RealTime,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+/// CPU wall-clock durations for the stages of one GPU-rendered frame.
 pub struct GpuFrameTimings {
+    /// Time spent evaluating the scene and uploading mutable buffers.
     pub scene_update_upload: Duration,
+    /// Time from dispatch preparation through synchronous GPU completion.
     pub dispatch_wait: Duration,
+    /// Time spent mapping and copying the readback buffer.
     pub readback: Duration,
+    /// Time spent converting linear floating-point pixels to RGBA8.
     pub conversion: Duration,
+    /// Total frame time through conversion.
     pub total: Duration,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Warmup and measurement counts for a static, independent-frame benchmark.
 pub struct GpuBenchmarkConfig {
     warmup_frames: u32,
     measured_frames: u32,
 }
 
 impl GpuBenchmarkConfig {
+    /// Validates and creates a benchmark configuration.
+    ///
+    /// At least one measured frame is required, and the combined count must fit
+    /// in a `u32` schedule.
     pub fn new(warmup_frames: u32, measured_frames: u32) -> Result<Self> {
         ensure!(
             measured_frames > 0,
@@ -52,29 +66,38 @@ impl GpuBenchmarkConfig {
         })
     }
 
+    /// Returns the number of frames discarded before measurement.
     pub fn warmup_frames(self) -> u32 {
         self.warmup_frames
     }
 
+    /// Returns the number of frames retained in the result.
     pub fn measured_frames(self) -> u32 {
         self.measured_frames
     }
 }
 
 #[derive(Clone, Debug)]
+/// Results from one prepared-device GPU benchmark run.
 pub struct GpuBenchmarkResult {
+    /// Identity and driver metadata for the selected adapter.
     pub adapter: GpuAdapterInfo,
+    /// One-time context, buffer, bind-group, shader, and pipeline setup time.
     pub setup_time: Duration,
+    /// Per-frame timings after warmup.
     pub frames: Vec<GpuFrameTimings>,
+    /// Converted image from the final measured frame.
     pub final_image: RgbaImage,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Validated target for a static progressive accumulation.
 pub struct ProgressiveRenderConfig {
     target_samples: u32,
 }
 
 impl ProgressiveRenderConfig {
+    /// Creates a progressive configuration with a nonzero sample target.
     pub fn new(target_samples: u32) -> Result<Self> {
         ensure!(
             target_samples > 0,
@@ -83,45 +106,66 @@ impl ProgressiveRenderConfig {
         Ok(Self { target_samples })
     }
 
+    /// Returns the exact accumulated sample count at which rendering stops.
     pub fn target_samples(self) -> u32 {
         self.target_samples
     }
 }
 
+/// Borrowed view of a converted frame passed to a [`FrameSink`].
 pub struct CompletedFrame<'a> {
+    /// Zero-based dispatch index in this render session.
     pub index: u32,
+    /// Scene animation time used for this frame, in seconds.
     pub time_seconds: f32,
+    /// Image width in pixels.
     pub width: u32,
+    /// Image height in pixels.
     pub height: u32,
     /// Samples rendered by this dispatch.
     pub samples: u32,
     /// Total samples represented by `image` after this dispatch.
     pub accumulated_samples: u32,
+    /// Maximum path depth used by this dispatch.
     pub max_bounces: u32,
+    /// Detailed wall-clock timings for this dispatch.
     pub timings: GpuFrameTimings,
     /// Total time through RGBA conversion, retained for compatibility.
     pub render_time: Duration,
+    /// Shared converted image; valid only for the duration of delivery.
     pub image: &'a RgbaImage,
 }
 
+/// Consumer invoked synchronously for every completed GPU frame.
+///
+/// Sinks may write images, encode video, publish previews, record timings, or
+/// request cancellation. Delivery runs between frames and therefore applies
+/// backpressure to the single render loop.
 pub trait FrameSink {
+    /// Consumes one completed-frame view.
     fn deliver(&mut self, frame: CompletedFrame<'_>) -> Result<()>;
 
+    /// Returns whether rendering should proceed to another frame.
     fn should_continue(&self) -> bool {
         true
     }
 
+    /// Optionally overrides the scene sample count for the next dispatch.
     fn samples_for_frame(&self) -> Option<u32> {
         None
     }
 }
 
+/// Frame sink that persists finite output as one or more PNG files.
 struct PngFrameSink<'a> {
+    /// Requested base output path.
     out_path: &'a Path,
+    /// Total scheduled frames, used to select naming behavior.
     frame_count: u32,
 }
 
 impl FrameSink for PngFrameSink<'_> {
+    /// Saves a completed image using the animation frame naming convention.
     fn deliver(&mut self, frame: CompletedFrame<'_>) -> Result<()> {
         let save_start = Instant::now();
         let frame_path = frame_output_path(self.out_path, frame.index, self.frame_count);
@@ -137,11 +181,14 @@ impl FrameSink for PngFrameSink<'_> {
     }
 }
 
+/// Frame sink that forwards converted frames to an FFmpeg process.
 struct VideoFrameSink {
+    /// Optional so finalization can take ownership exactly once.
     writer: Option<FfmpegVideoWriter>,
 }
 
 impl VideoFrameSink {
+    /// Finalizes the encoder and propagates its exit status.
     fn finish(mut self) -> Result<()> {
         self.writer
             .take()
@@ -151,6 +198,7 @@ impl VideoFrameSink {
 }
 
 impl FrameSink for VideoFrameSink {
+    /// Writes one completed image into the raw-video pipe.
     fn deliver(&mut self, frame: CompletedFrame<'_>) -> Result<()> {
         let output_start = Instant::now();
         self.writer
@@ -166,13 +214,18 @@ impl FrameSink for VideoFrameSink {
     }
 }
 
+/// Frame sink that discards warmup data and retains benchmark measurements.
 struct BenchmarkFrameSink {
+    /// Number of leading deliveries to ignore.
     warmup_frames: u32,
+    /// Measured frame timing records.
     timings: Vec<GpuFrameTimings>,
+    /// Image from the most recent measured frame.
     final_image: Option<RgbaImage>,
 }
 
 impl FrameSink for BenchmarkFrameSink {
+    /// Records timing and pixels only after the warmup boundary.
     fn deliver(&mut self, frame: CompletedFrame<'_>) -> Result<()> {
         if frame.index >= self.warmup_frames {
             self.timings.push(frame.timings);
@@ -183,20 +236,31 @@ impl FrameSink for BenchmarkFrameSink {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Determines whether scene animation and frame-index seed advance per frame.
 enum FrameMode {
+    /// Evaluate animation time normally and use the sequential frame seed.
     Animated,
+    /// Reuse time zero and frame seed zero for comparable benchmark samples.
     StaticIndependent,
 }
 
+/// Internal render-loop metadata needed by benchmark callers.
 struct GpuRenderSummary {
+    /// Selected adapter identity.
     adapter: GpuAdapterInfo,
+    /// One-time initialization duration.
     setup_time: Duration,
 }
 
+/// Renders a scene's time-zero frame to a PNG.
 pub async fn render_scene_gpu(scene_path: &Path, out_path: &Path) -> Result<()> {
     render_scene_gpu_animation(scene_path, out_path, AnimationConfig::single_frame()).await
 }
 
+/// Renders a finite animation schedule to numbered PNG files.
+///
+/// The schedule must have a frame limit because file output cannot represent an
+/// indefinite render.
 pub async fn render_scene_gpu_animation(
     scene_path: &Path,
     out_path: &Path,
@@ -213,6 +277,7 @@ pub async fn render_scene_gpu_animation(
         .await
 }
 
+/// Renders a finite animation and streams its RGBA frames into an MP4 encoder.
 pub async fn render_scene_gpu_video(
     scene_path: &Path,
     video_path: &Path,
@@ -250,6 +315,7 @@ pub async fn render_scene_gpu_video(
     }
 }
 
+/// Loads a scene and renders its animation through a caller-provided sink.
 pub async fn render_scene_gpu_animation_with_sink(
     scene_path: &Path,
     animation: AnimationConfig,
@@ -261,6 +327,7 @@ pub async fn render_scene_gpu_animation_with_sink(
     render_gpu_animation_with_sink(&source_scene, animation, pacing, sink).await
 }
 
+/// Renders an already loaded scene as independent animation frames.
 pub async fn render_gpu_animation_with_sink(
     source_scene: &toaster_scene::Scene,
     animation: AnimationConfig,
@@ -279,6 +346,10 @@ pub async fn render_gpu_animation_with_sink(
     .map(|_| ())
 }
 
+/// Accumulates a static scene in linear HDR batches and delivers each update.
+///
+/// Animation tracks and loop durations are rejected. Once the target is reached,
+/// a real-time preview remains alive until its finite deadline or cancellation.
 pub async fn render_gpu_progressive_with_sink(
     source_scene: &toaster_scene::Scene,
     schedule: AnimationConfig,
@@ -306,6 +377,9 @@ pub async fn render_gpu_progressive_with_sink(
     .map(|_| ())
 }
 
+/// Benchmarks static independent frames using one GPU setup.
+///
+/// Warmup frames are rendered but omitted from [`GpuBenchmarkResult::frames`].
 pub async fn benchmark_gpu_scene(
     source_scene: &toaster_scene::Scene,
     config: GpuBenchmarkConfig,
@@ -348,6 +422,7 @@ pub async fn benchmark_gpu_scene(
     })
 }
 
+/// Implements the shared single-setup render loop for all sink-driven modes.
 async fn render_gpu_with_sink(
     source_scene: &toaster_scene::Scene,
     animation: AnimationConfig,
@@ -586,6 +661,7 @@ async fn render_gpu_with_sink(
     })
 }
 
+/// Keeps a converged progressive preview alive without dispatching more work.
 fn hold_completed_preview(
     animation: AnimationConfig,
     pacing: FramePacing,
@@ -620,10 +696,12 @@ fn hold_completed_preview(
     Ok(())
 }
 
+/// Converts a frame index and rate to its ideal elapsed deadline.
 fn frame_deadline_offset(frame: u32, fps: u32) -> Duration {
     Duration::from_secs_f64(frame as f64 / fps as f64)
 }
 
+/// Validates and clamps the next progressive batch to the remaining target.
 fn progressive_batch(
     requested_samples: u32,
     accumulated_samples: u32,
@@ -649,6 +727,7 @@ fn progressive_batch(
     ))
 }
 
+/// Rejects real-time schedules that cannot define frame deadlines.
 fn validate_pacing(animation: AnimationConfig, pacing: FramePacing) -> Result<()> {
     if pacing == FramePacing::RealTime {
         ensure!(

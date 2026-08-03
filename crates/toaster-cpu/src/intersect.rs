@@ -1,16 +1,26 @@
+//! Brute-force CPU ray intersections.
+
 use toaster_core::ray::Ray;
 use toaster_scene::{Scene, Sphere, Triangle, TriangleAttributes};
 
 #[derive(Clone, Copy, Debug)]
+/// Nearest surface information returned by an intersection query.
 pub struct HitRecord {
+    /// Parametric distance along the ray.
     pub distance: f32,
+    /// World-space hit point.
     pub point: glam::Vec3,
+    /// Shading normal oriented against the incoming ray.
     pub normal: glam::Vec3,
+    /// Whether the ray hit the geometric front face.
     pub front_face: bool,
+    /// Index into the scene material array.
     pub material_index: usize,
+    /// Interpolated texture coordinate, or zero when unavailable.
     pub tex_coord: glam::Vec2,
 }
 
+/// Finds the nearest sphere hit inside the inclusive distance interval.
 pub fn intersect_sphere(
     ray: &Ray,
     sphere: &Sphere,
@@ -53,6 +63,7 @@ pub fn intersect_sphere(
     })
 }
 
+/// Finds a double-sided triangle hit without optional vertex attributes.
 pub fn intersect_triangle(
     ray: &Ray,
     triangle: &Triangle,
@@ -68,6 +79,7 @@ pub fn intersect_triangle(
     )
 }
 
+/// Applies Möller–Trumbore intersection and interpolates optional attributes.
 fn intersect_triangle_with_attributes(
     ray: &Ray,
     triangle: &Triangle,
@@ -131,6 +143,7 @@ fn intersect_triangle_with_attributes(
     })
 }
 
+/// Brute-force scans all primitives and returns the closest valid hit.
 pub fn intersect_scene(ray: &Ray, scene: &Scene, min_distance: f32) -> Option<HitRecord> {
     let mut closest = f32::INFINITY;
     let mut hit = None;

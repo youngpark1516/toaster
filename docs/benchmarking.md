@@ -1,5 +1,7 @@
 # GPU Benchmarking and Logging
 
+This is the operational benchmark guide. See the [documentation index](README.md) or [codebase reference](codebase_reference.md) for API and implementation ownership.
+
 Use Toaster's benchmark command to capture a baseline before changing renderer
 acceleration code and a candidate afterward. Always use a release build and the
 same allocated GPU, scene, resolution, sample count, and bounce depth.

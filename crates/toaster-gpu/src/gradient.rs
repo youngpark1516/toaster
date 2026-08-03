@@ -1,3 +1,5 @@
+//! Minimal GPU gradient renderer used to verify compute setup and readback.
+
 use std::path::Path;
 
 use anyhow::Result;
@@ -9,6 +11,7 @@ use crate::image_output::save_pixels_to_png;
 use crate::pipeline::{create_bind_group, create_bind_group_layout, create_pipeline, load_shader};
 use crate::readback::readback_pixels;
 
+/// Returns the fixed settings used by the diagnostic gradient command.
 fn default_render_params() -> RenderParams {
     RenderParams {
         width: 800,
@@ -18,6 +21,10 @@ fn default_render_params() -> RenderParams {
     }
 }
 
+/// Renders the diagnostic gradient and writes it as a PNG at `out_path`.
+///
+/// This initializes a fresh GPU context and returns an error if adapter setup,
+/// dispatch, readback, or image encoding fails.
 pub async fn render_gradient(out_path: &Path) -> Result<()> {
     let params = default_render_params();
 
