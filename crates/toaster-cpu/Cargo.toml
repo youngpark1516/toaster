@@ -9,3 +9,4 @@ glam.workspace = true
 rand.workspace = true
 toaster-core = { path = "../toaster-core" }
 toaster-scene = { path = "../toaster-scene" }
+tracing.workspace = true

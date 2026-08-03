@@ -13,3 +13,4 @@ image.workspace = true
 wgpu.workspace = true
 toaster-core = { path = "../toaster-core" }
 toaster-scene = { path = "../toaster-scene" }
+tracing.workspace = true

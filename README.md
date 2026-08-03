@@ -163,6 +163,42 @@ cargo run -p toaster-cli -- cpu-render scenes/003_cornell_box.json \
   --out out/cornell-preview.png --width 400 --height 400 --samples 32
 ```
 
+### GPU benchmarks and logging
+
+Use the benchmark command in release mode to establish a repeatable baseline.
+It times GPU setup once, discards warmup frames, and summarizes steady-state
+frames rendered at animation time zero with a fixed random seed:
+
+```sh
+cargo run --release -p toaster-cli -- benchmark scenes/004_mesh.json \
+  --warmup 2 --runs 5 --out out/baseline.json \
+  --image-out out/baseline.png
+```
+
+After an optimization, compare a candidate against the baseline. The optional
+limit makes the command fail if median total frame time regresses by more than
+the selected percentage on the same GPU:
+
+```sh
+cargo run --release -p toaster-cli -- benchmark scenes/004_mesh.json \
+  --runs 5 --out out/candidate.json \
+  --compare out/baseline.json --max-regression-percent 10
+```
+
+Operational logs go to stderr. They are readable text at `info` by default;
+enable per-frame timings or JSON output globally with:
+
+```sh
+cargo run --release -p toaster-cli -- --log-level debug \
+  benchmark scenes/004_mesh.json --out out/debug.json
+
+RUST_LOG=toaster_gpu=debug cargo run --release -p toaster-cli -- \
+  --log-format json stream-preview scenes/004_mesh.json
+```
+
+See [GPU benchmarking and logging](docs/benchmarking.md) for report fields,
+comparison rules, and Slurm examples.
+
 ### glTF meshes
 
 Scene files can load triangle geometry from `.gltf` and `.glb` assets. Mesh paths
@@ -244,6 +280,7 @@ and GPU renderers use the same distribution and PDF convention.
 6. ✅ HDR/PNG/JPEG environment-map lighting
 7. ✅ Environment-map importance sampling and MIS
 8. ✅ Static progressive GPU preview accumulation
+9. ✅ Repeatable GPU benchmark reports and structured logging
 
 See the [project guide](docs/project_guide.md) for the complete operational
 snapshot, or the shorter [roadmap](docs/roadmap.md) and

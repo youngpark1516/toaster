@@ -1,7 +1,10 @@
+mod benchmark;
 mod cli;
+mod logging;
 
 use clap::Parser;
 use cli::{Cli, Command, RenderOverrides};
+use std::process::ExitCode;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -145,26 +148,26 @@ impl toaster_gpu::FrameSink for ServerFrameSink {
             },
         );
         if let Some(target_samples) = self.progressive_target_samples {
-            println!(
-                "Published progressive frame {} ({}x{}, {} spp batch, {}/{} accumulated, next {}) at {:.3}s.",
+            tracing::debug!(
                 frame.index,
-                frame.width,
-                frame.height,
-                frame.samples,
-                frame.accumulated_samples,
+                width = frame.width,
+                height = frame.height,
+                batch_samples = frame.samples,
+                accumulated_samples = frame.accumulated_samples,
                 target_samples,
                 next_samples,
-                frame.time_seconds
+                animation_time_seconds = frame.time_seconds as f64,
+                "published progressive preview frame"
             );
         } else {
-            println!(
-                "Published preview frame {} ({}x{}, {} spp -> {}) at {:.3}s.",
+            tracing::debug!(
                 frame.index,
-                frame.width,
-                frame.height,
-                frame.samples,
+                width = frame.width,
+                height = frame.height,
+                samples = frame.samples,
                 next_samples,
-                frame.time_seconds
+                animation_time_seconds = frame.time_seconds as f64,
+                "published preview frame"
             );
         }
         Ok(())
@@ -182,8 +185,28 @@ impl toaster_gpu::FrameSink for ServerFrameSink {
     }
 }
 
-fn main() -> anyhow::Result<()> {
-    match Cli::parse().command {
+fn main() -> ExitCode {
+    let Cli {
+        log_level,
+        log_format,
+        command,
+    } = Cli::parse();
+    if let Err(error) = logging::init(log_level, log_format) {
+        eprintln!("failed to initialize logging: {error:#}");
+        return ExitCode::FAILURE;
+    }
+
+    match run(command) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            tracing::error!(error = ?error, "command failed");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run(command: Command) -> anyhow::Result<()> {
+    match command {
         Command::CpuRender {
             scene_path,
             out,
@@ -191,16 +214,24 @@ fn main() -> anyhow::Result<()> {
         } => {
             let mut scene = toaster_scene::load_scene(&scene_path)?;
             apply_overrides(&mut scene.render, overrides)?;
-            println!("Scene: {}", scene_path.display());
-            println!("Output: {}", out.display());
-            println!("Resolution: {}x{}", scene.render.width, scene.render.height);
-            println!("Samples: {}", scene.render.samples);
-            println!("Max bounces: {}", scene.render.max_bounces);
+            tracing::info!(
+                scene = %scene_path.display(),
+                output = %out.display(),
+                width = scene.render.width,
+                height = scene.render.height,
+                samples = scene.render.samples,
+                max_bounces = scene.render.max_bounces,
+                "starting CPU render"
+            );
 
             let start = Instant::now();
             let image = toaster_cpu::render(&scene);
             image.save_png(&out)?;
-            println!("Rendered in {:.2?}", start.elapsed());
+            tracing::info!(
+                output = %out.display(),
+                duration_ms = start.elapsed().as_secs_f64() * 1000.0,
+                "completed CPU render"
+            );
         }
         Command::GpuRender {
             scene_path,
@@ -210,21 +241,23 @@ fn main() -> anyhow::Result<()> {
             duration,
             frames,
         } => {
-            println!("Scene: {}", scene_path.display());
-
             let animation = resolve_animation(fps, duration, frames)?;
             match animation.fps() {
-                Some(fps) => println!(
-                    "Animation: fps={}, frames={}",
+                Some(fps) => tracing::info!(
+                    scene = %scene_path.display(),
                     fps,
-                    animation.frame_limit().unwrap_or_default()
+                    frames = animation.frame_limit().unwrap_or_default(),
+                    "starting animated GPU render"
                 ),
-                None => println!("Animation: single frame at time 0"),
+                None => tracing::info!(
+                    scene = %scene_path.display(),
+                    "starting single-frame GPU render"
+                ),
             }
 
             match (out, video) {
                 (Some(out), None) => {
-                    println!("PNG output: {}", out.display());
+                    tracing::info!(output = %out.display(), "selected PNG output");
                     pollster::block_on(toaster_gpu::render_scene_gpu_animation(
                         &scene_path,
                         &out,
@@ -232,13 +265,13 @@ fn main() -> anyhow::Result<()> {
                     ))?;
                 }
                 (None, Some(video)) => {
-                    println!("Video output: {}", video.display());
+                    tracing::info!(output = %video.display(), "selected MP4 output");
                     pollster::block_on(toaster_gpu::render_scene_gpu_video(
                         &scene_path,
                         &video,
                         animation,
                     ))?;
-                    println!("Saved video to {}", video.display());
+                    tracing::info!(output = %video.display(), "wrote MP4 video");
                 }
                 _ => unreachable!("clap requires exactly one GPU output"),
             }
@@ -282,36 +315,44 @@ fn main() -> anyhow::Result<()> {
                 progressive.map(|config| config.target_samples),
                 fps,
             )?;
-            println!("Scene: {}", scene_path.display());
-            println!(
-                "Resolution: {}x{}, samples={}, bounces={}",
-                scene.render.width,
-                scene.render.height,
-                scene.render.samples,
-                scene.render.max_bounces
+            tracing::info!(
+                scene = %scene_path.display(),
+                width = scene.render.width,
+                height = scene.render.height,
+                samples = scene.render.samples,
+                max_bounces = scene.render.max_bounces,
+                fps,
+                "starting stream preview"
             );
             match duration {
-                Some(duration) => println!(
-                    "Preview: fps={fps}, frames={}, duration={duration:.3}s",
-                    animation
+                Some(duration) => tracing::info!(
+                    frames = animation
                         .frame_limit()
-                        .expect("duration-based preview has a finite frame limit")
+                        .expect("duration-based preview has a finite frame limit"),
+                    duration_seconds = duration as f64,
+                    "configured finite preview"
                 ),
-                None => println!("Preview: fps={fps}, running until Ctrl+C"),
+                None => tracing::info!("preview will run until Ctrl+C"),
             }
             if let Some(loop_duration) = animation.loop_duration() {
-                println!("Animation loop: {loop_duration:.3}s");
+                tracing::info!(
+                    loop_duration_seconds = loop_duration as f64,
+                    "configured animation loop"
+                );
             }
             if let Some(progressive) = progressive {
-                println!(
-                    "Progressive preview: {} spp batches, {} spp target",
-                    progressive.batch_samples, progressive.target_samples
+                tracing::info!(
+                    batch_samples = progressive.batch_samples,
+                    target_samples = progressive.target_samples,
+                    "configured progressive preview"
                 );
             }
             if let Some(sampling) = &adaptive_sampling {
-                println!(
-                    "Adaptive samples: {}..={}, starting at {}",
-                    sampling.min_samples, sampling.max_samples, sampling.current_samples
+                tracing::info!(
+                    min_samples = sampling.min_samples,
+                    max_samples = sampling.max_samples,
+                    initial_samples = sampling.current_samples,
+                    "configured adaptive sampling"
                 );
             }
             render_stream_preview(
@@ -322,6 +363,88 @@ fn main() -> anyhow::Result<()> {
                 &host,
                 port,
             )?;
+        }
+        Command::Benchmark {
+            scene_path,
+            warmup,
+            runs,
+            out,
+            image_out,
+            compare,
+            max_regression_percent,
+            overrides,
+        } => {
+            let baseline = compare.as_deref().map(benchmark::read_report).transpose()?;
+            let mut scene = toaster_scene::load_scene(&scene_path)?;
+            apply_overrides(&mut scene.render, overrides)?;
+            let config = toaster_gpu::GpuBenchmarkConfig::new(warmup, runs)?;
+
+            tracing::info!(
+                scene = %scene_path.display(),
+                width = scene.render.width,
+                height = scene.render.height,
+                samples = scene.render.samples,
+                max_bounces = scene.render.max_bounces,
+                warmup_frames = warmup,
+                measured_frames = runs,
+                "starting GPU benchmark"
+            );
+            let result = pollster::block_on(toaster_gpu::benchmark_gpu_scene(&scene, config))?;
+
+            if let Some(image_path) = image_out.as_deref() {
+                benchmark::save_reference_image(&result, image_path)?;
+                tracing::info!(path = %image_path.display(), "wrote benchmark reference image");
+            }
+            let report = benchmark::build_report(
+                &scene_path,
+                &scene,
+                config,
+                &result,
+                image_out.as_deref(),
+            )?;
+            benchmark::write_report(&report, &out)?;
+            tracing::info!(
+                path = %out.display(),
+                setup_ms = report.setup_ms,
+                median_total_ms = report.summary.total_ms.median,
+                p95_total_ms = report.summary.total_ms.p95,
+                image_sha256 = %report.image.rgba_sha256,
+                "wrote GPU benchmark report"
+            );
+
+            if let Some(baseline) = baseline {
+                let comparison =
+                    benchmark::compare_reports(&baseline, &report, max_regression_percent)?;
+                let deltas = comparison.deltas;
+                tracing::info!(
+                    setup_percent = ?deltas.setup_percent,
+                    scene_update_upload_percent = ?deltas.scene_update_upload_percent,
+                    dispatch_wait_percent = ?deltas.dispatch_wait_percent,
+                    readback_percent = ?deltas.readback_percent,
+                    conversion_percent = ?deltas.conversion_percent,
+                    total_percent = ?deltas.total_percent,
+                    "compared GPU benchmark with baseline"
+                );
+                if !comparison.matching_gpu {
+                    tracing::warn!(
+                        "benchmark GPU identity differs from the baseline; timing deltas are informational"
+                    );
+                } else if !comparison.matching_driver {
+                    tracing::warn!(
+                        "benchmark GPU driver differs from the baseline; timing deltas may include driver changes"
+                    );
+                }
+                if !comparison.matching_image_checksum {
+                    tracing::warn!(
+                        "benchmark image checksum differs from the baseline; exact pixels may vary across drivers"
+                    );
+                }
+                anyhow::ensure!(
+                    !comparison.exceeds_regression_limit,
+                    "benchmark median total frame time exceeded the allowed regression of {}%",
+                    max_regression_percent.expect("comparison only exceeds an explicit limit")
+                );
+            }
         }
         Command::Server { host, port } => {
             let runtime = tokio::runtime::Runtime::new()?;
@@ -361,10 +484,10 @@ fn render_stream_preview(
         let signal = tokio::spawn(async move {
             match tokio::signal::ctrl_c().await {
                 Ok(()) => {
-                    println!("Stopping preview after the current frame.");
+                    tracing::info!("stopping preview after the current frame");
                     signal_stop.store(true, Ordering::Relaxed);
                 }
-                Err(error) => eprintln!("Failed to listen for Ctrl+C: {error}"),
+                Err(error) => tracing::warn!(%error, "failed to listen for Ctrl+C"),
             }
         });
 

@@ -19,7 +19,10 @@ pub fn render(scene: &Scene) -> ImageBuffer {
     )
     .expect("scene loader validates camera settings");
     let lights = AreaLights::collect(scene);
-    println!("Emissive area lights: {}", lights.len());
+    tracing::debug!(
+        emissive_area_lights = lights.len(),
+        "prepared CPU path trace"
+    );
 
     let mut image = ImageBuffer::new(settings.width, settings.height);
     let mut rng = StdRng::seed_from_u64(RENDER_SEED);

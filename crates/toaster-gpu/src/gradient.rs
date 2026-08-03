@@ -21,34 +21,39 @@ fn default_render_params() -> RenderParams {
 pub async fn render_gradient(out_path: &Path) -> Result<()> {
     let params = default_render_params();
 
-    println!(
-        "Rendering gradient with width={}, height={}, samples={}, max_bounces={}",
-        params.width, params.height, params.samples, params.max_bounces
+    tracing::info!(
+        width = params.width,
+        height = params.height,
+        samples = params.samples,
+        max_bounces = params.max_bounces,
+        "rendering GPU gradient"
     );
 
     let context = create_gpu_context().await?;
-    println!("GPU context created successfully.");
+    tracing::debug!("created GPU context");
 
     let buffers = create_pixel_buffers(&context.device, &context.queue, &params);
-    println!(
-        "output buffer {} bytes, readback buffer size {} bytes, params buffer size {} bytes",
-        buffers.output_size, buffers.output_size, buffers.params_size
+    tracing::debug!(
+        output_bytes = buffers.output_size,
+        readback_bytes = buffers.output_size,
+        params_bytes = buffers.params_size,
+        "created gradient buffers"
     );
     let bind_group_layout = create_bind_group_layout(&context.device);
-    println!("Gradient bind group layout created.");
+    tracing::debug!("created gradient bind group layout");
 
     let bind_group = create_bind_group(&context.device, &bind_group_layout, &buffers);
-    println!("Gradient bind group created.");
+    tracing::debug!("created gradient bind group");
 
     let shader = load_shader(
         &context.device,
         "Gradient Shader",
         include_str!("../../../shaders/gpu_gradient.wgsl"),
     );
-    println!("Gradient shader loaded.");
+    tracing::debug!("loaded gradient shader");
 
     let pipeline = create_pipeline(&context.device, &shader, &bind_group_layout);
-    println!("Compute pipeline created.");
+    tracing::debug!("created gradient compute pipeline");
 
     dispatch_compute_2d(ComputeDispatch {
         device: &context.device,
@@ -61,12 +66,13 @@ pub async fn render_gradient(out_path: &Path) -> Result<()> {
         width: params.width,
         height: params.height,
     })?;
-    println!("Compute dispatch completed successfully.");
+    tracing::debug!("completed gradient compute dispatch");
 
     let pixels = readback_pixels(&context.device, &buffers.readback)?;
-    println!("Read back {} pixels.", pixels.len());
+    tracing::debug!(pixels = pixels.len(), "read back gradient pixels");
 
     save_pixels_to_png(&pixels, params.width, params.height, out_path)?;
+    tracing::info!(path = %out_path.display(), "wrote gradient PNG");
 
     Ok(())
 }

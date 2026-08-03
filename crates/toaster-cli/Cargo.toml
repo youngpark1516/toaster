@@ -11,9 +11,15 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+image.workspace = true
 toaster-cpu = { path = "../toaster-cpu" }
 toaster-scene = { path = "../toaster-scene" }
 toaster-gpu = { path = "../toaster-gpu" }
 toaster-server = { path = "../toaster-server" }
 tokio.workspace = true
 pollster.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
