@@ -775,4 +775,29 @@ mod tests {
             .iter()
             .any(|pixel| pixel.max_element() > 0.0));
     }
+
+    #[test]
+    fn loads_generated_benchmark_suite_with_expected_geometry_counts() {
+        let repository_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let fixtures = [
+            ("001_triangles_128.json", 128, 1, false),
+            ("002_triangles_2048.json", 2_048, 1, false),
+            ("003_triangles_8192.json", 8_192, 1, false),
+            ("004_spheres_64.json", 2, 65, false),
+            ("005_spheres_512.json", 2, 513, false),
+            ("006_mixed_2048t_128s.json", 2_048, 129, false),
+            ("007_environment_control.json", 0, 4, true),
+        ];
+
+        for (name, triangles, spheres, has_environment) in fixtures {
+            let scene = load_scene(repository_root.join("scenes/benchmarks").join(name)).unwrap();
+            assert_eq!(scene.triangles.len(), triangles, "{name}");
+            assert_eq!(scene.triangle_attributes.len(), triangles, "{name}");
+            assert_eq!(scene.spheres.len(), spheres, "{name}");
+            assert_eq!(scene.environment.is_some(), has_environment, "{name}");
+            assert!(scene.animation.tracks.is_empty(), "{name}");
+            assert_eq!((scene.render.width, scene.render.height), (320, 180));
+            assert_eq!((scene.render.samples, scene.render.max_bounces), (4, 4));
+        }
+    }
 }

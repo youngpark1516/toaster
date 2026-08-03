@@ -102,3 +102,31 @@ verbose dependency internals. Use a targeted `RUST_LOG` directive such as
 On Slurm, keep the allocation, GPU type, loaded driver/modules, and benchmark
 command identical between baseline and candidate runs. Avoid benchmarking on a
 shared or thermally throttled GPU when interpreting small differences.
+
+## Geometry-scaling suite
+
+The checked-in [`scenes/benchmarks`](../scenes/benchmarks/) suite separates
+triangle, sphere, mixed-geometry, and non-BVH environment costs. Its triangle
+cases contain 128, 2,048, and 8,192 triangles over the same terrain footprint;
+its sphere cases contain 64 and 512 subject spheres. All workloads are static
+and use matched 320×180, 4-sample, 4-bounce settings.
+
+Generate all pre-BVH reports inside a GPU allocation:
+
+```sh
+./scripts/run_benchmark_suite.sh pre-bvh
+```
+
+After integrating BVH traversal, compare the same suite and enforce a 10%
+median total-frame regression limit on the same adapter:
+
+```sh
+TOASTER_BENCH_COMPARE_DIR=out/benchmarks/pre-bvh \
+TOASTER_BENCH_MAX_REGRESSION_PERCENT=10 \
+  ./scripts/run_benchmark_suite.sh post-bvh
+```
+
+The runner fails if wgpu selects a CPU adapter. Preserve the ignored baseline
+directory until comparison is complete. The environment control should remain
+approximately stable; triangle and sphere scaling cases show traversal gains
+and expose acceleration-structure overhead at small primitive counts.

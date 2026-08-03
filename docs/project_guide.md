@@ -231,6 +231,10 @@ cargo run --release -p toaster-cli -- benchmark scenes/004_mesh.json \
   --image-out out/baseline.png
 ```
 
+For acceleration-structure work, use the deterministic triangle/sphere scaling
+suite documented in [`scenes/benchmarks`](../scenes/benchmarks/README.md) and
+the focused [benchmarking guide](benchmarking.md).
+
 The report separates one-time setup from steady-state scene upload, dispatch,
 readback, RGBA conversion, and total frame timing. Every benchmark frame uses
 animation time and frame seed zero. Use `--compare` to print deltas and

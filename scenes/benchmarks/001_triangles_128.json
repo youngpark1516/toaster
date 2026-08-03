@@ -1,0 +1,75 @@
+{
+  "camera": {
+    "position": [
+      0.0,
+      5.5,
+      8.0
+    ],
+    "look_at": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "up": [
+      0.0,
+      1.0,
+      0.0
+    ],
+    "fov_degrees": 45.0
+  },
+  "render": {
+    "width": 320,
+    "height": 180,
+    "samples": 4,
+    "max_bounces": 4,
+    "background": "black"
+  },
+  "materials": [
+    {
+      "name": "surface",
+      "type": "diffuse",
+      "albedo": [
+        0.62,
+        0.68,
+        0.74
+      ]
+    },
+    {
+      "name": "accent",
+      "type": "metal",
+      "albedo": [
+        0.82,
+        0.48,
+        0.2
+      ],
+      "roughness": 0.2
+    },
+    {
+      "name": "light",
+      "type": "emissive",
+      "color": [
+        1.0,
+        0.92,
+        0.78
+      ],
+      "strength": 14.0
+    }
+  ],
+  "objects": [
+    {
+      "type": "mesh",
+      "path": "../../assets/benchmarks/terrain_grid_8.gltf",
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        0.0,
+        4.5,
+        0.5
+      ],
+      "radius": 0.65,
+      "material": "light"
+    }
+  ]
+}
