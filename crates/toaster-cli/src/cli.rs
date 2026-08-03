@@ -1,4 +1,4 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -8,8 +8,54 @@ use std::path::PathBuf;
     about = "Headless path tracer and scene sandbox"
 )]
 pub struct Cli {
+    /// Maximum logging verbosity. Overrides RUST_LOG when provided.
+    #[arg(long, global = true, value_enum)]
+    pub log_level: Option<LogLevel>,
+
+    /// Log encoding written to stderr.
+    #[arg(long, global = true, value_enum, default_value_t = LogFormat::Text)]
+    pub log_format: LogFormat,
+
     #[command(subcommand)]
     pub command: Command,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum LogLevel {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl LogLevel {
+    pub fn directive(self) -> &'static str {
+        match self {
+            Self::Error => {
+                "off,toaster=error,toaster_cpu=error,toaster_gpu=error,toaster_server=error"
+            }
+            Self::Warn => {
+                "off,toaster=warn,toaster_cpu=warn,toaster_gpu=warn,toaster_server=warn"
+            }
+            Self::Info => {
+                "off,toaster=info,toaster_cpu=info,toaster_gpu=info,toaster_server=info"
+            }
+            Self::Debug => {
+                "off,toaster=debug,toaster_cpu=debug,toaster_gpu=debug,toaster_server=debug,tower_http=debug"
+            }
+            Self::Trace => {
+                "off,toaster=trace,toaster_cpu=trace,toaster_gpu=trace,toaster_server=trace,tower_http=trace"
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub enum LogFormat {
+    #[default]
+    Text,
+    Json,
 }
 
 #[derive(Debug, Subcommand)]
@@ -120,6 +166,45 @@ pub enum Command {
         )]
         max_samples: Option<u32>,
     },
+    /// Measure repeatable steady-state GPU frame performance.
+    Benchmark {
+        scene_path: PathBuf,
+
+        /// Frames rendered and discarded before measurement.
+        #[arg(long, default_value_t = 2)]
+        warmup: u32,
+
+        /// Number of measured frames.
+        #[arg(
+            long,
+            default_value_t = 5,
+            value_parser = clap::value_parser!(u32).range(1..)
+        )]
+        runs: u32,
+
+        /// Destination for the schema-versioned JSON report.
+        #[arg(long)]
+        out: PathBuf,
+
+        /// Optionally save the final measured RGBA frame as a PNG.
+        #[arg(long)]
+        image_out: Option<PathBuf>,
+
+        /// Compare this run with an earlier benchmark report.
+        #[arg(long)]
+        compare: Option<PathBuf>,
+
+        /// Fail when median total frame time regresses beyond this percentage.
+        #[arg(
+            long,
+            requires = "compare",
+            value_parser = parse_nonnegative_f64
+        )]
+        max_regression_percent: Option<f64>,
+
+        #[command(flatten)]
+        overrides: RenderOverrides,
+    },
     Server {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
@@ -127,6 +212,16 @@ pub enum Command {
         port: u16,
     },
     Info,
+}
+
+fn parse_nonnegative_f64(value: &str) -> Result<f64, String> {
+    let parsed = value
+        .parse::<f64>()
+        .map_err(|_| format!("invalid floating-point value: {value}"))?;
+    if !parsed.is_finite() || parsed < 0.0 {
+        return Err("value must be finite and greater than or equal to zero".to_owned());
+    }
+    Ok(parsed)
 }
 
 fn parse_positive_f32(value: &str) -> Result<f32, String> {
@@ -466,5 +561,121 @@ mod tests {
             "--stream",
         ])
         .is_err());
+    }
+
+    #[test]
+    fn parses_benchmark_defaults_and_overrides() {
+        let cli = Cli::try_parse_from([
+            "toaster",
+            "benchmark",
+            "scene.json",
+            "--out",
+            "baseline.json",
+            "--samples",
+            "8",
+        ])
+        .unwrap();
+        let Command::Benchmark {
+            warmup,
+            runs,
+            out,
+            image_out,
+            compare,
+            max_regression_percent,
+            overrides,
+            ..
+        } = cli.command
+        else {
+            panic!("expected benchmark command");
+        };
+        assert_eq!(warmup, 2);
+        assert_eq!(runs, 5);
+        assert_eq!(out, PathBuf::from("baseline.json"));
+        assert_eq!(image_out, None);
+        assert_eq!(compare, None);
+        assert_eq!(max_regression_percent, None);
+        assert_eq!(overrides.samples, Some(8));
+    }
+
+    #[test]
+    fn parses_explicit_benchmark_and_logging_options() {
+        let cli = Cli::try_parse_from([
+            "toaster",
+            "--log-level",
+            "debug",
+            "--log-format",
+            "json",
+            "benchmark",
+            "scene.json",
+            "--warmup",
+            "0",
+            "--runs",
+            "9",
+            "--out",
+            "candidate.json",
+            "--image-out",
+            "candidate.png",
+            "--compare",
+            "baseline.json",
+            "--max-regression-percent",
+            "12.5",
+        ])
+        .unwrap();
+        assert_eq!(cli.log_level, Some(LogLevel::Debug));
+        assert_eq!(cli.log_format, LogFormat::Json);
+        let Command::Benchmark {
+            warmup,
+            runs,
+            image_out,
+            compare,
+            max_regression_percent,
+            ..
+        } = cli.command
+        else {
+            panic!("expected benchmark command");
+        };
+        assert_eq!(warmup, 0);
+        assert_eq!(runs, 9);
+        assert_eq!(image_out, Some(PathBuf::from("candidate.png")));
+        assert_eq!(compare, Some(PathBuf::from("baseline.json")));
+        assert_eq!(max_regression_percent, Some(12.5));
+    }
+
+    #[test]
+    fn rejects_invalid_benchmark_arguments() {
+        for args in [
+            vec!["toaster", "benchmark", "scene.json"],
+            vec![
+                "toaster",
+                "benchmark",
+                "scene.json",
+                "--out",
+                "report.json",
+                "--runs",
+                "0",
+            ],
+            vec![
+                "toaster",
+                "benchmark",
+                "scene.json",
+                "--out",
+                "report.json",
+                "--max-regression-percent",
+                "10",
+            ],
+            vec![
+                "toaster",
+                "benchmark",
+                "scene.json",
+                "--out",
+                "report.json",
+                "--compare",
+                "baseline.json",
+                "--max-regression-percent",
+                "NaN",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
     }
 }

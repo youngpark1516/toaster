@@ -9,6 +9,7 @@ use axum::{
 };
 use std::{convert::Infallible, sync::Arc};
 use tokio_stream::{wrappers::WatchStream, StreamExt};
+use tower_http::trace::TraceLayer;
 
 const MJPEG_BOUNDARY: &str = "frame";
 const INDEX_HTML: &str = r#"<!doctype html>
@@ -56,6 +57,7 @@ pub fn router(publisher: FramePublisher) -> Router {
         .route("/status", get(status))
         .route("/healthz", get(healthz))
         .with_state(publisher)
+        .layer(TraceLayer::new_for_http())
 }
 
 async fn index() -> Html<&'static str> {

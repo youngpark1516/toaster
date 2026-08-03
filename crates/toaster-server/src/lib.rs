@@ -22,10 +22,8 @@ pub async fn bind(host: &str, port: u16) -> Result<TcpListener> {
 }
 
 pub async fn serve_listener(listener: TcpListener, publisher: FramePublisher) -> Result<()> {
-    println!(
-        "Preview server listening on http://{}",
-        listener.local_addr()?
-    );
+    let address = listener.local_addr()?;
+    tracing::info!(%address, "preview server listening");
 
     axum::serve(listener, routes::router(publisher))
         .await

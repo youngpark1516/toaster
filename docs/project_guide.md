@@ -36,6 +36,9 @@ portable GPU compute, remote-cluster operation, and measurable milestones.
 - Finite or indefinite preview schedules, animation looping, Ctrl+C shutdown,
   render overrides, and adaptive samples-per-frame.
 - Remote browser access through SSH port forwarding.
+- Repeatable GPU benchmark reports with warmups, timing-stage summaries,
+  reference-image hashes, and baseline comparison.
+- Leveled text or JSON operational logging.
 
 ## Technology stack
 
@@ -56,6 +59,8 @@ portable GPU compute, remote-cluster operation, and measurable milestones.
 | `rand` | Sampling in the CPU reference renderer |
 | `anyhow` | Context-rich application errors |
 | `pollster` | Driving async GPU entry points from synchronous commands |
+| `tracing` | Structured application, renderer, and HTTP lifecycle events |
+| `sha2` | Stable hashes for benchmark reference frames |
 
 There is no CUDA, OptiX, desktop window system, FFmpeg, WebRTC, RTMP, HLS, or
 cloud orchestrator in the current design.
@@ -213,6 +218,25 @@ cargo run -p toaster-cli -- server --host 127.0.0.1 --port 7878
 
 This exercises the server independently. A live preview command is required to
 produce rendered frames.
+
+### GPU benchmark
+
+Create a release-mode baseline before changing acceleration or traversal code:
+
+```sh
+cargo run --release -p toaster-cli -- benchmark scenes/004_mesh.json \
+  --warmup 2 --runs 5 --out out/baseline.json \
+  --image-out out/baseline.png
+```
+
+The report separates one-time setup from steady-state scene upload, dispatch,
+readback, RGBA conversion, and total frame timing. Every benchmark frame uses
+animation time and frame seed zero. Use `--compare` to print deltas and
+`--max-regression-percent` to enforce a median-total limit on the same GPU.
+
+All normal commands emit text logs to stderr at `info`. Global `--log-level`
+and `--log-format json` flags or `RUST_LOG` enable detailed local or cluster
+diagnostics. See [benchmarking.md](benchmarking.md) for the complete workflow.
 
 ## Browser endpoints
 
