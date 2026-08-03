@@ -44,6 +44,7 @@ pub fn load_gltf(path: impl AsRef<Path>) -> Result<Mesh> {
     Ok(mesh)
 }
 
+/// Traverses each root node in a glTF scene with an identity parent transform.
 fn load_scene_nodes<'a>(
     nodes: impl Iterator<Item = gltf::Node<'a>>,
     buffers: &[gltf::buffer::Data],
@@ -55,6 +56,10 @@ fn load_scene_nodes<'a>(
     Ok(())
 }
 
+/// Recursively imports one node, composing its transform with all ancestors.
+///
+/// Triangle primitives append transformed vertices and rebased indices to
+/// `output`; unsupported modes or malformed attributes return an error.
 fn load_node(
     node: gltf::Node<'_>,
     parent_transform: Mat4,
@@ -191,6 +196,7 @@ fn load_node(
     Ok(())
 }
 
+/// Converts supported 8-bit glTF image layouts to tightly packed RGBA8.
 fn image_to_rgba8(image: &gltf::image::Data) -> Result<MeshTexture> {
     use gltf::image::Format;
 

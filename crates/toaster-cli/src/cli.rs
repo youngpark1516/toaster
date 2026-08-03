@@ -1,6 +1,9 @@
+//! Clap declarations and scalar parsers for Toaster's external CLI.
+
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
+/// Top-level command-line arguments shared by every subcommand.
 #[derive(Debug, Parser)]
 #[command(
     name = "toaster",
@@ -17,19 +20,27 @@ pub struct Cli {
     pub log_format: LogFormat,
 
     #[command(subcommand)]
+    /// Workflow selected by the user.
     pub command: Command,
 }
 
+/// Explicit maximum verbosity for Toaster tracing targets.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum LogLevel {
+    /// Emit only errors.
     Error,
+    /// Emit warnings and errors.
     Warn,
+    /// Emit normal lifecycle information and failures.
     Info,
+    /// Include setup and per-frame diagnostics.
     Debug,
+    /// Include the most verbose request and implementation tracing.
     Trace,
 }
 
 impl LogLevel {
+    /// Returns the `tracing-subscriber` target directive for this level.
     pub fn directive(self) -> &'static str {
         match self {
             Self::Error => {
@@ -51,23 +62,34 @@ impl LogLevel {
     }
 }
 
+/// Encoding used for stderr logs.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum LogFormat {
+    /// Human-readable terminal-oriented records.
     #[default]
     Text,
+    /// One structured JSON object per record.
     Json,
 }
 
+/// Available Toaster workflows.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Renders a still image with the CPU path tracer.
     CpuRender {
+        /// Input scene JSON path.
         scene_path: PathBuf,
+        /// Destination PNG path.
         #[arg(long)]
         out: PathBuf,
+        /// Optional resolved render-setting overrides.
         #[command(flatten)]
+        /// Optional resolved render-setting overrides.
         overrides: RenderOverrides,
     },
+    /// Renders one or more frames with the GPU path tracer.
     GpuRender {
+        /// Input scene JSON path.
         scene_path: PathBuf,
 
         /// PNG output path. Animated renders write a numbered PNG sequence.
@@ -96,7 +118,9 @@ pub enum Command {
         #[arg(long, requires = "fps", conflicts_with = "duration")]
         frames: Option<u32>,
     },
+    /// Serves a live MJPEG preview rendered by the GPU.
     StreamPreview {
+        /// Input scene JSON path.
         scene_path: PathBuf,
 
         /// Address used by the preview server.
@@ -144,6 +168,7 @@ pub enum Command {
         target_samples: Option<u32>,
 
         #[command(flatten)]
+        /// Optional resolved render-setting overrides.
         overrides: RenderOverrides,
 
         /// Adjust samples per frame to stay near the target FPS.
@@ -168,6 +193,7 @@ pub enum Command {
     },
     /// Measure repeatable steady-state GPU frame performance.
     Benchmark {
+        /// Input scene JSON path.
         scene_path: PathBuf,
 
         /// Frames rendered and discarded before measurement.
@@ -203,17 +229,23 @@ pub enum Command {
         max_regression_percent: Option<f64>,
 
         #[command(flatten)]
+        /// Optional resolved render-setting overrides.
         overrides: RenderOverrides,
     },
+    /// Runs the standalone HTTP server without a render producer.
     Server {
+        /// Listener address.
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
+        /// Listener port.
         #[arg(long, default_value_t = 7878)]
         port: u16,
     },
+    /// Prints the package version and maintained module list.
     Info,
 }
 
+/// Parses a finite, nonnegative `f64` used as a regression threshold.
 fn parse_nonnegative_f64(value: &str) -> Result<f64, String> {
     let parsed = value
         .parse::<f64>()
@@ -224,6 +256,7 @@ fn parse_nonnegative_f64(value: &str) -> Result<f64, String> {
     Ok(parsed)
 }
 
+/// Parses a finite, strictly positive `f32` duration.
 fn parse_positive_f32(value: &str) -> Result<f32, String> {
     let parsed = value
         .parse::<f32>()
@@ -234,6 +267,7 @@ fn parse_positive_f32(value: &str) -> Result<f32, String> {
     Ok(parsed)
 }
 
+/// Optional render-setting replacements shared by supported commands.
 #[derive(Clone, Copy, Debug, Default, Args)]
 pub struct RenderOverrides {
     /// Override the scene's samples per pixel.

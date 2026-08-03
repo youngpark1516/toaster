@@ -1,3 +1,5 @@
+//! Conversion from renderer-neutral scenes to shader-compatible GPU data.
+
 use anyhow::{bail, Context, Result};
 use glam::Vec3;
 use std::path::Path;
@@ -8,31 +10,45 @@ use crate::gpu_types::{
     GpuTriangleAttributes,
 };
 
+/// Complete host-side representation of a scene ready for buffer creation.
 pub struct SceneGpuData {
+    /// Render dimensions, sampling controls, and resource counts.
     pub params: GpuRenderParams,
+    /// Camera basis and image-plane geometry.
     pub camera: GpuCamera,
+    /// Packed spheres.
     pub spheres: Vec<GpuSphere>,
+    /// Packed triangle geometry.
     pub triangles: Vec<GpuTriangle>,
+    /// Optional smooth-normal and texture-coordinate data parallel to triangles.
     pub triangle_attributes: Vec<GpuTriangleAttributes>,
+    /// Packed material records.
     pub materials: Vec<GpuMaterial>,
+    /// Emissive primitives used by direct-light sampling.
     pub lights: Vec<GpuLight>,
+    /// Concatenated little-endian RGBA8 texture texels.
     pub texture_pixels: Vec<u32>,
+    /// Linear HDR environment texels with importance weights in the alpha lane.
     pub environment_pixels: Vec<[f32; 4]>,
 }
 
+/// Loads a JSON scene and converts it into [`SceneGpuData`].
 pub fn load_scene_gpu(path: impl AsRef<Path>) -> Result<SceneGpuData> {
     let scene = toaster_scene::load_scene(path)?;
     scene_to_gpu(&scene)
 }
 
+/// Converts a complete scene, including static texture and environment pixels.
 pub fn scene_to_gpu(scene: &Scene) -> Result<SceneGpuData> {
     scene_to_gpu_inner(scene, true)
 }
 
+/// Converts per-frame mutable data while omitting invariant pixel payloads.
 pub(crate) fn scene_to_gpu_frame(scene: &Scene) -> Result<SceneGpuData> {
     scene_to_gpu_inner(scene, false)
 }
 
+/// Validates and packs a scene, optionally retaining static pixel arrays.
 fn scene_to_gpu_inner(scene: &Scene, include_static_pixels: bool) -> Result<SceneGpuData> {
     if scene.spheres.is_empty() && scene.triangles.is_empty() {
         bail!("GPU renderer requires at least one object");
@@ -215,6 +231,10 @@ fn scene_to_gpu_inner(scene: &Scene, include_static_pixels: bool) -> Result<Scen
     })
 }
 
+/// Builds the shader camera representation from look-at parameters.
+///
+/// Callers must supply a nondegenerate viewing direction and an `up` vector
+/// that is not parallel to it.
 pub fn make_camera(position: Vec3, look_at: Vec3, up: Vec3, fov: f32, aspect: f32) -> GpuCamera {
     let backward = (position - look_at).normalize();
     let right = up.cross(backward).normalize();
@@ -233,6 +253,7 @@ pub fn make_camera(position: Vec3, look_at: Vec3, up: Vec3, fov: f32, aspect: f3
     }
 }
 
+/// Converts one material and resolves any texture index into atlas metadata.
 fn material_to_gpu(
     material: Material,
     texture_metadata: &[(u32, u32, u32)],
@@ -268,10 +289,12 @@ fn material_to_gpu(
     })
 }
 
+/// Expands a three-component vector to an aligned shader vector.
 fn vec4(value: Vec3) -> [f32; 4] {
     [value.x, value.y, value.z, 0.0]
 }
 
+/// Collects emissive primitives and their cumulative area distribution.
 fn lights_to_gpu(scene: &Scene) -> Result<(Vec<GpuLight>, f32)> {
     let mut cumulative_area = 0.0;
     let mut lights = Vec::new();
@@ -334,6 +357,7 @@ fn lights_to_gpu(scene: &Scene) -> Result<(Vec<GpuLight>, f32)> {
     Ok((lights, cumulative_area))
 }
 
+/// Returns whether a material emits a positive amount of light.
 fn is_emissive(material: Material) -> bool {
     matches!(material, Material::Emissive { strength, .. } if strength > 0.0)
 }

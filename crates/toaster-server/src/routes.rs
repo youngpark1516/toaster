@@ -1,3 +1,5 @@
+//! Browser page, health, status, and multipart MJPEG routes.
+
 use crate::{FramePublisher, PreviewStatus};
 use axum::{
     body::{Body, Bytes},
@@ -50,6 +52,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
 </html>
 "#;
 
+/// Builds the preview router with shared publisher state and HTTP tracing.
 pub fn router(publisher: FramePublisher) -> Router {
     Router::new()
         .route("/", get(index))
@@ -60,18 +63,22 @@ pub fn router(publisher: FramePublisher) -> Router {
         .layer(TraceLayer::new_for_http())
 }
 
+/// Returns the self-contained browser preview page.
 async fn index() -> Html<&'static str> {
     Html(INDEX_HTML)
 }
 
+/// Returns the lightweight health-check body.
 async fn healthz() -> &'static str {
     "ok\n"
 }
 
+/// Returns the latest status or JSON `null` before the first frame.
 async fn status(State(publisher): State<FramePublisher>) -> Json<Option<PreviewStatus>> {
     Json(publisher.latest_status())
 }
 
+/// Streams complete latest-value JPEG parts until the client disconnects.
 async fn stream(State(publisher): State<FramePublisher>) -> Response<Body> {
     let frames = WatchStream::new(publisher.subscribe())
         .filter_map(|frame| frame.map(|jpeg| Ok::<Bytes, Infallible>(mjpeg_part(&jpeg))));
@@ -88,6 +95,7 @@ async fn stream(State(publisher): State<FramePublisher>) -> Response<Body> {
     response
 }
 
+/// Wraps one JPEG in a complete multipart boundary, headers, and trailing CRLF.
 fn mjpeg_part(jpeg: &Arc<[u8]>) -> Bytes {
     let header = format!(
         "--{MJPEG_BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n",

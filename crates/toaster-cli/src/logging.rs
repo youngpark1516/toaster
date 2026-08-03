@@ -1,8 +1,14 @@
+//! Process-wide tracing subscriber configuration.
+
 use crate::cli::{LogFormat, LogLevel};
 use anyhow::{Context, Result};
 use std::io::IsTerminal;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+/// Initializes text or JSON logs on stderr.
+///
+/// An explicit level takes precedence over `RUST_LOG`; without either, Toaster
+/// targets log at `info` while dependency targets remain disabled.
 pub fn init(level: Option<LogLevel>, format: LogFormat) -> Result<()> {
     let filter = match level {
         Some(level) => EnvFilter::try_new(level.directive())?,

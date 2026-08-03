@@ -1,5 +1,7 @@
 # Roadmap
 
+This file tracks milestones. Current behavior is documented from the [documentation index](README.md); future BVH and physics entries here are not implemented APIs.
+
 ## Phase 1: CPU reference renderer
 
 Complete: rays, cameras, spheres, diffuse/metal/dielectric scattering, sampling, accumulation, and PNG output.

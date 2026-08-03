@@ -1,31 +1,46 @@
+//! Emissive-triangle collection and uniform area sampling.
+
 use glam::Vec3;
 use rand::Rng;
 use toaster_scene::{Material, Scene, Triangle};
 
 #[derive(Clone, Debug)]
+/// Cached geometric and radiometric data for one emissive triangle.
 struct AreaLight {
+    /// Source triangle.
     triangle: Triangle,
+    /// Unit geometric normal.
     normal: Vec3,
+    /// Linear emitted radiance.
     emission: Vec3,
+    /// Surface area used for weighted light selection.
     area: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
+/// A point sampled from the combined emissive-triangle area distribution.
 pub struct LightSample {
+    /// World-space point on the selected light.
     pub position: Vec3,
+    /// Selected light's geometric normal.
     pub normal: Vec3,
+    /// Linear emitted radiance.
     pub emission: Vec3,
+    /// Area of the selected triangle.
     pub area: f32,
+    /// Probability density per unit area over all emissive triangles.
     pub pdf_area: f32,
 }
 
 #[derive(Clone, Debug, Default)]
+/// Cached emissive triangles and their combined surface area.
 pub struct AreaLights {
     lights: Vec<AreaLight>,
     total_area: f32,
 }
 
 impl AreaLights {
+    /// Collects positive-area triangles with positive-strength emissive materials.
     pub fn collect(scene: &Scene) -> Self {
         let mut lights = Vec::new();
         let mut total_area = 0.0;
@@ -54,14 +69,17 @@ impl AreaLights {
         Self { lights, total_area }
     }
 
+    /// Returns the number of collected emissive triangles.
     pub fn len(&self) -> usize {
         self.lights.len()
     }
 
+    /// Reports whether no sampleable emissive triangles exist.
     pub fn is_empty(&self) -> bool {
         self.lights.is_empty()
     }
 
+    /// Selects a triangle proportional to area and samples a uniform point on it.
     pub fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Option<LightSample> {
         if self.lights.is_empty() || self.total_area <= 0.0 {
             return None;

@@ -1,5 +1,7 @@
 # Architecture
 
+For the maintained repository tree, runtime flows, and complete production-function catalog, see the [codebase reference](codebase_reference.md). This file remains the short architectural overview.
+
 - `toaster-cli`: user-facing commands and process orchestration.
 - `toaster-core`: shared rays, cameras, colors, and image buffers.
 - `toaster-scene`: serializable scenes, objects, materials, transforms, and loading.

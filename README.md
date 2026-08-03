@@ -2,6 +2,8 @@
 
 Toaster is a Rust-based headless GPU path tracer and procedural 3D scene sandbox. It begins with a small CPU reference renderer, then uses `wgpu` compute shaders so the same project can run on cluster GPUs and portable graphics backends.
 
+The [documentation index](docs/README.md) links the project guide, complete codebase/function reference, public API, scene schema, shader reference, benchmarking, and cluster workflows.
+
 ## Goals
 
 - Learn path tracing from a clear CPU implementation.
@@ -282,6 +284,7 @@ and GPU renderers use the same distribution and PDF convention.
 8. ✅ Static progressive GPU preview accumulation
 9. ✅ Repeatable GPU benchmark reports and structured logging
 
-See the [project guide](docs/project_guide.md) for the complete operational
-snapshot, or the shorter [roadmap](docs/roadmap.md) and
-[architecture](docs/architecture.md) notes for focused context.
+See the [documentation index](docs/README.md) for the full documentation set,
+the [project guide](docs/project_guide.md) for the operational snapshot, or the
+shorter [roadmap](docs/roadmap.md) and [architecture](docs/architecture.md) notes
+for focused context.

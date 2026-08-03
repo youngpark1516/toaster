@@ -1,3 +1,5 @@
+//! Command-line entry point and orchestration for all Toaster workflows.
+
 mod benchmark;
 mod cli;
 mod logging;
@@ -14,21 +16,30 @@ use toaster_scene::RenderSettings;
 
 const STREAM_JPEG_QUALITY: u8 = 90;
 
+/// Validated progressive-preview batch and target settings.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ProgressivePreview {
+    /// Samples requested for each update before final-batch clamping.
     batch_samples: u32,
+    /// Total samples at convergence.
     target_samples: u32,
 }
 
+/// Feedback controller that adapts samples to a real-time frame budget.
 #[derive(Debug)]
 struct AdaptiveSampling {
+    /// Hard lower sample limit.
     min_samples: u32,
+    /// Hard upper sample limit.
     max_samples: u32,
+    /// Batch size requested for the next frame.
     current_samples: u32,
+    /// Duration corresponding to one target-FPS interval.
     frame_budget: Duration,
 }
 
 impl AdaptiveSampling {
+    /// Creates a bounded adaptive controller with a nonzero target rate.
     fn new(
         initial_samples: u32,
         min_samples: u32,
@@ -48,6 +59,9 @@ impl AdaptiveSampling {
         })
     }
 
+    /// Updates the next batch size from the last frame duration.
+    ///
+    /// Returns a stable status phrase presented by the preview server.
     fn observe(&mut self, frame_time: Duration) -> &'static str {
         let elapsed = frame_time.as_secs_f64();
         let budget = self.frame_budget.as_secs_f64();
@@ -85,17 +99,26 @@ impl AdaptiveSampling {
     }
 }
 
+/// Converts completed frames to JPEG and publishes status to the HTTP server.
 struct ServerFrameSink {
+    /// Latest-frame publisher shared with all HTTP clients.
     publisher: toaster_server::FramePublisher,
+    /// Cross-task cancellation flag.
     stop: Arc<AtomicBool>,
+    /// Requested preview rate reported in status.
     target_fps: u32,
+    /// Optional sample feedback controller.
     adaptive_sampling: Option<AdaptiveSampling>,
+    /// Fixed progressive batch size when adaptation is disabled.
     fixed_batch_samples: Option<u32>,
+    /// Progressive convergence target, absent for independent frames.
     progressive_target_samples: Option<u32>,
+    /// Previous publication timestamp for effective-FPS calculation.
     last_published_at: Option<Instant>,
 }
 
 impl toaster_gpu::FrameSink for ServerFrameSink {
+    /// JPEG-encodes, publishes, and records status for one GPU frame.
     fn deliver(&mut self, frame: toaster_gpu::CompletedFrame<'_>) -> anyhow::Result<()> {
         let encode_started_at = Instant::now();
         let jpeg =
@@ -173,10 +196,12 @@ impl toaster_gpu::FrameSink for ServerFrameSink {
         Ok(())
     }
 
+    /// Stops after the HTTP task exits or Ctrl+C sets the shared flag.
     fn should_continue(&self) -> bool {
         !self.stop.load(Ordering::Relaxed)
     }
 
+    /// Selects the next adaptive or fixed progressive sample count.
     fn samples_for_frame(&self) -> Option<u32> {
         self.adaptive_sampling
             .as_ref()
@@ -185,6 +210,7 @@ impl toaster_gpu::FrameSink for ServerFrameSink {
     }
 }
 
+/// Parses arguments, initializes logging, and maps success to a process exit code.
 fn main() -> ExitCode {
     let Cli {
         log_level,
@@ -205,6 +231,7 @@ fn main() -> ExitCode {
     }
 }
 
+/// Executes one parsed CLI command.
 fn run(command: Command) -> anyhow::Result<()> {
     match command {
         Command::CpuRender {
@@ -458,6 +485,10 @@ fn run(command: Command) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Runs the preview server, signal task, and synchronous sink-driven GPU loop.
+///
+/// The listener is bound before GPU setup. Both background tasks are always
+/// stopped and awaited (or aborted and joined) before this function returns.
 fn render_stream_preview(
     scene: &toaster_scene::Scene,
     animation: toaster_gpu::AnimationConfig,
@@ -545,6 +576,7 @@ fn render_stream_preview(
     })
 }
 
+/// Validates progressive-only flags and derives defaults from the scene.
 fn resolve_progressive_preview(
     enabled: bool,
     batch_samples: Option<u32>,
@@ -589,6 +621,7 @@ fn resolve_progressive_preview(
     Ok(Some(config))
 }
 
+/// Validates adaptive sampling bounds and constructs its controller when enabled.
 fn resolve_adaptive_sampling(
     enabled: bool,
     min_samples: Option<u32>,
@@ -628,6 +661,7 @@ fn resolve_adaptive_sampling(
     .map(Some)
 }
 
+/// Builds the finite or indefinite real-time preview schedule.
 fn resolve_preview_animation(
     fps: u32,
     duration: Option<f32>,
@@ -643,6 +677,7 @@ fn resolve_preview_animation(
     }
 }
 
+/// Resolves the mutually exclusive single-frame, duration, and frame-count forms.
 fn resolve_animation(
     fps: Option<u32>,
     duration: Option<f32>,
@@ -666,6 +701,7 @@ fn resolve_animation(
     }
 }
 
+/// Applies CLI render overrides and validates the resolved nonzero settings.
 fn apply_overrides(
     settings: &mut RenderSettings,
     overrides: RenderOverrides,

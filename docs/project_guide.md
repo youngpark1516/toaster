@@ -1,5 +1,7 @@
 # Toaster Project Guide
 
+This is the operational project snapshot. The [documentation index](README.md) links the detailed codebase, public API, scene-format, and shader references.
+
 This document is the working snapshot of Toaster: what has been built, which
 technologies it uses, how its pieces fit together, how to run it locally or on a
 Slurm GPU node, and what should come next.

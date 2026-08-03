@@ -1,5 +1,7 @@
 # Cluster setup
 
+This is the operational cluster/SSH guide. See the [documentation index](README.md) for HTTP interfaces and renderer internals.
+
 Before rendering on a compute node, check the available GPU and toolchain:
 
 ```sh

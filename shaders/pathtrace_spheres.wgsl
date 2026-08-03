@@ -1,5 +1,6 @@
 // Compute path tracer for spheres and triangles.
 
+// Per-dispatch settings and resource counts mirrored by Rust GpuRenderParams.
 struct RenderParams {
     width: u32,
     height: u32,
@@ -27,6 +28,7 @@ struct RenderParams {
     _pad4: u32,
 };
 
+// Pinhole camera origin and image-plane basis mirrored by Rust GpuCamera.
 struct Camera {
     origin: vec4<f32>,
     lower_left_corner: vec4<f32>,
@@ -34,6 +36,7 @@ struct Camera {
     vertical: vec4<f32>,
 };
 
+// Sphere center/radius and material reference mirrored by Rust GpuSphere.
 struct Sphere {
     center_radius: vec4<f32>,
 
@@ -41,6 +44,7 @@ struct Sphere {
     _pad0: array<u32, 3>,
 };
 
+// Tagged material payload and optional packed-texture metadata.
 struct Material {
     kind: u32,
     texture_offset: u32,
@@ -53,11 +57,13 @@ struct Material {
     params: vec4<f32>,
 };
 
+// World-space ray with normalized direction at renderer call sites.
 struct Ray {
     origin: vec3<f32>,
     direction: vec3<f32>
 };
 
+// Closest intersection data; a very large distance represents no hit.
 struct HitRecord {
     distance: f32,
     point: vec3<f32>,
@@ -67,10 +73,12 @@ struct HitRecord {
     tex_coord: vec2<f32>,
 };
 
+// Evaluates a point a scalar distance along a ray.
 fn at(ray: Ray, d: f32) -> vec3<f32> {
     return ray.origin + d * ray.direction;
 }
 
+// Triangle positions and material reference mirrored by Rust GpuTriangle.
 struct Triangle {
     v0: vec4<f32>,
     v1: vec4<f32>,
@@ -80,6 +88,7 @@ struct Triangle {
     _pad0: array<u32, 3>,
 };
 
+// Optional vertex normals and UVs parallel to the triangle buffer.
 struct TriangleAttributes {
     n0: vec4<f32>,
     n1: vec4<f32>,
@@ -92,6 +101,7 @@ struct TriangleAttributes {
     _pad0: u32,
 };
 
+// Sampleable emissive primitive and cumulative area metadata.
 struct Light {
     kind: u32,
     material_index: u32,
@@ -107,49 +117,63 @@ struct Light {
     area_cumulative: vec4<f32>,
 };
 
+// Persistent linear-HDR output; progressive passes read and update this average.
 @group(0) @binding(0)
 var<storage, read_write> output: array<vec4<f32>>;
 
+// Mutable per-frame render parameters.
 @group(0) @binding(1)
 var<uniform> params: RenderParams;
 
+// Mutable evaluated camera.
 @group(0) @binding(2)
 var<uniform> camera: Camera;
 
+// Sphere geometry storage.
 @group(0) @binding(3)
 var<storage, read> spheres: array<Sphere>;
 
+// Material storage shared by every primitive.
 @group(0) @binding(4)
 var<storage, read> materials: array<Material>;
 
+// Triangle geometry storage.
 @group(0) @binding(5)
 var<storage, read> triangles: array<Triangle>;
 
+// Area-weighted emissive primitive storage.
 @group(0) @binding(6)
 var<storage, read> lights: array<Light>;
 
+// Concatenated little-endian RGBA8 base-color texture texels.
 @group(0) @binding(7)
 var<storage, read> texture_pixels: array<u32>;
 
+// Per-triangle optional normals and UVs.
 @group(0) @binding(8)
 var<storage, read> triangle_attributes: array<TriangleAttributes>;
 
+// Linear HDR environment RGB with a normalized cumulative distribution in W.
 @group(0) @binding(9)
 var<storage, read> environment_pixels: array<vec4<f32>>;
 
+// Invocation-local state advanced for every random draw.
 var<private> rng_state: u32;
 
+// Applies the PCG-inspired integer permutation used for seeds and state updates.
 fn pcg_hash(input: u32) -> u32 {
     var state = input * 747796405u + 2891336453u;
     let word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
     return (word >> 22u) ^ word;
 }
 
+// Advances the private RNG and maps its state to the inclusive unit interval.
 fn random_f32() -> f32 {
     rng_state = pcg_hash(rng_state);
     return f32(rng_state) / 4294967295.0;
 }
 
+// Draws a direction uniformly over the unit sphere.
 fn random_unit_vector() -> vec3<f32> {
     let z = random_f32() * 2.0 - 1.0;
     let a = random_f32() * 6.2831853;
@@ -157,6 +181,7 @@ fn random_unit_vector() -> vec3<f32> {
     return vec3<f32>(r * cos(a), r * sin(a), z);
 }
 
+// Decodes one normalized sRGB channel into linear light.
 fn srgb_to_linear(value: f32) -> f32 {
     if value <= 0.04045 {
         return value / 12.92;
@@ -164,6 +189,7 @@ fn srgb_to_linear(value: f32) -> f32 {
     return pow((value + 0.055) / 1.055, 2.4);
 }
 
+// Unpacks an RGBA8 texel and decodes its RGB channels to linear light.
 fn unpack_srgb_texel(packed: u32) -> vec3<f32> {
     let scale: f32 = 1.0 / 255.0;
     let srgb = vec3f(
@@ -178,11 +204,13 @@ fn unpack_srgb_texel(packed: u32) -> vec3<f32> {
     );
 }
 
+// Wraps a signed texel coordinate into a nonzero texture extent.
 fn wrap_texel(value: i32, size: u32) -> u32 {
     let signed_size = i32(size);
     return u32(((value % signed_size) + signed_size) % signed_size);
 }
 
+// Fetches one repeated atlas texel belonging to a material.
 fn read_texture_texel(material: Material, x: i32, y: i32) -> vec3<f32> {
     let wrapped_x = wrap_texel(x, material.texture_width);
     let wrapped_y = wrap_texel(y, material.texture_height);
@@ -190,6 +218,7 @@ fn read_texture_texel(material: Material, x: i32, y: i32) -> vec3<f32> {
     return unpack_srgb_texel(texture_pixels[index]);
 }
 
+// Bilinearly samples repeated base color and applies the material tint.
 fn sample_base_color(material: Material, uv: vec2<f32>) -> vec3<f32> {
     if material.texture_width == 0u || material.texture_height == 0u {
         return material.albedo.xyz;
@@ -215,12 +244,14 @@ fn sample_base_color(material: Material, uv: vec2<f32>) -> vec3<f32> {
     return material.albedo.xyz * mix(top, bottom, amount.y);
 }
 
+// Fetches a horizontally wrapped, vertically clamped environment texel.
 fn read_environment_texel(x: i32, y: i32) -> vec3<f32> {
     let wrapped_x = wrap_texel(x, params.environment_width);
     let clamped_y = u32(clamp(y, 0, i32(params.environment_height) - 1));
     return environment_pixels[clamped_y * params.environment_width + wrapped_x].xyz;
 }
 
+// Bilinearly evaluates the rotated equirectangular environment radiance.
 fn sample_environment(direction: vec3<f32>) -> vec3<f32> {
     let unit_direction = normalize(direction);
     let u = fract(
@@ -248,6 +279,7 @@ fn sample_environment(direction: vec3<f32>) -> vec3<f32> {
     return mix(top, bottom, amount.y) * params.environment_intensity;
 }
 
+// Recovers one texel's probability mass from adjacent CDF entries.
 fn environment_probability(index: u32) -> f32 {
     var previous_cdf = 0.0;
     if index > 0u {
@@ -256,6 +288,7 @@ fn environment_probability(index: u32) -> f32 {
     return max(0.0, environment_pixels[index].w - previous_cdf);
 }
 
+// Converts the selected environment texel probability to solid-angle density.
 fn environment_pdf(direction: vec3<f32>) -> f32 {
     let unit_direction = normalize(direction);
     let u = fract(
@@ -276,12 +309,14 @@ fn environment_pdf(direction: vec3<f32>) -> f32 {
         / (2.0 * PI * PI * sin_theta);
 }
 
+// Direction, incident radiance, and solid-angle PDF from environment sampling.
 struct EnvironmentDirectionSample {
     direction: vec3<f32>,
     radiance: vec3<f32>,
     pdf: f32,
 };
 
+// Inverts the environment CDF and jitters within the selected texel.
 fn sample_environment_importance() -> EnvironmentDirectionSample {
     let count = params.environment_width * params.environment_height;
     if count == 0u || environment_pixels[count - 1u].w <= 0.0 {
@@ -326,6 +361,7 @@ const MAX_DISTANCE: f32 = 10000.0;
 const EPSILON: f32 = 1e-8;
 const PI: f32 = 3.14159265359;
 
+// Selects one emissive primitive in proportion to surface area.
 fn sample_light() -> Light {
     let random_area_sample: f32 = random_f32() * params.total_light_area;
     var selected: Light = lights[0];
@@ -341,6 +377,7 @@ fn sample_light() -> Light {
     return selected;
 }
 
+// Estimates direct irradiance from one uniformly area-sampled emissive primitive.
 fn direct_light(hit: HitRecord, albedo: vec3<f32>) ->vec3<f32> {
     if params.light_count == 0 || params.total_light_area <= 0.0 {
         return vec3f(0, 0, 0);
@@ -404,6 +441,7 @@ fn direct_light(hit: HitRecord, albedo: vec3<f32>) ->vec3<f32> {
         * surface_cosine * light_cosine * params.total_light_area / (distance_squared);
 }
 
+// Returns the two-technique power-heuristic MIS weight for the first PDF.
 fn power_heuristic(first_pdf: f32, second_pdf: f32) -> f32 {
     let first_squared = first_pdf * first_pdf;
     let second_squared = second_pdf * second_pdf;
@@ -414,6 +452,7 @@ fn power_heuristic(first_pdf: f32, second_pdf: f32) -> f32 {
     return first_squared / denominator;
 }
 
+// Estimates visible environment illumination with importance sampling and MIS.
 fn direct_environment(hit: HitRecord, albedo: vec3<f32>) -> vec3<f32> {
     if params.background_kind != 2u {
         return vec3f(0);
@@ -435,6 +474,7 @@ fn direct_environment(hit: HitRecord, albedo: vec3<f32>) -> vec3<f32> {
     return diffuse_brdf * sample.radiance * surface_cosine * mis_weight / sample.pdf;
 }
 
+// Traces a sample batch for one pixel and updates its weighted linear-HDR average.
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     
@@ -477,6 +517,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
+// Computes the nearest valid analytic ray-sphere intersection.
 fn hit_sphere(ray: Ray, sphere: Sphere) -> HitRecord {
     let no_hit: HitRecord = HitRecord(
         3.4028235e38f,
@@ -524,6 +565,7 @@ fn hit_sphere(ray: Ray, sphere: Sphere) -> HitRecord {
     );
 }
 
+// Intersects one triangle and interpolates its optional normal and UV attributes.
 fn hit_triangle(ray: Ray, triangle: Triangle, attributes: TriangleAttributes) -> HitRecord {
     let no_hit: HitRecord = HitRecord(
         3.4028235e38f,
@@ -591,6 +633,7 @@ fn hit_triangle(ray: Ray, triangle: Triangle, attributes: TriangleAttributes) ->
     );
 }
 
+// Brute-force scans all spheres and triangles for the closest hit.
 fn calc_intersections(ray: Ray) -> HitRecord {
     let num_sphere: u32 = params.sphere_count;
     let num_triangle: u32 = params.triangle_count;
@@ -624,6 +667,7 @@ fn calc_intersections(ray: Ray) -> HitRecord {
     return record;
 }
 
+// Integrates one path through diffuse, metal, dielectric, and emissive materials.
 fn ray_color(ray: Ray) -> vec3<f32> {
     let max_bounces: u32 = params.max_bounces;
 
@@ -737,10 +781,12 @@ fn ray_color(ray: Ray) -> vec3<f32> {
     return radiance;
 }
 
+// Reflects a direction around a unit surface normal.
 fn reflect_vec(dir: vec3<f32>, norm: vec3<f32>) -> vec3 <f32> {
     return dir - dot(norm, dir) * 2.0 * norm;
 }
 
+// Refracts a unit direction according to the supplied index ratio.
 fn refract_vec(dir: vec3<f32>, norm: vec3<f32>, ratio: f32) -> vec3<f32> {
     let cos_theta: f32 = min(dot(-dir, norm), 1.0);
     let perpendicular: vec3<f32> = ratio * (dir + cos_theta * norm);
@@ -748,6 +794,7 @@ fn refract_vec(dir: vec3<f32>, norm: vec3<f32>, ratio: f32) -> vec3<f32> {
     return perpendicular + parallel;
 }
 
+// Approximates Fresnel reflectance with Schlick's fifth-power formula.
 fn reflectance(cosine: f32, refraction_ratio: f32) -> f32 {
     var r0 = ((1.0 - refraction_ratio) / (1.0 + refraction_ratio));
     r0 = r0 * r0;

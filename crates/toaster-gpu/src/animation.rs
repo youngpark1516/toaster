@@ -1,14 +1,21 @@
+//! Render frame schedules and numbered output paths.
+
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy)]
+/// A validated finite or indefinite render schedule.
 pub struct AnimationConfig {
+    /// Frames per second; absent only for the single frame at time zero.
     fps: Option<u32>,
+    /// Exact frame limit; absent for indefinite preview.
     frame_limit: Option<u32>,
+    /// Optional animation-time wrapping interval.
     loop_duration_seconds: Option<f32>,
 }
 
 impl AnimationConfig {
+    /// Creates one frame at animation time zero without an FPS.
     pub fn single_frame() -> Self {
         Self {
             fps: None,
@@ -17,6 +24,16 @@ impl AnimationConfig {
         }
     }
 
+    /// Creates `ceil(fps * duration_seconds)` frames.
+    ///
+    /// ```
+    /// use toaster_gpu::AnimationConfig;
+    ///
+    /// let schedule = AnimationConfig::from_duration(24, 1.1)?;
+    /// assert_eq!(schedule.frame_limit(), Some(27));
+    /// assert_eq!(schedule.time_for_frame(12), 0.5);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     pub fn from_duration(fps: u32, duration_seconds: f32) -> Result<Self> {
         validate_fps(fps)?;
         if !duration_seconds.is_finite() || duration_seconds <= 0.0 {
@@ -33,6 +50,7 @@ impl AnimationConfig {
         })
     }
 
+    /// Creates an exact positive frame count at the selected FPS.
     pub fn from_frame_count(fps: u32, frame_count: u32) -> Result<Self> {
         validate_fps(fps)?;
         if frame_count == 0 {
@@ -45,6 +63,7 @@ impl AnimationConfig {
         })
     }
 
+    /// Creates an unbounded frame schedule at the selected FPS.
     pub fn indefinite(fps: u32) -> Result<Self> {
         validate_fps(fps)?;
         Ok(Self {
@@ -54,6 +73,7 @@ impl AnimationConfig {
         })
     }
 
+    /// Adds a positive animation-time wrapping interval without changing indices.
     pub fn with_loop_duration(mut self, duration_seconds: f32) -> Result<Self> {
         if !duration_seconds.is_finite() || duration_seconds <= 0.0 {
             bail!("loop duration must be finite and greater than zero");
@@ -62,25 +82,30 @@ impl AnimationConfig {
         Ok(self)
     }
 
+    /// Returns the exact frame limit, or `None` for an indefinite schedule.
     pub fn frame_limit(&self) -> Option<u32> {
         self.frame_limit
     }
 
+    /// Maps an index to animation seconds and applies optional loop wrapping.
     pub fn time_for_frame(&self, frame: u32) -> f32 {
         let time = self.fps.map_or(0.0, |fps| frame as f32 / fps as f32);
         self.loop_duration_seconds
             .map_or(time, |duration| time % duration)
     }
 
+    /// Returns the schedule FPS, absent for [`Self::single_frame`].
     pub fn fps(&self) -> Option<u32> {
         self.fps
     }
 
+    /// Returns the optional animation-time wrapping interval.
     pub fn loop_duration(&self) -> Option<f32> {
         self.loop_duration_seconds
     }
 }
 
+/// Rejects zero FPS values shared by all animated constructors.
 fn validate_fps(fps: u32) -> Result<()> {
     if fps == 0 {
         bail!("fps must be greater than zero");
@@ -88,6 +113,7 @@ fn validate_fps(fps: u32) -> Result<()> {
     Ok(())
 }
 
+/// Returns the original output path for one frame or a zero-padded numbered path.
 pub fn frame_output_path(out_path: &Path, frame: u32, frame_count: u32) -> PathBuf {
     if frame_count == 1 {
         return out_path.to_path_buf();
