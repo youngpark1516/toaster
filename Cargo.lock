@@ -1397,6 +1397,7 @@ version = "0.1.0"
 dependencies = [
  "glam",
  "rand",
+ "toaster-bvh",
  "toaster-core",
  "toaster-scene",
 ]
@@ -1410,6 +1411,7 @@ dependencies = [
  "glam",
  "image",
  "pollster",
+ "toaster-bvh",
  "toaster-core",
  "toaster-scene",
  "wgpu",

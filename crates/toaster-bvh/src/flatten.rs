@@ -1,1 +1,120 @@
 //! Flat BVH layout for renderer upload.
+
+use crate::{
+    aabb::Aabb,
+    bvh::{Bvh, BvhNode, PrimitiveRef},
+};
+
+#[derive(Clone, Copy, Debug)]
+pub struct FlatNode {
+    pub bounds: Aabb,
+    pub first_primitive_or_right_child: u32,
+    pub primitive_count: u32,
+}
+
+impl FlatNode {
+    pub fn is_leaf(self) -> bool {
+        self.primitive_count > 0
+    }
+
+    pub fn first_primitive(self) -> u32 {
+        debug_assert!(self.is_leaf());
+        self.first_primitive_or_right_child
+    }
+
+    pub fn right_child(self) -> u32 {
+        debug_assert!(!self.is_leaf());
+        self.first_primitive_or_right_child
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct FlatBvh {
+    pub nodes: Vec<FlatNode>,
+    pub primitives: Vec<PrimitiveRef>,
+}
+
+impl FlatBvh {
+    pub fn build(primitive_info: &mut [crate::bvh::PrimitiveInfo]) -> Self {
+        Self::from_bvh(Bvh::build(primitive_info))
+    }
+
+    pub fn from_bvh(bvh: Bvh) -> Self {
+        let mut nodes = Vec::new();
+        if let Some(root) = &bvh.root {
+            flatten_node(root, &mut nodes);
+        }
+
+        Self {
+            nodes,
+            primitives: bvh.primitives,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+}
+
+fn flatten_node(node: &BvhNode, nodes: &mut Vec<FlatNode>) -> u32 {
+    let node_index = nodes.len() as u32;
+    nodes.push(FlatNode {
+        bounds: node.bounds(),
+        first_primitive_or_right_child: 0,
+        primitive_count: 0,
+    });
+
+    match node {
+        BvhNode::Leaf {
+            first_primitive,
+            primitive_count,
+            ..
+        } => {
+            nodes[node_index as usize].first_primitive_or_right_child = *first_primitive;
+            nodes[node_index as usize].primitive_count = *primitive_count;
+        }
+        BvhNode::Interior { left, right, .. } => {
+            flatten_node(left, nodes);
+            let right_child = flatten_node(right, nodes);
+            nodes[node_index as usize].first_primitive_or_right_child = right_child;
+        }
+    }
+
+    node_index
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bvh::{Bvh, BvhNode};
+    use glam::Vec3;
+
+    #[test]
+    fn flattens_left_child_next_and_right_child_by_index() {
+        let bounds = Aabb::new(Vec3::ZERO, Vec3::ONE);
+        let bvh = Bvh {
+            root: Some(BvhNode::Interior {
+                bounds,
+                left: Box::new(BvhNode::Leaf {
+                    bounds,
+                    first_primitive: 0,
+                    primitive_count: 1,
+                }),
+                right: Box::new(BvhNode::Leaf {
+                    bounds,
+                    first_primitive: 1,
+                    primitive_count: 1,
+                }),
+            }),
+            primitives: vec![PrimitiveRef::Sphere(0), PrimitiveRef::Triangle(0)],
+        };
+
+        let flat = FlatBvh::from_bvh(bvh);
+
+        assert_eq!(flat.nodes.len(), 3);
+        assert!(!flat.nodes[0].is_leaf());
+        assert_eq!(flat.nodes[0].right_child(), 2);
+        assert!(flat.nodes[1].is_leaf());
+        assert!(flat.nodes[2].is_leaf());
+    }
+}

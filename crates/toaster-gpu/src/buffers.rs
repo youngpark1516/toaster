@@ -1,5 +1,7 @@
 //! GPU buffer layouts.
-use crate::gpu_types::{GpuLight, GpuRenderParams, GpuSphere, GpuTriangle};
+use crate::gpu_types::{
+    GpuBvhNode, GpuLight, GpuPrimitiveRef, GpuRenderParams, GpuSphere, GpuTriangle,
+};
 use crate::scene_upload::SceneGpuData;
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
@@ -31,6 +33,8 @@ pub struct SceneGpuBuffers {
     pub triangles: wgpu::Buffer,
     pub materials: wgpu::Buffer,
     pub lights: wgpu::Buffer,
+    pub bvh_nodes: wgpu::Buffer,
+    pub bvh_primitives: wgpu::Buffer,
     pub output_size: u64,
     pub params_size: u64,
 }
@@ -148,6 +152,30 @@ pub fn create_scene_gpu_buffers(device: &wgpu::Device, scene: &SceneGpuData) -> 
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
     });
 
+    let dummy_bvh_node = [GpuBvhNode::zeroed()];
+    let bvh_node_data = if scene.bvh_nodes.is_empty() {
+        &dummy_bvh_node[..]
+    } else {
+        &scene.bvh_nodes
+    };
+    let bvh_nodes_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("BVH Nodes Buffer"),
+        contents: bytemuck::cast_slice(bvh_node_data),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
+
+    let dummy_bvh_primitive = [GpuPrimitiveRef::zeroed()];
+    let bvh_primitive_data = if scene.bvh_primitives.is_empty() {
+        &dummy_bvh_primitive[..]
+    } else {
+        &scene.bvh_primitives
+    };
+    let bvh_primitives_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("BVH Primitives Buffer"),
+        contents: bytemuck::cast_slice(bvh_primitive_data),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
+
     SceneGpuBuffers {
         output: output_buffer,
         readback: readback_buffer,
@@ -157,6 +185,8 @@ pub fn create_scene_gpu_buffers(device: &wgpu::Device, scene: &SceneGpuData) -> 
         triangles: triangles_buffer,
         materials: materials_buffer,
         lights: lights_buffer,
+        bvh_nodes: bvh_nodes_buffer,
+        bvh_primitives: bvh_primitives_buffer,
         output_size,
         params_size,
     }

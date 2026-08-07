@@ -1,9 +1,13 @@
 use anyhow::{bail, Context, Result};
 use glam::Vec3;
 use std::path::Path;
-use toaster_scene::{Background, Material, Scene};
+use toaster_bvh::{Aabb, FlatBvh, PrimitiveInfo, PrimitiveRef};
+use toaster_scene::{Background, Material, Scene, Triangle};
 
-use crate::gpu_types::{GpuCamera, GpuLight, GpuMaterial, GpuRenderParams, GpuSphere, GpuTriangle};
+use crate::gpu_types::{
+    GpuBvhNode, GpuCamera, GpuLight, GpuMaterial, GpuPrimitiveRef, GpuRenderParams, GpuSphere,
+    GpuTriangle,
+};
 
 pub struct SceneGpuData {
     pub params: GpuRenderParams,
@@ -12,6 +16,8 @@ pub struct SceneGpuData {
     pub triangles: Vec<GpuTriangle>,
     pub materials: Vec<GpuMaterial>,
     pub lights: Vec<GpuLight>,
+    pub bvh_nodes: Vec<GpuBvhNode>,
+    pub bvh_primitives: Vec<GpuPrimitiveRef>,
 }
 
 pub fn load_scene_gpu(path: impl AsRef<Path>) -> Result<SceneGpuData> {
@@ -84,6 +90,11 @@ pub fn scene_to_gpu(scene: &Scene) -> Result<SceneGpuData> {
     let (lights, total_light_area) = lights_to_gpu(scene)?;
     let light_count = u32::try_from(lights.len()).context("too many lights for GPU")?;
 
+    let (bvh_nodes, bvh_primitives) = build_gpu_bvh(scene)?;
+    let bvh_node_count = u32::try_from(bvh_nodes.len()).context("too many BVH nodes for GPU")?;
+    let bvh_primitive_count =
+        u32::try_from(bvh_primitives.len()).context("too many BVH primitives for GPU")?;
+
     Ok(SceneGpuData {
         params: GpuRenderParams {
             width: scene.render.width,
@@ -101,13 +112,69 @@ pub fn scene_to_gpu(scene: &Scene) -> Result<SceneGpuData> {
             light_count,
             total_light_area,
             _pad0: 0,
+            bvh_node_count,
+            bvh_primitive_count,
         },
         camera,
         spheres,
         triangles,
         materials,
         lights,
+        bvh_nodes,
+        bvh_primitives,
     })
+}
+
+fn build_gpu_bvh(scene: &Scene) -> Result<(Vec<GpuBvhNode>, Vec<GpuPrimitiveRef>)> {
+    let mut primitive_info = Vec::with_capacity(scene.spheres.len() + scene.triangles.len());
+
+    primitive_info.extend(scene.spheres.iter().enumerate().map(|(index, sphere)| {
+        let radius = Vec3::splat(sphere.radius);
+        let bounds = Aabb::new(sphere.center - radius, sphere.center + radius);
+        PrimitiveInfo {
+            bounds,
+            centroid: bounds.centroid(),
+            primitive: PrimitiveRef::Sphere(index as u32),
+        }
+    }));
+
+    primitive_info.extend(scene.triangles.iter().enumerate().map(|(index, triangle)| {
+        let bounds = triangle_bounds(triangle);
+        PrimitiveInfo {
+            bounds,
+            centroid: bounds.centroid(),
+            primitive: PrimitiveRef::Triangle(index as u32),
+        }
+    }));
+
+    let flat = FlatBvh::build(&mut primitive_info);
+    let nodes = flat
+        .nodes
+        .into_iter()
+        .map(|node| GpuBvhNode {
+            min: [node.bounds.min.x, node.bounds.min.y, node.bounds.min.z, 0.0],
+            max: [node.bounds.max.x, node.bounds.max.y, node.bounds.max.z, 0.0],
+            first_or_right: node.first_primitive_or_right_child,
+            primitive_count: node.primitive_count,
+            _pad: [0; 2],
+        })
+        .collect();
+    let primitives = flat
+        .primitives
+        .into_iter()
+        .map(|primitive| match primitive {
+            PrimitiveRef::Sphere(index) => GpuPrimitiveRef { kind: 0, index },
+            PrimitiveRef::Triangle(index) => GpuPrimitiveRef { kind: 1, index },
+        })
+        .collect();
+
+    Ok((nodes, primitives))
+}
+
+fn triangle_bounds(triangle: &Triangle) -> Aabb {
+    const PADDING: f32 = 1e-5;
+    let [first, second, third] = triangle.vertices;
+    Aabb::new(first.min(second).min(third), first.max(second).max(third)).expand(PADDING)
 }
 
 pub fn make_camera(position: Vec3, look_at: Vec3, up: Vec3, fov: f32, aspect: f32) -> GpuCamera {
@@ -276,6 +343,12 @@ mod tests {
         assert_eq!(scene.params.light_count, 2);
         assert!(scene.params.total_light_area > 0.0);
         assert!(scene.lights.iter().all(|light| light.kind == 0));
+        assert!(!scene.bvh_nodes.is_empty());
+        assert_eq!(scene.params.bvh_node_count, scene.bvh_nodes.len() as u32);
+        assert_eq!(
+            scene.params.bvh_primitive_count,
+            scene.bvh_primitives.len() as u32
+        );
     }
 
     #[test]
@@ -321,6 +394,9 @@ mod tests {
         assert_eq!(scene.params.light_count, 2);
         assert!(scene.params.total_light_area > 0.0);
         assert!(scene.lights.iter().all(|light| light.kind == 0));
+        assert!(!scene.bvh_nodes.is_empty());
+        assert_eq!(scene.params.bvh_node_count, scene.bvh_nodes.len() as u32);
+        assert_eq!(scene.params.bvh_primitive_count, 24);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use crate::intersect::{intersect_scene, HitRecord};
+use crate::intersect::{intersect_scene, HitRecord, SceneBvh};
 use crate::light::AreaLights;
 use glam::Vec3;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -20,6 +20,7 @@ pub fn render(scene: &Scene) -> ImageBuffer {
     .expect("scene loader validates camera settings");
     let lights = AreaLights::collect(scene);
     println!("Emissive area lights: {}", lights.len());
+    let bvh = SceneBvh::build(scene);
 
     let mut image = ImageBuffer::new(settings.width, settings.height);
     let mut rng = StdRng::seed_from_u64(RENDER_SEED);
@@ -32,6 +33,7 @@ pub fn render(scene: &Scene) -> ImageBuffer {
                 color += ray_color_inner(
                     &camera.ray(u, v),
                     scene,
+                    &bvh,
                     &lights,
                     &mut rng,
                     settings.max_bounces,
@@ -51,12 +53,14 @@ pub fn ray_color<R: Rng + ?Sized>(
     remaining_depth: u32,
 ) -> Vec3 {
     let lights = AreaLights::collect(scene);
-    ray_color_inner(ray, scene, &lights, rng, remaining_depth, true)
+    let bvh = SceneBvh::build(scene);
+    ray_color_inner(ray, scene, &bvh, &lights, rng, remaining_depth, true)
 }
 
 fn ray_color_inner<R: Rng + ?Sized>(
     ray: &Ray,
     scene: &Scene,
+    bvh: &SceneBvh,
     lights: &AreaLights,
     rng: &mut R,
     remaining_depth: u32,
@@ -66,7 +70,7 @@ fn ray_color_inner<R: Rng + ?Sized>(
         return Vec3::ZERO;
     }
 
-    if let Some(hit) = intersect_scene(ray, scene, RAY_EPSILON) {
+    if let Some(hit) = intersect_scene(ray, scene, bvh, RAY_EPSILON) {
         let material = scene.materials[hit.material_index];
         if let Material::Emissive { color, strength } = material {
             return if include_emission {
@@ -81,13 +85,14 @@ fn ray_color_inner<R: Rng + ?Sized>(
                 * ray_color_inner(
                     &scatter.ray,
                     scene,
+                    bvh,
                     lights,
                     rng,
                     remaining_depth - 1,
                     next_include_emission,
                 );
             let direct = match material {
-                Material::Diffuse { albedo } => direct_light(&hit, albedo, scene, lights, rng),
+                Material::Diffuse { albedo } => direct_light(&hit, albedo, scene, bvh, lights, rng),
                 _ => Vec3::ZERO,
             };
             return direct + indirect;
@@ -109,6 +114,7 @@ fn direct_light<R: Rng + ?Sized>(
     hit: &HitRecord,
     albedo: Vec3,
     scene: &Scene,
+    bvh: &SceneBvh,
     lights: &AreaLights,
     rng: &mut R,
 ) -> Vec3 {
@@ -132,7 +138,7 @@ fn direct_light<R: Rng + ?Sized>(
     }
 
     let shadow_ray = Ray::new(shadow_origin, direction);
-    if intersect_scene(&shadow_ray, scene, RAY_EPSILON)
+    if intersect_scene(&shadow_ray, scene, bvh, RAY_EPSILON)
         .is_some_and(|blocker| blocker.distance < distance - 2.0 * RAY_EPSILON)
     {
         return Vec3::ZERO;
@@ -511,12 +517,14 @@ mod tests {
     #[test]
     fn direct_light_is_positive_when_visible() {
         let scene = direct_light_scene(false);
+        let bvh = SceneBvh::build(&scene);
         let lights = AreaLights::collect(&scene);
         let mut rng = StdRng::seed_from_u64(11);
         let color = direct_light(
             &test_hit(Vec3::Y, true),
             Vec3::splat(0.5),
             &scene,
+            &bvh,
             &lights,
             &mut rng,
         );
@@ -526,12 +534,14 @@ mod tests {
     #[test]
     fn shadow_ray_removes_blocked_direct_light() {
         let scene = direct_light_scene(true);
+        let bvh = SceneBvh::build(&scene);
         let lights = AreaLights::collect(&scene);
         let mut rng = StdRng::seed_from_u64(11);
         let color = direct_light(
             &test_hit(Vec3::Y, true),
             Vec3::splat(0.5),
             &scene,
+            &bvh,
             &lights,
             &mut rng,
         );

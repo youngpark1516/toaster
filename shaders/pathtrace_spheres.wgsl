@@ -15,6 +15,9 @@ struct RenderParams {
     light_count: u32,
     total_light_area: f32,
     _pad1: u32,
+
+    bvh_node_count: u32,
+    bvh_primitive_count: u32,
 };
 
 struct Camera {
@@ -82,6 +85,19 @@ struct Light {
     area_cumulative: vec4<f32>,
 };
 
+struct BvhNode {
+    min: vec4<f32>,
+    max: vec4<f32>,
+    first_or_right: u32,
+    primitive_count: u32,
+    _pad: array<u32, 2>,
+};
+
+struct PrimitiveRef {
+    kind: u32,
+    index: u32,
+};
+
 @group(0) @binding(0)
 var<storage, read_write> output: array<vec4<f32>>;
 
@@ -102,6 +118,12 @@ var<storage, read> triangles: array<Triangle>;
 
 @group(0) @binding(6)
 var<storage, read> lights: array<Light>;
+
+@group(0) @binding(7)
+var<storage, read> bvh_nodes: array<BvhNode>;
+
+@group(0) @binding(8)
+var<storage, read> bvh_primitives: array<PrimitiveRef>;
 
 var<private> rng_state: u32;
 
@@ -334,7 +356,7 @@ fn hit_triangle(ray: Ray, triangle: Triangle) -> HitRecord {
     );
 }
 
-fn calc_intersections(ray: Ray) -> HitRecord {
+fn calc_intersections_linear(ray: Ray) -> HitRecord {
     let num_sphere: u32 = params.sphere_count;
     let num_triangle: u32 = params.triangle_count;
     var record: HitRecord = HitRecord(
@@ -364,6 +386,105 @@ fn calc_intersections(ray: Ray) -> HitRecord {
     }
 
     return record;
+}
+
+fn intersects_aabb(
+    node: BvhNode,
+    origin: vec3<f32>,
+    direction: vec3<f32>,
+    inverse_direction: vec3<f32>,
+    min_distance: f32,
+    max_distance: f32,
+) -> bool {
+    var t_min = min_distance;
+    var t_max = max_distance;
+
+    for (var axis = 0u; axis < 3u; axis++) {
+        if abs(direction[axis]) < EPSILON {
+            if origin[axis] < node.min[axis] || origin[axis] > node.max[axis] {
+                return false;
+            }
+            continue;
+        }
+
+        let near = (node.min[axis] - origin[axis]) * inverse_direction[axis];
+        let far = (node.max[axis] - origin[axis]) * inverse_direction[axis];
+        t_min = max(t_min, min(near, far));
+        t_max = min(t_max, max(near, far));
+
+        if t_max < t_min {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+fn calc_intersections_bvh(ray: Ray) -> HitRecord {
+    var record: HitRecord = HitRecord(
+        3.4028235e38f,
+        vec3<f32>(0, 0, 0),
+        vec3<f32>(0, 0, 0),
+        false,
+        0
+    );
+    let inverse_direction = 1.0 / ray.direction;
+    var stack: array<u32, 64>;
+    var stack_size = 1u;
+    stack[0] = 0u;
+
+    while stack_size > 0u {
+        stack_size -= 1u;
+        let node_index = stack[stack_size];
+        let node = bvh_nodes[node_index];
+
+        if !intersects_aabb(
+            node,
+            ray.origin,
+            ray.direction,
+            inverse_direction,
+            MIN_DISTANCE,
+            record.distance,
+        ) {
+            continue;
+        }
+
+        if node.primitive_count > 0u {
+            for (var i = 0u; i < node.primitive_count; i++) {
+                let primitive = bvh_primitives[node.first_or_right + i];
+                var candidate: HitRecord;
+
+                if primitive.kind == 0u {
+                    candidate = hit_sphere(ray, spheres[primitive.index]);
+                } else {
+                    candidate = hit_triangle(ray, triangles[primitive.index]);
+                }
+
+                if candidate.distance < record.distance {
+                    record = candidate;
+                }
+            }
+        } else {
+            let left_child = node_index + 1u;
+            let right_child = node.first_or_right;
+
+            if stack_size + 2u <= 64u {
+                stack[stack_size] = left_child;
+                stack_size += 1u;
+                stack[stack_size] = right_child;
+                stack_size += 1u;
+            }
+        }
+    }
+
+    return record;
+}
+
+fn calc_intersections(ray: Ray) -> HitRecord {
+    if params.bvh_node_count == 0u {
+        return calc_intersections_linear(ray);
+    }
+    return calc_intersections_bvh(ray);
 }
 
 fn ray_color(ray: Ray) -> vec3<f32> {

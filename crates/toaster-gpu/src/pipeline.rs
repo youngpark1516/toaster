@@ -132,6 +132,28 @@ pub fn create_pathtrace_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGr
                 },
                 count: None,
             },
+            // binding 7: BVH nodes
+            wgpu::BindGroupLayoutEntry {
+                binding: 7,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            // binding 8: BVH primitive references
+            wgpu::BindGroupLayoutEntry {
+                binding: 8,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
         ],
     })
 }
@@ -172,6 +194,14 @@ pub fn create_pathtrace_bind_group(
             wgpu::BindGroupEntry {
                 binding: 6,
                 resource: buffers.lights.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: buffers.bvh_nodes.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: buffers.bvh_primitives.as_entire_binding(),
             },
         ],
     })
