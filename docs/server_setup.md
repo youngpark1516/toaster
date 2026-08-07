@@ -41,6 +41,22 @@ Each loop resets and deterministically replays the physics world. Physical poses
 repeat while path-tracing noise may differ because render frame indices remain
 monotonic.
 
+The corresponding still and MP4 checks are:
+
+```sh
+cargo run --release -p toaster-cli -- gpu-render \
+  scenes/011_physics_rigid_bodies.json --out out/physics_start.png
+
+cargo run --release -p toaster-cli -- gpu-render \
+  scenes/011_physics_rigid_bodies.json \
+  --video out/physics.mp4 --fps 24 --duration 5
+```
+
+MP4 export requires `ffmpeg` on `PATH`; on the documented cluster environment,
+`module load ffmpeg/static` provides it. Validate a running preview with
+`curl --fail http://127.0.0.1:7878/healthz`. Stream-preview keeps completed JPEG
+frames in memory and does not create frame files.
+
 ## View a remote node locally
 
 Keep this tunnel open from the local machine:

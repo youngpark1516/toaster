@@ -2,6 +2,7 @@
 
 use crate::{AnimationTarget, Material, Scene};
 use anyhow::Result;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 /// Categories of renderer data changed by one scene evaluation.
@@ -47,6 +48,17 @@ pub struct EvaluationRequest {
     pub loop_cycle: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// CPU wall-clock diagnostics for renderer-neutral frame evaluation.
+pub struct SceneEvaluationTimings {
+    /// Time spent cloning the base scene and applying allowed animation tracks.
+    pub animation_evaluation: Duration,
+    /// Time spent resetting, replaying, or incrementally stepping a physics backend.
+    pub physics_evaluation: Duration,
+    /// Time spent applying backend-neutral updates to evaluated render geometry.
+    pub geometry_update: Duration,
+}
+
 #[derive(Clone, Debug)]
 /// Fully evaluated renderer-neutral scene plus upload change metadata.
 pub struct EvaluatedScene {
@@ -54,6 +66,8 @@ pub struct EvaluatedScene {
     pub scene: Scene,
     /// Data categories changed since the evaluator's preceding request.
     pub changes: SceneChanges,
+    /// Optional-cost diagnostics gathered by the evaluator for this request.
+    pub timings: SceneEvaluationTimings,
 }
 
 /// Stateful or stateless provider of evaluated renderer-neutral frames.
@@ -95,14 +109,23 @@ impl SceneEvaluator for AnimationEvaluator {
     }
 
     fn evaluate(&mut self, request: EvaluationRequest) -> Result<EvaluatedScene> {
+        let evaluation_start = Instant::now();
         let scene = self.source.evaluate_at(request.time_seconds)?;
+        let timings = SceneEvaluationTimings {
+            animation_evaluation: evaluation_start.elapsed(),
+            ..SceneEvaluationTimings::default()
+        };
         let changes = if self.evaluated_once {
             animation_changes(&self.source)
         } else {
             SceneChanges::all()
         };
         self.evaluated_once = true;
-        Ok(EvaluatedScene { scene, changes })
+        Ok(EvaluatedScene {
+            scene,
+            changes,
+            timings,
+        })
     }
 }
 

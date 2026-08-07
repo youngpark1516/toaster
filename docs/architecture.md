@@ -2,9 +2,10 @@
 
 Toaster loads JSON, glTF/GLB geometry, textures, environment maps, and optional
 physics declarations into a renderer-independent scene. The CPU integrator
-provides a readable reference path. The `wgpu` integrator uploads the evaluated scene and flattened BVH,
-dispatches WGSL compute work, and returns the result through one shared readback
-and RGBA conversion path. The root [README](../README.md) diagrams this flow.
+provides a readable reference path. The `wgpu` integrator uploads the evaluated
+scene and flattened BVH, dispatches WGSL compute work, and returns the result
+through one shared readback and RGBA conversion path. The root
+[README](../README.md) diagrams this flow.
 
 The workspace keeps scene and asset code independent from renderer details:
 `toaster-core` and `toaster-scene` hold shared data, `toaster-physics` evaluates
@@ -50,8 +51,15 @@ still validated but do not reserve groups and no backend is constructed.
 
 Dynamic boxes are authored as first-class boxes and expanded into twelve normal
 triangles. A full mixed-BVH rebuild is uploaded whenever sphere or triangle
-geometry moves. Moving emissive geometry also rebuilds the light list. This
-prioritizes correctness; BVH refitting is a future optimization.
+geometry moves. Moving emissive geometry also rebuilds and uploads the light
+list; non-emissive motion reuses the prior light list. This prioritizes
+correctness; BVH refitting is a future optimization.
+
+Frame diagnostics separately record animation evaluation, physics stepping,
+neutral geometry updates, light-list and BVH rebuilds, GPU uploads, dispatch,
+readback, RGBA conversion, output delivery, and total time. These are host
+wall-clock measurements intended to expose the full-rebuild cost, not a GPU
+hardware-profiler replacement.
 
 The current backend is intentionally limited to rigid bodies: gravity, contact,
 friction, restitution, and linear/angular motion for static and dynamic spheres

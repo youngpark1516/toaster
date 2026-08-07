@@ -3,7 +3,7 @@ use anyhow::{anyhow, ensure, Context, Result};
 use image::RgbaImage;
 use std::path::Path;
 use std::time::{Duration, Instant};
-use toaster_scene::{AnimationEvaluator, SceneChanges, SceneEvaluator};
+use toaster_scene::{AnimationEvaluator, SceneChanges, SceneEvaluationTimings, SceneEvaluator};
 
 use crate::animation::{frame_output_path, AnimationConfig};
 use crate::buffers::create_scene_gpu_buffers;
@@ -14,7 +14,7 @@ use crate::pipeline::{
     create_pathtrace_bind_group, create_pathtrace_bind_group_layout, create_pipeline, load_shader,
 };
 use crate::readback::readback_pixels;
-use crate::scene_upload::{scene_to_gpu, scene_to_gpu_frame};
+use crate::scene_upload::{scene_to_gpu, scene_to_gpu_frame_with_timings};
 use crate::video_output::FfmpegVideoWriter;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -29,6 +29,18 @@ pub enum FramePacing {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 /// CPU wall-clock durations for the stages of one GPU-rendered frame.
 pub struct GpuFrameTimings {
+    /// Time spent cloning the base scene and applying animation tracks.
+    pub animation_evaluation: Duration,
+    /// Time spent resetting, replaying, or incrementally stepping physics.
+    pub physics_evaluation: Duration,
+    /// Time spent applying neutral evaluator updates to render geometry.
+    pub geometry_update: Duration,
+    /// Time spent rebuilding the direct-light sampling list.
+    pub light_rebuild: Duration,
+    /// Time spent rebuilding and flattening the mixed primitive BVH.
+    pub bvh_rebuild: Duration,
+    /// Time spent writing mutable buffers into the GPU queue.
+    pub gpu_upload: Duration,
     /// Time spent evaluating the scene and uploading mutable buffers.
     pub scene_update_upload: Duration,
     /// Time from dispatch preparation through synchronous GPU completion.
@@ -37,7 +49,9 @@ pub struct GpuFrameTimings {
     pub readback: Duration,
     /// Time spent converting linear floating-point pixels to RGBA8.
     pub conversion: Duration,
-    /// Total frame time through conversion.
+    /// Time spent delivering the converted frame to its output sink.
+    pub output: Duration,
+    /// Total frame time through output delivery.
     pub total: Duration,
 }
 
@@ -155,6 +169,9 @@ pub trait FrameSink {
     fn samples_for_frame(&self) -> Option<u32> {
         None
     }
+
+    /// Receives final timings after output delivery has completed.
+    fn record_timings(&mut self, _frame_index: u32, _timings: GpuFrameTimings) {}
 }
 
 /// Frame sink that persists finite output as one or more PNG files.
@@ -229,10 +246,15 @@ impl FrameSink for BenchmarkFrameSink {
     /// Records timing and pixels only after the warmup boundary.
     fn deliver(&mut self, frame: CompletedFrame<'_>) -> Result<()> {
         if frame.index >= self.warmup_frames {
-            self.timings.push(frame.timings);
             self.final_image = Some(frame.image.clone());
         }
         Ok(())
+    }
+
+    fn record_timings(&mut self, frame_index: u32, timings: GpuFrameTimings) {
+        if frame_index >= self.warmup_frames {
+            self.timings.push(timings);
+        }
     }
 }
 
@@ -407,16 +429,16 @@ pub async fn render_gpu_progressive_with_sink(
     sink: &mut dyn FrameSink,
 ) -> Result<()> {
     ensure!(
-        source_scene.animation.tracks.is_empty(),
-        "progressive preview requires a scene without animation tracks"
-    );
-    ensure!(
         schedule.loop_duration().is_none(),
         "progressive preview does not support an animation loop duration"
     );
     ensure!(
         !source_scene.physics.is_some_and(|physics| physics.enabled),
         "progressive preview does not support physics-enabled scenes"
+    );
+    ensure!(
+        source_scene.animation.tracks.is_empty(),
+        "progressive preview requires a scene without animation tracks"
     );
     let mut evaluator = AnimationEvaluator::new(source_scene.clone());
     render_gpu_with_sink(
@@ -438,6 +460,19 @@ pub async fn benchmark_gpu_scene(
     source_scene: &toaster_scene::Scene,
     config: GpuBenchmarkConfig,
 ) -> Result<GpuBenchmarkResult> {
+    ensure!(
+        !source_scene.physics.is_some_and(|physics| physics.enabled),
+        "scene-only GPU benchmarks do not evaluate enabled physics; use an evaluator-driven benchmark"
+    );
+    let mut evaluator = AnimationEvaluator::new(source_scene.clone());
+    benchmark_gpu_evaluator(&mut evaluator, config).await
+}
+
+/// Benchmarks evaluator-produced time-zero frames using one GPU setup.
+pub async fn benchmark_gpu_evaluator(
+    evaluator: &mut dyn SceneEvaluator,
+    config: GpuBenchmarkConfig,
+) -> Result<GpuBenchmarkResult> {
     let total_frames = config
         .warmup_frames()
         .checked_add(config.measured_frames())
@@ -450,10 +485,8 @@ pub async fn benchmark_gpu_scene(
         timings: Vec::with_capacity(measured_capacity),
         final_image: None,
     };
-    let mut evaluator = AnimationEvaluator::new(source_scene.clone());
-
     let summary = render_gpu_with_sink(
-        &mut evaluator,
+        evaluator,
         schedule,
         FramePacing::Unpaced,
         None,
@@ -499,6 +532,13 @@ async fn render_gpu_with_sink(
         scene.lights.len(),
         scene.bvh_primitives.len(),
     );
+    let bvh_node_capacity = scene
+        .spheres
+        .len()
+        .checked_add(scene.triangles.len())
+        .and_then(|count| count.checked_mul(2))
+        .and_then(|count| count.checked_sub(1))
+        .context("evaluated scene BVH capacity overflowed")?;
     let total_start = Instant::now();
 
     tracing::info!(
@@ -562,14 +602,25 @@ async fn render_gpu_with_sink(
             animation.evaluation_request(frame)
         };
         let time_seconds = request.time_seconds;
-        let (next_scene, changes) =
-            if progressive.is_some() || frame_mode == FrameMode::StaticIndependent {
-                (scene_to_gpu_frame(&initial_scene)?, SceneChanges::default())
-            } else {
-                let evaluated = evaluator.evaluate(request)?;
-                let changes = evaluated.changes;
-                (scene_to_gpu_frame(&evaluated.scene)?, changes)
-            };
+        let (next_scene, changes, evaluation_timings, packing_timings) = if progressive.is_some() {
+            let cached_lights = Some((scene.lights.as_slice(), scene.params.total_light_area));
+            let (next_scene, packing_timings) =
+                scene_to_gpu_frame_with_timings(&initial_scene, cached_lights)?;
+            (
+                next_scene,
+                SceneChanges::default(),
+                SceneEvaluationTimings::default(),
+                packing_timings,
+            )
+        } else {
+            let evaluated = evaluator.evaluate(request)?;
+            let changes = evaluated.changes;
+            let cached_lights = (!changes.emissive_geometry)
+                .then_some((scene.lights.as_slice(), scene.params.total_light_area));
+            let (next_scene, packing_timings) =
+                scene_to_gpu_frame_with_timings(&evaluated.scene, cached_lights)?;
+            (next_scene, changes, evaluated.timings, packing_timings)
+        };
         ensure!(
             (
                 next_scene.spheres.len(),
@@ -580,6 +631,10 @@ async fn render_gpu_with_sink(
                 next_scene.bvh_primitives.len(),
             ) == initial_counts,
             "evaluated scenes must preserve GPU geometry, material, light, and BVH primitive counts"
+        );
+        ensure!(
+            next_scene.bvh_nodes.len() <= bvh_node_capacity,
+            "evaluated scene BVH exceeds the preallocated GPU node capacity"
         );
         scene = next_scene;
         let requested_samples = sink.samples_for_frame().unwrap_or(scene.params.samples);
@@ -596,17 +651,14 @@ async fn render_gpu_with_sink(
             .context("progressive render is already complete")?,
             None => requested_samples,
         };
-        scene.params.frame_index = if frame_mode == FrameMode::StaticIndependent {
-            0
-        } else {
-            frame
-        };
+        scene.params.frame_index = render_frame_seed(frame, frame_mode);
         scene.params.accumulated_samples = if progressive.is_some() {
             accumulated_samples
         } else {
             0
         };
 
+        let upload_start = Instant::now();
         if changes.camera {
             context
                 .queue
@@ -651,6 +703,7 @@ async fn render_gpu_with_sink(
                 bytemuck::cast_slice(&scene.bvh_primitives),
             );
         }
+        let gpu_upload = upload_start.elapsed();
         let scene_update_upload = scene_update_start.elapsed();
 
         let dispatch_start = Instant::now();
@@ -677,11 +730,18 @@ async fn render_gpu_with_sink(
         let image = pixels_to_rgba_image(&pixels, scene.params.width, scene.params.height)?;
         let conversion = conversion_start.elapsed();
         let render_time = frame_start.elapsed();
-        let timings = GpuFrameTimings {
+        let mut timings = GpuFrameTimings {
+            animation_evaluation: evaluation_timings.animation_evaluation,
+            physics_evaluation: evaluation_timings.physics_evaluation,
+            geometry_update: evaluation_timings.geometry_update,
+            light_rebuild: packing_timings.light_rebuild,
+            bvh_rebuild: packing_timings.bvh_rebuild,
+            gpu_upload,
             scene_update_upload,
             dispatch_wait,
             readback,
             conversion,
+            output: Duration::ZERO,
             total: render_time,
         };
         let completed_samples = if progressive.is_some() {
@@ -691,6 +751,7 @@ async fn render_gpu_with_sink(
         } else {
             scene.params.samples
         };
+        let output_start = Instant::now();
         sink.deliver(CompletedFrame {
             index: frame,
             time_seconds,
@@ -703,17 +764,28 @@ async fn render_gpu_with_sink(
             render_time,
             image: &image,
         })?;
+        timings.output = output_start.elapsed();
+        timings.total = frame_start.elapsed();
+        sink.record_timings(frame, timings);
 
         tracing::debug!(
             frame.index = frame,
             animation_time_seconds = time_seconds as f64,
             samples = scene.params.samples,
             pixels = pixels.len(),
+            animation_evaluation_ms = timings.animation_evaluation.as_secs_f64() * 1000.0,
+            physics_evaluation_ms = timings.physics_evaluation.as_secs_f64() * 1000.0,
+            geometry_update_ms = timings.geometry_update.as_secs_f64() * 1000.0,
+            light_rebuilt = packing_timings.light_rebuilt,
+            light_rebuild_ms = timings.light_rebuild.as_secs_f64() * 1000.0,
+            bvh_rebuild_ms = timings.bvh_rebuild.as_secs_f64() * 1000.0,
+            gpu_upload_ms = timings.gpu_upload.as_secs_f64() * 1000.0,
             scene_update_upload_ms = scene_update_upload.as_secs_f64() * 1000.0,
             dispatch_wait_ms = dispatch_wait.as_secs_f64() * 1000.0,
             readback_ms = readback.as_secs_f64() * 1000.0,
             conversion_ms = conversion.as_secs_f64() * 1000.0,
-            total_ms = render_time.as_secs_f64() * 1000.0,
+            output_ms = timings.output.as_secs_f64() * 1000.0,
+            total_ms = timings.total.as_secs_f64() * 1000.0,
             "completed GPU frame"
         );
 
@@ -797,6 +869,14 @@ fn hold_completed_preview(
 /// Converts a frame index and rate to its ideal elapsed deadline.
 fn frame_deadline_offset(frame: u32, fps: u32) -> Duration {
     Duration::from_secs_f64(frame as f64 / fps as f64)
+}
+
+/// Keeps independent benchmark seeds fixed while normal frame seeds stay monotonic.
+fn render_frame_seed(frame: u32, mode: FrameMode) -> u32 {
+    match mode {
+        FrameMode::Animated => frame,
+        FrameMode::StaticIndependent => 0,
+    }
 }
 
 /// Validates and clamps the next progressive batch to the remaining target.
@@ -889,6 +969,31 @@ mod tests {
     }
 
     #[test]
+    fn looped_scene_time_does_not_wrap_render_rng_seed() {
+        let schedule = AnimationConfig::indefinite(4)
+            .unwrap()
+            .with_loop_duration(2.0)
+            .unwrap();
+
+        assert_eq!(schedule.evaluation_request(0).time_seconds, 0.0);
+        assert_eq!(schedule.evaluation_request(8).time_seconds, 0.0);
+        assert_eq!(schedule.evaluation_request(8).loop_cycle, 1);
+        assert_eq!(render_frame_seed(0, FrameMode::Animated), 0);
+        assert_eq!(render_frame_seed(8, FrameMode::Animated), 8);
+        assert_eq!(render_frame_seed(8, FrameMode::StaticIndependent), 0);
+    }
+
+    #[test]
+    fn real_time_schedule_uses_every_sequential_frame_state() {
+        let schedule = AnimationConfig::indefinite(4).unwrap();
+        let requests = (0..4)
+            .map(|frame| schedule.evaluation_request(frame).time_seconds)
+            .collect::<Vec<_>>();
+
+        assert_eq!(requests, vec![0.0, 0.25, 0.5, 0.75]);
+    }
+
+    #[test]
     fn real_time_pacing_rejects_a_schedule_without_fps_before_gpu_setup() {
         let mut sink = RecordingSink::default();
         let error = pollster::block_on(render_scene_gpu_animation_with_sink(
@@ -934,6 +1039,7 @@ mod tests {
             readback: Duration::from_millis(4),
             conversion: Duration::from_millis(2),
             total,
+            ..GpuFrameTimings::default()
         };
         assert_eq!(timings.total, total);
     }
@@ -962,8 +1068,7 @@ mod tests {
     fn progressive_render_rejects_enabled_physics_before_gpu_setup() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../scenes/011_physics_rigid_bodies.json");
-        let mut scene = toaster_scene::load_scene(path).unwrap();
-        scene.animation.tracks.clear();
+        let scene = toaster_scene::load_scene(path).unwrap();
         let mut sink = RecordingSink::default();
         let error = pollster::block_on(render_gpu_progressive_with_sink(
             &scene,

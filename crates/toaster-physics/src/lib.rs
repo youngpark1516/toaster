@@ -3,9 +3,10 @@
 mod rapier_backend;
 
 use anyhow::{bail, Context, Result};
+use std::time::Instant;
 use toaster_scene::{
     animation_changes, apply_rigid_transform, EvaluatedScene, EvaluationRequest, ObjectBinding,
-    RigidTransform, Scene, SceneChanges, SceneEvaluator,
+    RigidTransform, Scene, SceneChanges, SceneEvaluationTimings, SceneEvaluator,
 };
 
 pub use rapier_backend::RapierRigidBodyBackend;
@@ -128,14 +129,19 @@ impl SceneEvaluator for PhysicsSceneEvaluator {
     }
 
     fn evaluate(&mut self, request: EvaluationRequest) -> Result<EvaluatedScene> {
+        let animation_start = Instant::now();
         let mut scene = self.source.evaluate_at(request.time_seconds)?;
+        let animation_evaluation = animation_start.elapsed();
         let mut changes = animation_changes(&self.source);
+        let mut physics_evaluation = Default::default();
+        let mut geometry_update = Default::default();
         if let Some(backend) = &mut self.backend {
             let settings = self
                 .source
                 .physics
                 .context("active physics evaluator requires physics settings")?;
             let backend_request = Self::physics_request(settings, request)?;
+            let physics_start = Instant::now();
             if self.last_physics_request.is_some_and(|previous| {
                 previous.loop_cycle != backend_request.loop_cycle
                     || backend_request.fixed_tick < previous.fixed_tick
@@ -143,7 +149,9 @@ impl SceneEvaluator for PhysicsSceneEvaluator {
                 backend.reset()?;
             }
             let state = backend.evaluate(backend_request)?;
+            physics_evaluation = physics_start.elapsed();
             self.last_physics_request = Some(backend_request);
+            let geometry_start = Instant::now();
             for update in state.updates {
                 match update {
                     PhysicsSceneUpdate::RigidTransform { binding, transform } => {
@@ -151,13 +159,22 @@ impl SceneEvaluator for PhysicsSceneEvaluator {
                     }
                 }
             }
+            geometry_update = geometry_start.elapsed();
             changes = changes.union(state.changes);
         }
         if !self.evaluated_once {
             changes = SceneChanges::all();
         }
         self.evaluated_once = true;
-        Ok(EvaluatedScene { scene, changes })
+        Ok(EvaluatedScene {
+            scene,
+            changes,
+            timings: SceneEvaluationTimings {
+                animation_evaluation,
+                physics_evaluation,
+                geometry_update,
+            },
+        })
     }
 }
 
@@ -260,10 +277,48 @@ mod tests {
         let mut evaluator = PhysicsSceneEvaluator::new(base_scene()).unwrap();
         let falling = evaluator.evaluate(request(0.5, 0)).unwrap();
         assert!(falling.scene.spheres[0].center.y < 3.0);
+        assert_eq!(falling.scene.spheres[0].radius, 0.5);
+        assert_eq!(falling.scene.spheres[0].material_index, 0);
+        assert_eq!(falling.scene.spheres[0].group.as_deref(), Some("ball"));
         let settled = evaluator.evaluate(request(3.0, 0)).unwrap();
         assert!(settled.scene.spheres[0].center.y >= 0.49);
         assert!(settled.scene.spheres[0].center.y < 0.6);
         assert_eq!(evaluator.source_scene().spheres[0].center.y, 3.0);
+    }
+
+    #[test]
+    fn frame_zero_is_the_exact_authored_geometry() {
+        let source = base_scene();
+        let mut evaluator = PhysicsSceneEvaluator::new(source.clone()).unwrap();
+        let evaluated = evaluator.evaluate(request(0.0, 0)).unwrap();
+
+        assert_eq!(evaluated.scene.spheres[0].center, source.spheres[0].center);
+        assert_eq!(
+            evaluated.scene.triangles[0].vertices,
+            source.triangles[0].vertices
+        );
+        assert_eq!(
+            evaluated.scene.triangles[0].material_index,
+            source.triangles[0].material_index
+        );
+        assert_eq!(
+            evaluated.scene.triangles[0].group,
+            source.triangles[0].group
+        );
+    }
+
+    #[test]
+    fn fixed_ticks_use_latest_completed_timestep() {
+        let settings = base_scene().physics.unwrap();
+        let tick_zero = PhysicsSceneEvaluator::physics_request(settings, request(0.0, 0)).unwrap();
+        let tick_one =
+            PhysicsSceneEvaluator::physics_request(settings, request(1.0 / 60.0, 0)).unwrap();
+        let frame_at_24_fps =
+            PhysicsSceneEvaluator::physics_request(settings, request(1.0 / 24.0, 0)).unwrap();
+
+        assert_eq!(tick_zero.fixed_tick, 0);
+        assert_eq!(tick_one.fixed_tick, 1);
+        assert_eq!(frame_at_24_fps.fixed_tick, 2);
     }
 
     #[test]

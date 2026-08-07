@@ -29,9 +29,9 @@ pub use animation::{frame_output_path, AnimationConfig};
 pub use device::{create_gpu_context, GpuAdapterInfo, GpuContext};
 pub use gradient::render_gradient;
 pub use path_tracer::{
-    benchmark_gpu_scene, render_evaluated_gpu_animation, render_evaluated_gpu_animation_with_sink,
-    render_evaluated_gpu_video, render_gpu_animation_with_sink, render_gpu_progressive_with_sink,
-    render_scene_gpu_animation, render_scene_gpu_animation_with_sink, render_scene_gpu_video,
-    CompletedFrame, FramePacing, FrameSink, GpuBenchmarkConfig, GpuBenchmarkResult,
-    GpuFrameTimings, ProgressiveRenderConfig,
+    benchmark_gpu_evaluator, benchmark_gpu_scene, render_evaluated_gpu_animation,
+    render_evaluated_gpu_animation_with_sink, render_evaluated_gpu_video,
+    render_gpu_animation_with_sink, render_gpu_progressive_with_sink, render_scene_gpu_animation,
+    render_scene_gpu_animation_with_sink, render_scene_gpu_video, CompletedFrame, FramePacing,
+    FrameSink, GpuBenchmarkConfig, GpuBenchmarkResult, GpuFrameTimings, ProgressiveRenderConfig,
 };

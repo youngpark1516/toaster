@@ -1183,6 +1183,35 @@ mod tests {
     }
 
     #[test]
+    fn enabled_physics_allows_camera_and_unrelated_group_animation() {
+        let scene = parse(
+            r#"{
+            "camera":{"position":[0,0,5],"look_at":[0,0,0],"fov_degrees":45},
+            "render":{"width":1,"height":1,"samples":1,"max_bounces":1},
+            "physics":{"type":"rigid_body"},
+            "materials":[{"name":"m","type":"diffuse","albedo":[1,1,1]}],
+            "objects":[
+              {"type":"sphere","center":[0,2,0],"radius":0.5,"material":"m","group":"body",
+               "physics":{"body":"dynamic"}},
+              {"type":"sphere","center":[-1,0,0],"radius":0.25,"material":"m","group":"prop"}
+            ],
+            "animation":{"tracks":[
+              {"type":"translation","target":{"type":"group","name":"prop"},
+               "interpolation":"linear","keyframes":[{"time":0,"value":[0,0,0]},{"time":1,"value":[1,0,0]}]},
+              {"type":"rotation","target":{"type":"camera"},"axis":[0,1,0],"pivot":[0,0,0],
+               "interpolation":"linear","keyframes":[{"time":0,"degrees":0},{"time":1,"degrees":90}]}
+            ]}
+        }"#,
+        )
+        .unwrap();
+        let evaluated = scene.evaluate_at(1.0).unwrap();
+
+        assert_eq!(evaluated.spheres[0].center, Vec3::new(0.0, 2.0, 0.0));
+        assert_eq!(evaluated.spheres[1].center, Vec3::ZERO);
+        assert!(evaluated.camera.position.abs_diff_eq(Vec3::X * 5.0, 1.0e-5));
+    }
+
+    #[test]
     fn rejects_enabled_physics_animation_conflicts_and_invalid_bindings() {
         let conflict = r#"{
             "camera":{"position":[0,0,3],"look_at":[0,0,0],"fov_degrees":45},

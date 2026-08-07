@@ -29,7 +29,7 @@ pub use animation::{
 pub use environment::{EnvironmentMap, EnvironmentSample};
 pub use evaluation::{
     animation_changes, AnimationEvaluator, EvaluatedScene, EvaluationRequest, SceneChanges,
-    SceneEvaluator,
+    SceneEvaluationTimings, SceneEvaluator,
 };
 pub use loader::load_scene;
 pub use material::Material;

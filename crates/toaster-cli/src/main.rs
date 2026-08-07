@@ -419,7 +419,9 @@ fn run(command: Command) -> anyhow::Result<()> {
                 measured_frames = runs,
                 "starting GPU benchmark"
             );
-            let result = pollster::block_on(toaster_gpu::benchmark_gpu_scene(&scene, config))?;
+            let mut evaluator = toaster_physics::PhysicsSceneEvaluator::new(scene.clone())?;
+            let result =
+                pollster::block_on(toaster_gpu::benchmark_gpu_evaluator(&mut evaluator, config))?;
 
             if let Some(image_path) = image_out.as_deref() {
                 benchmark::save_reference_image(&result, image_path)?;
@@ -436,6 +438,12 @@ fn run(command: Command) -> anyhow::Result<()> {
             tracing::info!(
                 path = %out.display(),
                 setup_ms = report.setup_ms,
+                median_animation_evaluation_ms = report.summary.animation_evaluation_ms.median,
+                median_physics_evaluation_ms = report.summary.physics_evaluation_ms.median,
+                median_geometry_update_ms = report.summary.geometry_update_ms.median,
+                median_light_rebuild_ms = report.summary.light_rebuild_ms.median,
+                median_bvh_rebuild_ms = report.summary.bvh_rebuild_ms.median,
+                median_gpu_upload_ms = report.summary.gpu_upload_ms.median,
                 median_total_ms = report.summary.total_ms.median,
                 p95_total_ms = report.summary.total_ms.p95,
                 image_sha256 = %report.image.rgba_sha256,
@@ -607,12 +615,12 @@ fn resolve_progressive_preview(
         "--loop-duration cannot be used with --progressive"
     );
     anyhow::ensure!(
-        scene.animation.tracks.is_empty(),
-        "--progressive requires a scene without animation tracks"
-    );
-    anyhow::ensure!(
         !scene.physics.is_some_and(|physics| physics.enabled),
         "--progressive does not support physics-enabled scenes"
+    );
+    anyhow::ensure!(
+        scene.animation.tracks.is_empty(),
+        "--progressive requires a scene without animation tracks"
     );
 
     let config = ProgressivePreview {
@@ -921,8 +929,10 @@ mod tests {
         let physics_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../scenes/011_physics_rigid_bodies.json");
         let mut physics_scene = toaster_scene::load_scene(physics_path).unwrap();
+        let error =
+            resolve_progressive_preview(true, None, None, None, None, &physics_scene).unwrap_err();
+        assert!(error.to_string().contains("physics-enabled"));
         physics_scene.animation.tracks.clear();
-        assert!(resolve_progressive_preview(true, None, None, None, None, &physics_scene).is_err());
         physics_scene.physics.as_mut().unwrap().enabled = false;
         assert!(resolve_progressive_preview(true, None, None, None, None, &physics_scene).is_ok());
     }

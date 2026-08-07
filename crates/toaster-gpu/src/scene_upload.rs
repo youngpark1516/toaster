@@ -3,6 +3,7 @@
 use anyhow::{bail, Context, Result};
 use glam::Vec3;
 use std::path::Path;
+use std::time::{Duration, Instant};
 use toaster_bvh::{Aabb, FlatBvh, PrimitiveInfo, PrimitiveRef};
 use toaster_scene::{Background, Material, Scene, Triangle};
 
@@ -37,6 +38,17 @@ pub struct SceneGpuData {
     pub environment_pixels: Vec<[f32; 4]>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+/// CPU wall-clock diagnostics for rebuilding renderer acceleration data.
+pub(crate) struct ScenePackingTimings {
+    /// Whether the direct-light list was rebuilt rather than reused.
+    pub light_rebuilt: bool,
+    /// Time spent rebuilding the direct-light sampling list.
+    pub light_rebuild: Duration,
+    /// Time spent rebuilding and flattening the mixed primitive BVH.
+    pub bvh_rebuild: Duration,
+}
+
 /// Loads a JSON scene and converts it into [`SceneGpuData`].
 pub fn load_scene_gpu(path: impl AsRef<Path>) -> Result<SceneGpuData> {
     let scene = toaster_scene::load_scene(path)?;
@@ -45,16 +57,29 @@ pub fn load_scene_gpu(path: impl AsRef<Path>) -> Result<SceneGpuData> {
 
 /// Converts a complete scene, including static texture and environment pixels.
 pub fn scene_to_gpu(scene: &Scene) -> Result<SceneGpuData> {
-    scene_to_gpu_inner(scene, true)
+    scene_to_gpu_inner(scene, true, None).map(|(data, _)| data)
 }
 
 /// Converts per-frame mutable data while omitting invariant pixel payloads.
+#[cfg(test)]
 pub(crate) fn scene_to_gpu_frame(scene: &Scene) -> Result<SceneGpuData> {
-    scene_to_gpu_inner(scene, false)
+    scene_to_gpu_frame_with_timings(scene, None).map(|(data, _)| data)
+}
+
+/// Converts mutable frame data and reports BVH/light-list rebuild costs.
+pub(crate) fn scene_to_gpu_frame_with_timings(
+    scene: &Scene,
+    cached_lights: Option<(&[GpuLight], f32)>,
+) -> Result<(SceneGpuData, ScenePackingTimings)> {
+    scene_to_gpu_inner(scene, false, cached_lights)
 }
 
 /// Validates and packs a scene, optionally retaining static pixel arrays.
-fn scene_to_gpu_inner(scene: &Scene, include_static_pixels: bool) -> Result<SceneGpuData> {
+fn scene_to_gpu_inner(
+    scene: &Scene,
+    include_static_pixels: bool,
+    cached_lights: Option<(&[GpuLight], f32)>,
+) -> Result<(SceneGpuData, ScenePackingTimings)> {
     if scene.spheres.is_empty() && scene.triangles.is_empty() {
         bail!("GPU renderer requires at least one object");
     }
@@ -165,9 +190,20 @@ fn scene_to_gpu_inner(scene: &Scene, include_static_pixels: bool) -> Result<Scen
         .copied()
         .map(|material| material_to_gpu(material, &texture_metadata))
         .collect::<Result<Vec<_>>>()?;
-    let (lights, total_light_area) = lights_to_gpu(scene)?;
+    let (lights, total_light_area, light_rebuilt, light_rebuild) = match cached_lights {
+        Some((lights, total_light_area)) => {
+            (lights.to_vec(), total_light_area, false, Duration::ZERO)
+        }
+        None => {
+            let light_start = Instant::now();
+            let (lights, total_light_area) = lights_to_gpu(scene)?;
+            (lights, total_light_area, true, light_start.elapsed())
+        }
+    };
     let light_count = u32::try_from(lights.len()).context("too many lights for GPU")?;
+    let bvh_start = Instant::now();
     let (bvh_nodes, bvh_primitives) = build_gpu_bvh(scene)?;
+    let bvh_rebuild = bvh_start.elapsed();
     let bvh_node_count = u32::try_from(bvh_nodes.len()).context("too many BVH nodes for GPU")?;
     let bvh_primitive_count =
         u32::try_from(bvh_primitives.len()).context("too many BVH primitives for GPU")?;
@@ -205,7 +241,7 @@ fn scene_to_gpu_inner(scene: &Scene, include_static_pixels: bool) -> Result<Scen
     } else {
         Vec::new()
     };
-    Ok(SceneGpuData {
+    let data = SceneGpuData {
         params: GpuRenderParams {
             width: scene.render.width,
             height: scene.render.height,
@@ -243,7 +279,15 @@ fn scene_to_gpu_inner(scene: &Scene, include_static_pixels: bool) -> Result<Scen
         bvh_primitives,
         texture_pixels,
         environment_pixels,
-    })
+    };
+    Ok((
+        data,
+        ScenePackingTimings {
+            light_rebuilt,
+            light_rebuild,
+            bvh_rebuild,
+        },
+    ))
 }
 
 fn build_gpu_bvh(scene: &Scene) -> Result<(Vec<GpuBvhNode>, Vec<GpuPrimitiveRef>)> {
@@ -693,7 +737,7 @@ mod tests {
             },
         )
         .unwrap();
-        let after = scene_to_gpu_frame(&evaluated).unwrap();
+        let (after, packing) = scene_to_gpu_frame_with_timings(&evaluated, None).unwrap();
 
         assert_eq!(before.spheres.len(), after.spheres.len());
         assert_eq!(before.triangles.len(), after.triangles.len());
@@ -709,5 +753,41 @@ mod tests {
         let moved_light = after.lights.iter().find(|light| light.kind == 1).unwrap();
         assert_eq!(moved_light.center_radius[..3], [20.0, 10.0, 0.0]);
         assert_ne!(before.bvh_nodes[0].max, after.bvh_nodes[0].max);
+        assert!(packing.light_rebuilt);
+    }
+
+    #[test]
+    fn non_emissive_motion_reuses_the_light_list_but_rebuilds_the_bvh() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/011_physics_rigid_bodies.json");
+        let source = toaster_scene::load_scene(path).unwrap();
+        let before = scene_to_gpu(&source).unwrap();
+        let box_body = source
+            .rigid_bodies
+            .iter()
+            .find(|body| body.group.as_deref() == Some("crate_0"))
+            .unwrap();
+        let mut evaluated = source.clone();
+        toaster_scene::apply_rigid_transform(
+            &source,
+            &mut evaluated,
+            &box_body.binding,
+            toaster_scene::RigidTransform {
+                translation: Vec3::new(-12.0, 4.0, -3.0),
+                rotation: glam::Quat::from_rotation_y(0.7),
+            },
+        )
+        .unwrap();
+        let (after, packing) = scene_to_gpu_frame_with_timings(
+            &evaluated,
+            Some((before.lights.as_slice(), before.params.total_light_area)),
+        )
+        .unwrap();
+
+        assert!(!packing.light_rebuilt);
+        assert_eq!(packing.light_rebuild, Duration::ZERO);
+        assert_eq!(after.lights.len(), before.lights.len());
+        assert_eq!(after.lights[0].v0, before.lights[0].v0);
+        assert_ne!(after.bvh_nodes[0].min, before.bvh_nodes[0].min);
     }
 }
