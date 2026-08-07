@@ -46,6 +46,13 @@ pub struct GpuRenderParams {
     pub accumulated_samples: u32,
     /// Alignment padding.
     pub _pad1: [u32; 3],
+
+    /// Active flattened BVH node count.
+    pub bvh_node_count: u32,
+    /// Active BVH primitive-reference count.
+    pub bvh_primitive_count: u32,
+    /// Alignment padding.
+    pub _pad2: [u32; 2],
 }
 
 #[repr(C)]
@@ -159,18 +166,47 @@ pub struct GpuLight {
     pub area_cumulative: [f32; 4],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+/// Flattened BVH node mirrored by WGSL `BvhNode`.
+pub struct GpuBvhNode {
+    /// Minimum bounds in xyz.
+    pub min: [f32; 4],
+    /// Maximum bounds in xyz.
+    pub max: [f32; 4],
+
+    /// Interior right-child index or leaf first-primitive index.
+    pub first_or_right: u32,
+    /// Leaf primitive count; zero identifies an interior node.
+    pub primitive_count: u32,
+    /// Alignment padding.
+    pub _pad: [u32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+/// Tagged scene primitive reference mirrored by WGSL `PrimitiveRef`.
+pub struct GpuPrimitiveRef {
+    /// Kind code: sphere 0 or triangle 1.
+    pub kind: u32,
+    /// Index into the corresponding scene geometry buffer.
+    pub index: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn gpu_types_match_wgsl_layout_sizes() {
-        assert_eq!(std::mem::size_of::<GpuRenderParams>(), 80);
+        assert_eq!(std::mem::size_of::<GpuRenderParams>(), 96);
         assert_eq!(std::mem::size_of::<GpuCamera>(), 64);
         assert_eq!(std::mem::size_of::<GpuSphere>(), 32);
         assert_eq!(std::mem::size_of::<GpuTriangle>(), 64);
         assert_eq!(std::mem::size_of::<GpuTriangleAttributes>(), 80);
         assert_eq!(std::mem::size_of::<GpuMaterial>(), 48);
         assert_eq!(std::mem::size_of::<GpuLight>(), 96);
+        assert_eq!(std::mem::size_of::<GpuBvhNode>(), 48);
+        assert_eq!(std::mem::size_of::<GpuPrimitiveRef>(), 8);
     }
 }

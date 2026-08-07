@@ -53,7 +53,7 @@ pub fn create_bind_group(
     })
 }
 
-/// Creates the active ten-buffer path-tracing bind-group layout.
+/// Creates the active twelve-buffer path-tracing bind-group layout.
 ///
 /// Binding order must remain synchronized with `pathtrace_spheres.wgsl` and
 /// [`create_pathtrace_bind_group`].
@@ -171,6 +171,28 @@ pub fn create_pathtrace_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGr
                 },
                 count: None,
             },
+            // binding 10: flattened BVH nodes
+            wgpu::BindGroupLayoutEntry {
+                binding: 10,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            // binding 11: BVH primitive references
+            wgpu::BindGroupLayoutEntry {
+                binding: 11,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
         ],
     })
 }
@@ -224,6 +246,14 @@ pub fn create_pathtrace_bind_group(
             wgpu::BindGroupEntry {
                 binding: 9,
                 resource: buffers.environment_pixels.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 10,
+                resource: buffers.bvh_nodes.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 11,
+                resource: buffers.bvh_primitives.as_entire_binding(),
             },
         ],
     })

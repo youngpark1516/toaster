@@ -1610,6 +1610,7 @@ version = "0.1.0"
 dependencies = [
  "glam",
  "rand",
+ "toaster-bvh",
  "toaster-core",
  "toaster-scene",
  "tracing",
@@ -1624,6 +1625,7 @@ dependencies = [
  "glam",
  "image",
  "pollster",
+ "toaster-bvh",
  "toaster-core",
  "toaster-scene",
  "tracing",

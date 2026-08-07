@@ -2,4 +2,4 @@
 //!
 //! Animation currently applies transforms directly in [`crate::animation`].
 //! Physics will eventually share stable transform operations through this
-//! module after the BVH representation is finalized.
+//! module when reusable transform operations need a dedicated API.

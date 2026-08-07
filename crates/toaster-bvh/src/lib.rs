@@ -1,12 +1,12 @@
-//! In-progress bounding-volume hierarchy integration boundary.
-//!
-//! The incoming BVH implementation will own CPU construction and a flattened
-//! traversal representation. Until that branch lands, the modules below remain
-//! intentionally empty contracts and are not used by either renderer.
+//! Bounding-volume hierarchy construction and renderer-friendly flattening.
 
-/// Intended home for finite axis-aligned bounds and ray-box tests.
+/// Finite axis-aligned bounds and ray-box tests.
 pub mod aabb;
-/// Intended home for hierarchy construction over scene primitives.
+/// Hierarchy construction over stable scene primitive references.
 pub mod bvh;
-/// Intended home for converting constructed nodes to GPU-friendly flat data.
+/// Conversion from recursive nodes to CPU/GPU-friendly flat data.
 pub mod flatten;
+
+pub use aabb::Aabb;
+pub use bvh::{Bvh, BvhNode, PrimitiveInfo, PrimitiveRef};
+pub use flatten::{FlatBvh, FlatNode};

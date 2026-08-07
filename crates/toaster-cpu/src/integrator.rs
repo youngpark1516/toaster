@@ -1,6 +1,6 @@
 //! CPU reference path integration and material scattering.
 
-use crate::intersect::{intersect_scene, HitRecord};
+use crate::intersect::{intersect_scene, HitRecord, SceneBvh};
 use crate::light::AreaLights;
 use glam::Vec3;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -9,6 +9,13 @@ use toaster_scene::{Background, Material, Scene};
 
 const RENDER_SEED: u64 = 0x0054_4f41_5354_4552;
 const RAY_EPSILON: f32 = 0.001;
+
+#[derive(Clone, Copy)]
+struct TraceContext<'a> {
+    scene: &'a Scene,
+    bvh: &'a SceneBvh,
+    lights: &'a AreaLights,
+}
 
 /// Renders a complete scene into a deterministic linear-RGB image.
 ///
@@ -29,6 +36,12 @@ pub fn render(scene: &Scene) -> ImageBuffer {
         emissive_area_lights = lights.len(),
         "prepared CPU path trace"
     );
+    let bvh = SceneBvh::build(scene);
+    let trace = TraceContext {
+        scene,
+        bvh: &bvh,
+        lights: &lights,
+    };
 
     let mut image = ImageBuffer::new(settings.width, settings.height);
     let mut rng = StdRng::seed_from_u64(RENDER_SEED);
@@ -40,8 +53,7 @@ pub fn render(scene: &Scene) -> ImageBuffer {
                 let v = 1.0 - (y as f32 + rng.random::<f32>()) / settings.height as f32;
                 color += ray_color_inner(
                     &camera.ray(u, v),
-                    scene,
-                    &lights,
+                    trace,
                     &mut rng,
                     settings.max_bounces,
                     true,
@@ -65,7 +77,19 @@ pub fn ray_color<R: Rng + ?Sized>(
     remaining_depth: u32,
 ) -> Vec3 {
     let lights = AreaLights::collect(scene);
-    ray_color_inner(ray, scene, &lights, rng, remaining_depth, true, None)
+    let bvh = SceneBvh::build(scene);
+    ray_color_inner(
+        ray,
+        TraceContext {
+            scene,
+            bvh: &bvh,
+            lights: &lights,
+        },
+        rng,
+        remaining_depth,
+        true,
+        None,
+    )
 }
 
 /// Recursively integrates emitted, direct, indirect, and background radiance.
@@ -74,18 +98,20 @@ pub fn ray_color<R: Rng + ?Sized>(
 /// `environment_bsdf_pdf` enables MIS when a diffuse path reaches the map.
 fn ray_color_inner<R: Rng + ?Sized>(
     ray: &Ray,
-    scene: &Scene,
-    lights: &AreaLights,
+    trace: TraceContext<'_>,
     rng: &mut R,
     remaining_depth: u32,
     include_emission: bool,
     environment_bsdf_pdf: Option<f32>,
 ) -> Vec3 {
+    let scene = trace.scene;
+    let bvh = trace.bvh;
+    let lights = trace.lights;
     if remaining_depth == 0 {
         return Vec3::ZERO;
     }
 
-    if let Some(hit) = intersect_scene(ray, scene, RAY_EPSILON) {
+    if let Some(hit) = intersect_scene(ray, scene, bvh, RAY_EPSILON) {
         let material = material_at_hit(scene.materials[hit.material_index], &hit, scene);
         if let Material::Emissive { color, strength } = material {
             return if include_emission {
@@ -99,8 +125,7 @@ fn ray_color_inner<R: Rng + ?Sized>(
             let indirect = scatter.attenuation
                 * ray_color_inner(
                     &scatter.ray,
-                    scene,
-                    lights,
+                    trace,
                     rng,
                     remaining_depth - 1,
                     next_include_emission,
@@ -108,8 +133,8 @@ fn ray_color_inner<R: Rng + ?Sized>(
                 );
             let direct = match material {
                 Material::Diffuse { albedo } => {
-                    direct_area_light(&hit, albedo, scene, lights, rng)
-                        + direct_environment(&hit, albedo, scene, rng)
+                    direct_area_light(&hit, albedo, scene, bvh, lights, rng)
+                        + direct_environment(&hit, albedo, scene, bvh, rng)
                 }
                 _ => Vec3::ZERO,
             };
@@ -144,6 +169,7 @@ fn direct_area_light<R: Rng + ?Sized>(
     hit: &HitRecord,
     albedo: Vec3,
     scene: &Scene,
+    bvh: &SceneBvh,
     lights: &AreaLights,
     rng: &mut R,
 ) -> Vec3 {
@@ -167,7 +193,7 @@ fn direct_area_light<R: Rng + ?Sized>(
     }
 
     let shadow_ray = Ray::new(shadow_origin, direction);
-    if intersect_scene(&shadow_ray, scene, RAY_EPSILON)
+    if intersect_scene(&shadow_ray, scene, bvh, RAY_EPSILON)
         .is_some_and(|blocker| blocker.distance < distance - 2.0 * RAY_EPSILON)
     {
         return Vec3::ZERO;
@@ -183,6 +209,7 @@ fn direct_environment<R: Rng + ?Sized>(
     hit: &HitRecord,
     albedo: Vec3,
     scene: &Scene,
+    bvh: &SceneBvh,
     rng: &mut R,
 ) -> Vec3 {
     if scene.render.background != Background::Environment {
@@ -206,7 +233,7 @@ fn direct_environment<R: Rng + ?Sized>(
     }
 
     let shadow_ray = Ray::new(hit.point + hit.normal * RAY_EPSILON, sample.direction);
-    if intersect_scene(&shadow_ray, scene, RAY_EPSILON).is_some() {
+    if intersect_scene(&shadow_ray, scene, bvh, RAY_EPSILON).is_some() {
         return Vec3::ZERO;
     }
 
@@ -663,12 +690,14 @@ mod tests {
     #[test]
     fn direct_light_is_positive_when_visible() {
         let scene = direct_light_scene(false);
+        let bvh = SceneBvh::build(&scene);
         let lights = AreaLights::collect(&scene);
         let mut rng = StdRng::seed_from_u64(11);
         let color = direct_area_light(
             &test_hit(Vec3::Y, true),
             Vec3::splat(0.5),
             &scene,
+            &bvh,
             &lights,
             &mut rng,
         );
@@ -678,12 +707,14 @@ mod tests {
     #[test]
     fn shadow_ray_removes_blocked_direct_light() {
         let scene = direct_light_scene(true);
+        let bvh = SceneBvh::build(&scene);
         let lights = AreaLights::collect(&scene);
         let mut rng = StdRng::seed_from_u64(11);
         let color = direct_area_light(
             &test_hit(Vec3::Y, true),
             Vec3::splat(0.5),
             &scene,
+            &bvh,
             &lights,
             &mut rng,
         );
@@ -699,9 +730,10 @@ mod tests {
             Some(EnvironmentMap::new(1, 1, vec![Vec3::splat(2.0)], 1.0, 0.0).unwrap());
         let mut rng = StdRng::seed_from_u64(12);
         let hit = test_hit(Vec3::Y, true);
+        let bvh = SceneBvh::build(&scene);
         let mut sum = Vec3::ZERO;
         for _ in 0..64 {
-            sum += direct_environment(&hit, Vec3::splat(0.5), &scene, &mut rng);
+            sum += direct_environment(&hit, Vec3::splat(0.5), &scene, &bvh, &mut rng);
         }
 
         assert!(sum.cmpgt(Vec3::ZERO).all());
@@ -717,11 +749,15 @@ mod tests {
         let environment_pdf = scene.environment.as_ref().unwrap().pdf_solid_angle(Vec3::X);
         let expected = Vec3::splat(power_heuristic(bsdf_pdf, environment_pdf));
         let mut rng = StdRng::seed_from_u64(13);
+        let bvh = SceneBvh::build(&scene);
 
         let color = ray_color_inner(
             &ray,
-            &scene,
-            &AreaLights::default(),
+            TraceContext {
+                scene: &scene,
+                bvh: &bvh,
+                lights: &AreaLights::default(),
+            },
             &mut rng,
             1,
             true,
@@ -752,7 +788,9 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../scenes/009_gltf_textured_quad.json");
         let scene = toaster_scene::load_scene(path).unwrap();
-        let hit = intersect_scene(&Ray::new(Vec3::ZERO, -Vec3::Z), &scene, RAY_EPSILON).unwrap();
+        let bvh = SceneBvh::build(&scene);
+        let hit =
+            intersect_scene(&Ray::new(Vec3::ZERO, -Vec3::Z), &scene, &bvh, RAY_EPSILON).unwrap();
         let material = material_at_hit(scene.materials[hit.material_index], &hit, &scene);
 
         let Material::Diffuse { albedo } = material else {

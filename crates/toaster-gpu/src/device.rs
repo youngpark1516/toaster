@@ -1,5 +1,7 @@
 //! GPU adapter and device setup.
-use anyhow::Result;
+use anyhow::{ensure, Result};
+
+const REQUIRED_STORAGE_BUFFERS_PER_SHADER_STAGE: u32 = 10;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Stable, serializable-style metadata for the selected adapter.
@@ -43,7 +45,7 @@ pub struct GpuContext {
     pub info: GpuAdapterInfo,
 }
 
-/// Requests a high-performance headless adapter and a default-limit device.
+/// Requests a high-performance headless adapter and the renderer's buffer limits.
 pub async fn create_gpu_context() -> Result<GpuContext> {
     let instance = wgpu::Instance::default();
 
@@ -65,11 +67,24 @@ pub async fn create_gpu_context() -> Result<GpuContext> {
         "selected GPU adapter"
     );
 
+    let adapter_limits = adapter.limits();
+    ensure!(
+        adapter_limits.max_storage_buffers_per_shader_stage
+            >= REQUIRED_STORAGE_BUFFERS_PER_SHADER_STAGE,
+        "selected GPU supports {} compute storage buffers, but Toaster requires {}",
+        adapter_limits.max_storage_buffers_per_shader_stage,
+        REQUIRED_STORAGE_BUFFERS_PER_SHADER_STAGE
+    );
+    let required_limits = wgpu::Limits {
+        max_storage_buffers_per_shader_stage: REQUIRED_STORAGE_BUFFERS_PER_SHADER_STAGE,
+        ..wgpu::Limits::default()
+    };
+
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("Toaster GPU Device"),
             required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::default(),
+            required_limits,
             memory_hints: wgpu::MemoryHints::Performance,
             trace: wgpu::Trace::Off,
         })

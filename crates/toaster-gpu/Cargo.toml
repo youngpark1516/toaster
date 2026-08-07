@@ -15,5 +15,6 @@ pollster.workspace = true
 image.workspace = true
 wgpu.workspace = true
 toaster-core = { path = "../toaster-core" }
+toaster-bvh = { path = "../toaster-bvh" }
 toaster-scene = { path = "../toaster-scene" }
 tracing.workspace = true

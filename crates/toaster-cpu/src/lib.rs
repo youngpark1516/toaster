@@ -2,7 +2,7 @@
 
 /// Recursive path integration, material scattering, and direct-light sampling.
 pub mod integrator;
-/// Brute-force sphere, triangle, and scene intersection.
+/// Sphere/triangle tests and BVH-accelerated scene intersection.
 pub mod intersect;
 /// Emissive-triangle collection and area sampling.
 pub mod light;

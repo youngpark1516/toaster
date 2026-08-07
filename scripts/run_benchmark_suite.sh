@@ -13,6 +13,11 @@ if [[ -n "${regression_limit}" && -z "${comparison_root}" ]]; then
     exit 2
 fi
 
+if ! command -v grep >/dev/null 2>&1; then
+    echo "benchmark suite requires grep to validate the selected adapter" >&2
+    exit 127
+fi
+
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repository_root}"
 mkdir -p "${benchmark_root}"
@@ -47,7 +52,7 @@ for scene_path in "${benchmark_scenes[@]}"; do
 
     echo "Benchmarking ${scene_name}" >&2
     "${command[@]}"
-    if rg -q '"device_type": "Cpu"' "${report_path}"; then
+    if grep -Eq '"device_type"[[:space:]]*:[[:space:]]*"Cpu"' "${report_path}"; then
         echo "benchmark selected a CPU adapter; rerun inside a GPU allocation" >&2
         exit 1
     fi

@@ -1,139 +1,102 @@
 # Toaster
 
-Toaster is a Rust-based headless path tracer and procedural 3D scene sandbox. It
-keeps a readable CPU reference renderer alongside a portable `wgpu` compute
-renderer for still images, animation, live browser previews, and MP4 export.
+Toaster is a Rust headless path tracer with a readable CPU renderer and a
+portable `wgpu` compute renderer. It supports animated JSON scenes, glTF meshes,
+environment lighting, PNG/MP4 output, and live browser previews.
 
 ## Ownership
 
-- **Chanyoung Park** owns the overall renderer architecture and integration
-  across scene loading, GPU execution, animation, preview/export, and
-  benchmarking.
-- **Srujam Dave** contributed core WGSL path-tracing work, including geometry
-  intersections, shading and direct lighting, antialiasing, and related fixes.
+- **Chanyoung Park:** renderer architecture and integration across scenes, GPU
+  execution, animation, preview/export, and benchmarking.
+- **Srujam Dave:** core WGSL path-tracing work, including intersections,
+  shading, direct lighting, antialiasing, and related fixes.
 
 > Development note: We used AI tools during development.
 
-## What it does
+## Highlights
 
-- Renders spheres and triangles with diffuse, metal, dielectric, and emissive
-  materials on the CPU or GPU.
-- Loads animated JSON scenes, glTF/GLB meshes, base-color textures, and
-  HDR/PNG/JPEG environment maps.
-- Supports direct-light sampling, environment importance sampling, and multiple
-  importance sampling.
-- Produces PNGs, H.264 MP4 files through FFmpeg, and an MJPEG browser preview
-  with adaptive or progressive sampling.
-- Captures repeatable, stage-level GPU benchmark reports for performance work.
-
-Toaster is a learning and research project, not a Blender replacement, game
-engine, or production rendering service.
+- Diffuse, metal, dielectric, emissive, textured, and environment-lit rendering.
+- Median-split BVH construction with flat CPU and GPU traversal.
+- Static progressive preview, adaptive sampling, MJPEG streaming, and raw-RGBA
+  FFmpeg export without intermediate PNGs.
+- Deterministic benchmark reports with per-stage timing and image hashes.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    JSON[JSON scene] --> Scene[toaster-scene]
-    GLTF[glTF / GLB] --> Assets[toaster-assets]
-    Assets --> Scene
-    Env[Environment image] --> Scene
-
-    Scene --> CPU[CPU reference renderer]
-    Scene --> GPU[wgpu compute renderer]
-    CPU --> PNG[PNG]
-    GPU --> Readback[GPU readback]
-    Readback --> RGBA[Shared RGBA8 conversion]
-    RGBA --> PNG
-    RGBA --> JPEG[JPEG]
-    JPEG --> Browser[MJPEG browser preview]
-    RGBA --> FFmpeg[Raw RGBA to FFmpeg]
-    FFmpeg --> MP4[H.264 MP4]
+    Inputs[JSON + glTF + environment] --> Scene[Shared scene]
+    Scene --> CPU[CPU renderer]
+    Scene --> GPU[wgpu renderer + BVH]
+    CPU --> PNG
+    GPU --> Readback[Readback + RGBA8]
+    Readback --> PNG
+    Readback --> Preview[MJPEG preview]
+    Readback --> FFmpeg[FFmpeg MP4]
 ```
 
-The MP4 path reads pixels back to the CPU and streams raw RGBA frames to FFmpeg,
-avoiding an intermediate PNG sequence. The
-[architecture guide](docs/architecture.md) explains the buffer layouts,
-progressive accumulation contract, and choice of `wgpu` over CUDA.
+The [architecture guide](docs/architecture.md) records the buffer-layout,
+progressive-accumulation, and portability decisions.
 
 ## Quickstart
 
-Install a recent stable Rust toolchain:
-
 ```sh
 cargo check --workspace
-cargo run -p toaster-cli -- info
 
-# CPU still
-cargo run -p toaster-cli -- cpu-render scenes/003_cornell_box.json \
-  --out out/cornell.png
+cargo run -p toaster-cli -- cpu-render \
+  scenes/003_cornell_box.json --out out/cornell.png
 
-# GPU still
 cargo run --release -p toaster-cli -- gpu-render \
   scenes/010_environment_map.json --out out/environment.png
 ```
 
-Common GPU workflows:
+See the [scene format](docs/scene_format.md) and
+[cluster/preview setup](docs/server_setup.md) for additional workflows.
+
+## BVH performance
+
+Measured on an NVIDIA GeForce RTX 2080 Ti through Vulkan with NVIDIA driver
+610.43.02. Every workload used 320×180 output, 4 samples per pixel, 4 bounces, 2
+warmups, and 5 measured frames. Lower time is better.
+
+| Workload | Total geometry | Pre total | Post dispatch | Post total | Change | Post FPS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| [128 triangles](docs/benchmarks/post-bvh/rtx-2080-ti/001_triangles_128.json) | 128 T + 1 S | 2.528 ms | 0.597 ms | 1.856 ms | 26.6% faster | 538.8 |
+| [2,048 triangles](docs/benchmarks/post-bvh/rtx-2080-ti/002_triangles_2048.json) | 2,048 T + 1 S | 20.596 ms | 0.968 ms | 2.906 ms | 85.9% faster | 344.1 |
+| [8,192 triangles](docs/benchmarks/post-bvh/rtx-2080-ti/003_triangles_8192.json) | 8,192 T + 1 S | 57.749 ms | 1.457 ms | 6.183 ms | 89.3% faster | 161.7 |
+| [64 subject spheres](docs/benchmarks/post-bvh/rtx-2080-ti/004_spheres_64.json) | 2 T + 65 S | 1.988 ms | 1.129 ms | 2.380 ms | 19.7% slower | 420.2 |
+| [512 subject spheres](docs/benchmarks/post-bvh/rtx-2080-ti/005_spheres_512.json) | 2 T + 513 S | 4.177 ms | 1.752 ms | 3.142 ms | 24.8% faster | 318.3 |
+| [Mixed geometry](docs/benchmarks/post-bvh/rtx-2080-ti/006_mixed_2048t_128s.json) | 2,048 T + 129 S | 24.649 ms | 2.478 ms | 4.558 ms | 81.5% faster | 219.4 |
+| [Environment control](docs/benchmarks/post-bvh/rtx-2080-ti/007_environment_control.json) | 4 S | 1.619 ms | 0.671 ms | 1.887 ms | 16.6% slower | 529.8 |
+
+All seven image hashes match the
+[pre-BVH reports](docs/benchmarks/pre-bvh/rtx-2080-ti/). The results show large
+gains as geometry grows and expected fixed-cost regressions on very small scenes.
+For 8,192 triangles, dispatch became 38.4× faster; BVH rebuild/upload now accounts
+for 3.50 ms of the 6.18 ms total, making caching or refitting the next clear
+optimization.
+
+Reproduce the comparison with:
 
 ```sh
-# Four-second H.264 video; requires FFmpeg on PATH
-cargo run --release -p toaster-cli -- gpu-render \
-  scenes/006_rotating_cube.json --video out/cube.mp4 \
-  --fps 24 --duration 4
-
-# Live browser preview at http://127.0.0.1:7878/
-cargo run --release -p toaster-cli -- stream-preview \
-  scenes/009_gltf_textured_quad.json --fps 12 --loop-duration 8
-
-# Static progressive preview
-cargo run --release -p toaster-cli -- stream-preview \
-  scenes/010_environment_map.json --progressive \
-  --batch-samples 2 --target-samples 256
+TOASTER_BENCH_COMPARE_DIR=docs/benchmarks/pre-bvh/rtx-2080-ti \
+  ./scripts/run_benchmark_suite.sh post-bvh
 ```
-
-## Performance
-
-This pre-BVH baseline was measured on an **NVIDIA GeForce RTX 2080 Ti** through
-**Vulkan** with NVIDIA driver **610.43.02** on 2026-08-03. All workloads use
-320×180 output, 4 samples per pixel, 4 bounces, 2 warmup frames, and 5 measured
-frames at commit `d147e54`. FPS is `1000 / median total frame time`.
-
-| Workload | Loaded geometry | Dispatch/wait | Total | FPS |
-| --- | ---: | ---: | ---: | ---: |
-| [128 triangles](docs/benchmarks/pre-bvh/rtx-2080-ti/001_triangles_128.json) | 128 triangles + 1 light sphere | 1.133 ms | 2.528 ms | 395.5 |
-| [2,048 triangles](docs/benchmarks/pre-bvh/rtx-2080-ti/002_triangles_2048.json) | 2,048 triangles + 1 light sphere | 19.138 ms | 20.596 ms | 48.6 |
-| [8,192 triangles](docs/benchmarks/pre-bvh/rtx-2080-ti/003_triangles_8192.json) | 8,192 triangles + 1 light sphere | 55.955 ms | 57.749 ms | 17.3 |
-| [64 spheres](docs/benchmarks/pre-bvh/rtx-2080-ti/004_spheres_64.json) | 64 spheres + 1 light sphere + 2 triangles | 0.597 ms | 1.988 ms | 503.0 |
-| [512 spheres](docs/benchmarks/pre-bvh/rtx-2080-ti/005_spheres_512.json) | 512 spheres + 1 light sphere + 2 triangles | 2.799 ms | 4.177 ms | 239.4 |
-| [Mixed geometry](docs/benchmarks/pre-bvh/rtx-2080-ti/006_mixed_2048t_128s.json) | 2,048 triangles + 128 spheres + 1 light sphere | 23.171 ms | 24.649 ms | 40.6 |
-| [Environment control](docs/benchmarks/pre-bvh/rtx-2080-ti/007_environment_control.json) | 4 spheres | 0.245 ms | 1.619 ms | 617.7 |
-
-These results show the current brute-force traversal cost; they are not projected
-BVH numbers. Run the same suite with:
-
-```sh
-./scripts/run_benchmark_suite.sh pre-bvh
-```
-
-See the [benchmarking guide](docs/benchmarking.md) for report fields, comparisons,
-and cluster usage.
 
 ## Current limitations
 
-- Triangle and sphere intersections are linear scans until BVH integration lands.
-- glTF support is limited to triangle geometry, base-color factors and textures,
-  smooth normals, and UV set zero.
-- GPU output requires CPU readback; the preview uses MJPEG and has no
-  authentication or multi-render orchestration.
+- BVH construction uses median splits without SAH, refitting, or instancing.
+- glTF shading supports base color but not the full metallic-roughness pipeline.
+- GPU output requires CPU readback; the preview has no authentication or job
+  orchestration.
 - The CPU reference renderer is single-threaded, and progressive accumulation is
   limited to static scenes.
 
 ## Documentation
 
-- [Scene format](docs/scene_format.md)
 - [Architecture decisions](docs/architecture.md)
-- [Rendering notes](docs/rendering_notes.md)
+- [Scene format](docs/scene_format.md)
+- [Benchmarking](docs/benchmarking.md)
+- [Cluster and preview setup](docs/server_setup.md)
 - [Shader contracts](docs/shader_reference.md)
-- [GPU benchmarking and logging](docs/benchmarking.md)
-- [Cluster and streaming setup](docs/server_setup.md)
-- [Roadmap](docs/roadmap.md)
 - [Contributing](CONTRIBUTING.md)

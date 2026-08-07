@@ -1,5 +1,8 @@
 //! GPU buffer layouts.
-use crate::gpu_types::{GpuLight, GpuRenderParams, GpuSphere, GpuTriangle, GpuTriangleAttributes};
+use crate::gpu_types::{
+    GpuBvhNode, GpuLight, GpuPrimitiveRef, GpuRenderParams, GpuSphere, GpuTriangle,
+    GpuTriangleAttributes,
+};
 use crate::scene_upload::SceneGpuData;
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
@@ -52,6 +55,10 @@ pub struct SceneGpuBuffers {
     pub materials: wgpu::Buffer,
     /// Emissive primitive storage array or one dummy element.
     pub lights: wgpu::Buffer,
+    /// Flattened BVH node storage array.
+    pub bvh_nodes: wgpu::Buffer,
+    /// BVH leaf primitive-reference storage array.
+    pub bvh_primitives: wgpu::Buffer,
     /// Packed RGBA8 texture atlas or one dummy pixel.
     pub texture_pixels: wgpu::Buffer,
     /// Float RGB plus importance metadata environment texels or one dummy texel.
@@ -192,6 +199,34 @@ pub fn create_scene_gpu_buffers(device: &wgpu::Device, scene: &SceneGpuData) -> 
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
     });
 
+    // Animation can change whether centroid-degenerate ranges split. Allocate
+    // the full binary-tree bound so later evaluated frames cannot outgrow the
+    // initial node buffer even when their actual node count increases.
+    let primitive_count = usize::try_from(scene.params.sphere_count)
+        .expect("u32 sphere count fits usize")
+        + usize::try_from(scene.params.triangle_count).expect("u32 triangle count fits usize");
+    let bvh_node_capacity = primitive_count.saturating_mul(2).saturating_sub(1).max(1);
+    debug_assert!(scene.bvh_nodes.len() <= bvh_node_capacity);
+    let mut bvh_node_data = vec![GpuBvhNode::zeroed(); bvh_node_capacity];
+    bvh_node_data[..scene.bvh_nodes.len()].copy_from_slice(&scene.bvh_nodes);
+    let bvh_nodes_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("BVH Nodes Buffer"),
+        contents: bytemuck::cast_slice(&bvh_node_data),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
+
+    let dummy_bvh_primitive = [GpuPrimitiveRef::zeroed()];
+    let bvh_primitive_data = if scene.bvh_primitives.is_empty() {
+        &dummy_bvh_primitive[..]
+    } else {
+        &scene.bvh_primitives
+    };
+    let bvh_primitives_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("BVH Primitives Buffer"),
+        contents: bytemuck::cast_slice(bvh_primitive_data),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
+
     let dummy_texture_pixel = [0xffff_ffff_u32];
     let texture_data = if scene.texture_pixels.is_empty() {
         &dummy_texture_pixel[..]
@@ -226,6 +261,8 @@ pub fn create_scene_gpu_buffers(device: &wgpu::Device, scene: &SceneGpuData) -> 
         triangle_attributes: triangle_attributes_buffer,
         materials: materials_buffer,
         lights: lights_buffer,
+        bvh_nodes: bvh_nodes_buffer,
+        bvh_primitives: bvh_primitives_buffer,
         texture_pixels: texture_pixels_buffer,
         environment_pixels: environment_pixels_buffer,
         output_size,

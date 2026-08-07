@@ -553,6 +553,20 @@ async fn render_gpu_with_sink(
                 .queue
                 .write_buffer(&buffers.lights, 0, bytemuck::cast_slice(&scene.lights));
         }
+        if !scene.bvh_nodes.is_empty() {
+            context.queue.write_buffer(
+                &buffers.bvh_nodes,
+                0,
+                bytemuck::cast_slice(&scene.bvh_nodes),
+            );
+        }
+        if !scene.bvh_primitives.is_empty() {
+            context.queue.write_buffer(
+                &buffers.bvh_primitives,
+                0,
+                bytemuck::cast_slice(&scene.bvh_primitives),
+            );
+        }
         let scene_update_upload = scene_update_start.elapsed();
 
         let dispatch_start = Instant::now();
