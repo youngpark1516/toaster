@@ -184,8 +184,10 @@ mod tests {
     use glam::Vec3;
     use std::{cell::RefCell, rc::Rc};
     use toaster_scene::{
-        Background, CameraSettings, ColliderShape, Material, PhysicsSettings, PhysicsType,
-        RenderSettings, RigidBodyDeclaration, RigidBodyKind, Sphere, Triangle, TriangleAttributes,
+        Animation, AnimationTarget, AnimationTrack, Background, CameraSettings, ColliderShape,
+        Interpolation, Material, PhysicsSettings, PhysicsType, RenderSettings,
+        RigidBodyDeclaration, RigidBodyKind, Sphere, TranslationKeyframe, Triangle,
+        TriangleAttributes,
     };
 
     fn base_scene() -> Scene {
@@ -272,6 +274,34 @@ mod tests {
         }
     }
 
+    fn kinematic_scene() -> Scene {
+        let mut scene = base_scene();
+        scene.spheres[0].center = Vec3::new(0.0, 0.5, 0.0);
+        scene.triangles[0].group = Some("platform".into());
+        scene.rigid_bodies[1].body = RigidBodyKind::Kinematic;
+        scene.rigid_bodies[1].group = Some("platform".into());
+        scene.physics.as_mut().unwrap().substeps = 2;
+        scene.animation = Animation {
+            tracks: vec![AnimationTrack::Translation {
+                target: AnimationTarget::Group {
+                    name: "platform".into(),
+                },
+                interpolation: Interpolation::Linear,
+                keyframes: vec![
+                    TranslationKeyframe {
+                        time: 0.0,
+                        value: Vec3::ZERO,
+                    },
+                    TranslationKeyframe {
+                        time: 1.0,
+                        value: Vec3::Y,
+                    },
+                ],
+            }],
+        };
+        scene
+    }
+
     #[test]
     fn sphere_falls_and_collides_with_static_floor() {
         let mut evaluator = PhysicsSceneEvaluator::new(base_scene()).unwrap();
@@ -305,6 +335,67 @@ mod tests {
             evaluated.scene.triangles[0].group,
             source.triangles[0].group
         );
+    }
+
+    #[test]
+    fn kinematic_platform_follows_animation_and_pushes_dynamic_sphere() {
+        let source = kinematic_scene();
+        let authored_triangle_count = source.triangles.len();
+        let authored_material = source.triangles[0].material_index;
+        let mut evaluator = PhysicsSceneEvaluator::new(source.clone()).unwrap();
+        let frame_zero = evaluator.evaluate(request(0.0, 0)).unwrap();
+        let moved = evaluator.evaluate(request(0.5, 0)).unwrap();
+
+        assert_eq!(frame_zero.scene.triangles[0].vertices[0].y, 0.0);
+        assert!((moved.scene.triangles[0].vertices[0].y - 0.5).abs() < 1.0e-4);
+        assert!(moved.scene.spheres[0].center.y > 0.85);
+        assert_eq!(moved.scene.triangles.len(), authored_triangle_count);
+        assert_eq!(moved.scene.triangles[0].material_index, authored_material);
+        assert_eq!(moved.scene.triangles[0].group.as_deref(), Some("platform"));
+        assert!(moved.changes.triangles);
+        assert!(moved.changes.spheres);
+        assert!(!moved.changes.emissive_geometry);
+        assert_eq!(
+            evaluator.source_scene().triangles[0].vertices,
+            source.triangles[0].vertices
+        );
+    }
+
+    #[test]
+    fn kinematic_motion_replays_across_loops_and_backward_seeks() {
+        let scene = kinematic_scene();
+        let mut evaluator = PhysicsSceneEvaluator::new(scene.clone()).unwrap();
+        let first = evaluator.evaluate(request(0.5, 0)).unwrap();
+        evaluator.evaluate(request(0.9, 0)).unwrap();
+        let replayed = evaluator.evaluate(request(0.5, 0)).unwrap();
+        let next_loop = evaluator.evaluate(request(0.5, 1)).unwrap();
+        let mut fresh = PhysicsSceneEvaluator::new(scene).unwrap();
+        let expected = fresh.evaluate(request(0.5, 0)).unwrap();
+
+        for candidate in [&first, &replayed, &next_loop] {
+            assert_eq!(
+                candidate.scene.spheres[0].center,
+                expected.scene.spheres[0].center
+            );
+            assert_eq!(
+                candidate.scene.triangles[0].vertices,
+                expected.scene.triangles[0].vertices
+            );
+        }
+    }
+
+    #[test]
+    fn moving_emissive_kinematic_geometry_invalidates_lights() {
+        let mut scene = kinematic_scene();
+        scene.materials[0] = Material::Emissive {
+            color: Vec3::ONE,
+            strength: 2.0,
+        };
+        let mut evaluator = PhysicsSceneEvaluator::new(scene).unwrap();
+        evaluator.evaluate(request(0.0, 0)).unwrap();
+        let moved = evaluator.evaluate(request(0.25, 0)).unwrap();
+
+        assert!(moved.changes.emissive_geometry);
     }
 
     #[test]

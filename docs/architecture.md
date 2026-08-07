@@ -44,10 +44,15 @@ be deterministic within the same platform, build, dependency versions,
 configuration, and scene construction order, not universally bit-identical
 across machines.
 
-Enabled rigid-body groups have exclusive ownership: neither dynamic nor static
-physics groups may be animation targets. Camera and unrelated object animation
-remain valid. When the top-level physics block is disabled, declarations are
-still validated but do not reserve groups and no backend is constructed.
+Enabled rigid-body groups have explicit ownership. Dynamic bodies are driven by
+Rapier and static bodies stay fixed, so neither kind may be an animation target.
+Kinematic bodies instead require one exclusive animation group and matching
+tracks. Rapier samples that neutral group pose at every physics substep and uses
+a private position-based kinematic body, allowing it to push dynamic bodies
+without being displaced by gravity or contacts. Camera and unrelated object
+animation remain valid. When the top-level physics block is disabled,
+declarations are still validated but ownership checks are skipped and no
+backend is constructed.
 
 Dynamic boxes are authored as first-class boxes and expanded into twelve normal
 triangles. A full mixed-BVH rebuild is uploaded whenever sphere or triangle
@@ -62,8 +67,8 @@ wall-clock measurements intended to expose the full-rebuild cost, not a GPU
 hardware-profiler replacement.
 
 The current backend is intentionally limited to rigid bodies: gravity, contact,
-friction, restitution, and linear/angular motion for static and dynamic spheres
-and cuboids. Possible later research backends include `PinnHeatBackend`,
+friction, restitution, dynamic linear/angular motion, and animation-driven
+kinematic motion for spheres and cuboids. Possible later research backends include `PinnHeatBackend`,
 `PinnWaveBackend`, `PinnFluidBackend`, `NeuralSurrogateBackend`, and
 `DifferentiablePhysicsBackend` for PDE-like fields, inverse simulation, or
 learned models. No PINN schema or solver is part of this milestone. Joints,

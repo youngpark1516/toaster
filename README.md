@@ -19,7 +19,7 @@ previews.
 - Diffuse, metal, dielectric, emissive, textured, and environment-lit rendering.
 - Median-split BVH construction with flat CPU and GPU traversal.
 - Renderer-neutral rigid-body evaluation with CPU-side Rapier simulation for
-  dynamic spheres and boxes.
+  static, dynamic, and animation-driven kinematic spheres and boxes.
 - Static progressive preview, adaptive sampling, MJPEG streaming, and raw-RGBA
   FFmpeg export without intermediate PNGs.
 - Deterministic benchmark reports with per-stage timing and image hashes.
@@ -56,6 +56,10 @@ cargo run --release -p toaster-cli -- gpu-render \
 cargo run --release -p toaster-cli -- gpu-render \
   scenes/011_physics_rigid_bodies.json --video out/physics.mp4 \
   --fps 24 --duration 5
+
+cargo run --release -p toaster-cli -- stream-preview \
+  scenes/012_physics_kinematic_platform.json \
+  --host 127.0.0.1 --port 7878 --fps 12 --loop-duration 5
 ```
 
 See the [scene format](docs/scene_format.md) and

@@ -932,6 +932,14 @@ mod tests {
         let error =
             resolve_progressive_preview(true, None, None, None, None, &physics_scene).unwrap_err();
         assert!(error.to_string().contains("physics-enabled"));
+
+        let kinematic_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/012_physics_kinematic_platform.json");
+        let kinematic_scene = toaster_scene::load_scene(kinematic_path).unwrap();
+        let error = resolve_progressive_preview(true, None, None, None, None, &kinematic_scene)
+            .unwrap_err();
+        assert!(error.to_string().contains("physics-enabled"));
+
         physics_scene.animation.tracks.clear();
         physics_scene.physics.as_mut().unwrap().enabled = false;
         assert!(resolve_progressive_preview(true, None, None, None, None, &physics_scene).is_ok());

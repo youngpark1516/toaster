@@ -31,6 +31,8 @@ pub enum RigidBodyKind {
     Static,
     /// Geometry integrated by the active rigid-body backend.
     Dynamic,
+    /// Collision geometry driven by renderer-neutral animation targets.
+    Kinematic,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -37,6 +37,15 @@ cargo run --release -p toaster-cli -- stream-preview \
   --host 127.0.0.1 --port 7878 --fps 12 --loop-duration 5
 ```
 
+The kinematic demo adds a moving platform and rotating paddle that push dynamic
+boxes and spheres:
+
+```sh
+cargo run --release -p toaster-cli -- stream-preview \
+  scenes/012_physics_kinematic_platform.json \
+  --host 127.0.0.1 --port 7878 --fps 12 --loop-duration 5
+```
+
 Each loop resets and deterministically replays the physics world. Physical poses
 repeat while path-tracing noise may differ because render frame indices remain
 monotonic.
@@ -50,6 +59,10 @@ cargo run --release -p toaster-cli -- gpu-render \
 cargo run --release -p toaster-cli -- gpu-render \
   scenes/011_physics_rigid_bodies.json \
   --video out/physics.mp4 --fps 24 --duration 5
+
+cargo run --release -p toaster-cli -- gpu-render \
+  scenes/012_physics_kinematic_platform.json \
+  --video out/kinematic.mp4 --fps 24 --duration 5
 ```
 
 MP4 export requires `ffmpeg` on `PATH`; on the documented cluster environment,

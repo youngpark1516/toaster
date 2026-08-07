@@ -5,14 +5,15 @@ use anyhow::{bail, Result};
 use glam::{Quat, Vec3};
 use rapier3d::prelude::*;
 use toaster_scene::{
-    ColliderShape, Material, ObjectBinding, RigidBodyDeclaration, RigidBodyKind, RigidTransform,
-    Scene, SceneChanges,
+    ColliderShape, GroupRigidTransformEvaluator, Material, ObjectBinding, RigidBodyDeclaration,
+    RigidBodyKind, RigidTransform, Scene, SceneChanges,
 };
 
 #[derive(Clone)]
 struct BoundBody {
     declaration: RigidBodyDeclaration,
-    initial_translation: Vec3,
+    initial_transform: RigidTransform,
+    kinematic_motion: Option<GroupRigidTransformEvaluator>,
     emissive: bool,
 }
 
@@ -53,9 +54,31 @@ impl RapierRigidBodyBackend {
             .rigid_bodies
             .iter()
             .map(|declaration| {
+                let authored_origin = initial_translation(scene, &declaration.binding)?;
+                let kinematic_motion = if declaration.body == RigidBodyKind::Kinematic {
+                    let group = declaration
+                        .group
+                        .as_deref()
+                        .ok_or_else(|| anyhow::anyhow!("kinematic body has no animation group"))?;
+                    Some(GroupRigidTransformEvaluator::new(
+                        scene,
+                        group,
+                        authored_origin,
+                    )?)
+                } else {
+                    None
+                };
+                let initial_transform = match &kinematic_motion {
+                    Some(motion) => motion.evaluate(0.0)?,
+                    None => RigidTransform {
+                        translation: authored_origin,
+                        rotation: Quat::IDENTITY,
+                    },
+                };
                 Ok(BoundBody {
                     declaration: declaration.clone(),
-                    initial_translation: initial_translation(scene, &declaration.binding)?,
+                    initial_transform,
+                    kinematic_motion,
                     emissive: binding_is_emissive(scene, &declaration.binding),
                 })
             })
@@ -72,13 +95,19 @@ impl RapierRigidBodyBackend {
         })
     }
 
-    fn step_nominal_tick(&mut self) {
+    fn step_nominal_tick(&mut self) -> Result<()> {
         let gravity = rapier3d::math::Vector::new(self.gravity.x, self.gravity.y, self.gravity.z);
         let integration = IntegrationParameters {
             dt: self.timestep / self.substeps as f32,
             ..IntegrationParameters::default()
         };
-        for _ in 0..self.substeps {
+        for substep in 0..self.substeps {
+            self.set_kinematic_targets(kinematic_substep_time(
+                self.current_tick,
+                substep,
+                self.substeps,
+                self.timestep,
+            ))?;
             self.world.pipeline.step(
                 gravity,
                 &integration,
@@ -95,16 +124,36 @@ impl RapierRigidBodyBackend {
             );
         }
         self.current_tick += 1;
+        Ok(())
+    }
+
+    fn set_kinematic_targets(&mut self, time_seconds: f32) -> Result<()> {
+        for (bound, handle) in self.bound_bodies.iter().zip(&self.world.handles) {
+            let Some(motion) = &bound.kinematic_motion else {
+                continue;
+            };
+            let handle = handle.ok_or_else(|| anyhow::anyhow!("kinematic body has no handle"))?;
+            let body = self
+                .world
+                .bodies
+                .get_mut(handle)
+                .ok_or_else(|| anyhow::anyhow!("Rapier body handle is stale"))?;
+            body.set_next_kinematic_position(rapier_pose(motion.evaluate(time_seconds)?));
+        }
+        Ok(())
     }
 
     fn evaluated_state(&self) -> Result<EvaluatedPhysicsState> {
         let mut updates = Vec::new();
         let mut changes = SceneChanges::default();
         for (bound, handle) in self.bound_bodies.iter().zip(&self.world.handles) {
-            if bound.declaration.body != RigidBodyKind::Dynamic {
+            if !matches!(
+                bound.declaration.body,
+                RigidBodyKind::Dynamic | RigidBodyKind::Kinematic
+            ) {
                 continue;
             }
-            let handle = handle.ok_or_else(|| anyhow::anyhow!("dynamic body has no handle"))?;
+            let handle = handle.ok_or_else(|| anyhow::anyhow!("moving body has no handle"))?;
             let body = self
                 .world
                 .bodies
@@ -129,6 +178,10 @@ impl RapierRigidBodyBackend {
     }
 }
 
+fn kinematic_substep_time(current_tick: u64, substep: u32, substeps: u32, timestep: f32) -> f32 {
+    ((current_tick as f64 + (substep + 1) as f64 / substeps as f64) * timestep as f64) as f32
+}
+
 impl PhysicsBackend for RapierRigidBodyBackend {
     fn reset(&mut self) -> Result<()> {
         self.world = build_world(&self.bound_bodies)?;
@@ -150,7 +203,7 @@ impl PhysicsBackend for RapierRigidBodyBackend {
             self.current_loop_cycle = Some(request.loop_cycle);
         }
         while self.current_tick < request.fixed_tick {
-            self.step_nominal_tick();
+            self.step_nominal_tick()?;
         }
         self.evaluated_state()
     }
@@ -161,7 +214,6 @@ fn build_world(bound_bodies: &[BoundBody]) -> Result<RapierWorld> {
     let mut colliders = ColliderSet::new();
     let mut handles = Vec::with_capacity(bound_bodies.len());
     for bound in bound_bodies {
-        let position = bound.initial_translation;
         let mut body_builder = match bound.declaration.body {
             RigidBodyKind::Static => RigidBodyBuilder::fixed(),
             RigidBodyKind::Dynamic => RigidBodyBuilder::dynamic()
@@ -175,10 +227,9 @@ fn build_world(bound_bodies: &[BoundBody]) -> Result<RapierWorld> {
                     bound.declaration.initial_angular_velocity.y,
                     bound.declaration.initial_angular_velocity.z,
                 )),
+            RigidBodyKind::Kinematic => RigidBodyBuilder::kinematic_position_based(),
         };
-        body_builder = body_builder.translation(rapier3d::math::Vector::new(
-            position.x, position.y, position.z,
-        ));
+        body_builder = body_builder.pose(rapier_pose(bound.initial_transform));
         let handle = bodies.insert(body_builder.build());
         let mut collider_builder = match bound.declaration.collider {
             ColliderShape::Sphere { radius } => ColliderBuilder::ball(radius),
@@ -207,6 +258,23 @@ fn build_world(bound_bodies: &[BoundBody]) -> Result<RapierWorld> {
         ccd_solver: CCDSolver::new(),
         handles,
     })
+}
+
+fn rapier_pose(transform: RigidTransform) -> Pose {
+    Pose::from_parts(
+        rapier3d::math::Vector::new(
+            transform.translation.x,
+            transform.translation.y,
+            transform.translation.z,
+        ),
+        rapier3d::math::Rotation::from_xyzw(
+            transform.rotation.x,
+            transform.rotation.y,
+            transform.rotation.z,
+            transform.rotation.w,
+        )
+        .normalize(),
+    )
 }
 
 fn initial_translation(scene: &Scene, binding: &ObjectBinding) -> Result<Vec3> {
@@ -244,4 +312,16 @@ fn binding_is_emissive(scene: &Scene, binding: &ObjectBinding) -> bool {
             Some(Material::Emissive { strength, .. }) if *strength > 0.0
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::kinematic_substep_time;
+
+    #[test]
+    fn samples_each_kinematic_substep_endpoint() {
+        assert_eq!(kinematic_substep_time(0, 0, 4, 1.0), 0.25);
+        assert_eq!(kinematic_substep_time(0, 3, 4, 1.0), 1.0);
+        assert_eq!(kinematic_substep_time(2, 1, 2, 0.5), 1.5);
+    }
 }

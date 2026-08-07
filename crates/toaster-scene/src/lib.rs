@@ -23,8 +23,8 @@ pub mod texture;
 pub mod transform;
 
 pub use animation::{
-    Animation, AnimationTarget, AnimationTrack, Interpolation, RotationKeyframe,
-    TranslationKeyframe,
+    evaluate_group_rigid_transform, Animation, AnimationTarget, AnimationTrack,
+    GroupRigidTransformEvaluator, Interpolation, RotationKeyframe, TranslationKeyframe,
 };
 pub use environment::{EnvironmentMap, EnvironmentSample};
 pub use evaluation::{

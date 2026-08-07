@@ -1,10 +1,10 @@
 //! Renderer-independent scene animation tracks and evaluation.
 
-use crate::Scene;
+use crate::{ObjectBinding, RigidBodyKind, RigidTransform, Scene};
 use anyhow::{bail, Result};
 use glam::{Quat, Vec3};
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, Default, Deserialize)]
 /// Ordered animation tracks evaluated from an immutable base scene.
@@ -83,6 +83,13 @@ pub enum AnimationTrack {
     },
 }
 
+#[derive(Clone, Debug)]
+/// Prevalidated animation tracks that produce one group's absolute rigid pose.
+pub struct GroupRigidTransformEvaluator {
+    authored_origin: Vec3,
+    tracks: Vec<AnimationTrack>,
+}
+
 impl AnimationTrack {
     /// Returns the camera or group affected by this track.
     pub fn target(&self) -> &AnimationTarget {
@@ -155,6 +162,100 @@ impl Scene {
     }
 }
 
+/// Evaluates one group's animation as an absolute renderer-neutral rigid pose.
+///
+/// The authored origin is translated by the sum of all matching translation
+/// tracks, then rotated around each matching world-space pivot in declaration
+/// order. This is the same composition used by [`Scene::evaluate_at`].
+pub fn evaluate_group_rigid_transform(
+    scene: &Scene,
+    group: &str,
+    authored_origin: Vec3,
+    time_seconds: f32,
+) -> Result<RigidTransform> {
+    GroupRigidTransformEvaluator::new(scene, group, authored_origin)?.evaluate(time_seconds)
+}
+
+impl GroupRigidTransformEvaluator {
+    /// Captures the validated tracks affecting one existing scene group.
+    pub fn new(scene: &Scene, group: &str, authored_origin: Vec3) -> Result<Self> {
+        if group.is_empty() {
+            bail!("animation target group name must not be empty");
+        }
+        if !authored_origin.is_finite() {
+            bail!("authored rigid-transform origin must be finite");
+        }
+        validate_animation(scene)?;
+        let group_exists = scene
+            .spheres
+            .iter()
+            .any(|sphere| sphere.group.as_deref() == Some(group))
+            || scene
+                .triangles
+                .iter()
+                .any(|triangle| triangle.group.as_deref() == Some(group));
+        if !group_exists {
+            bail!("animation references unknown group '{group}'");
+        }
+        let tracks = scene
+            .animation
+            .tracks
+            .iter()
+            .filter(
+                |track| matches!(track.target(), AnimationTarget::Group { name } if name == group),
+            )
+            .cloned()
+            .collect();
+        Ok(Self {
+            authored_origin,
+            tracks,
+        })
+    }
+
+    /// Samples the captured tracks at one nonnegative scene-local time.
+    pub fn evaluate(&self, time_seconds: f32) -> Result<RigidTransform> {
+        if !time_seconds.is_finite() || time_seconds < 0.0 {
+            bail!("animation time must be finite and non-negative");
+        }
+
+        let mut translation = self.authored_origin;
+        let mut rotation = Quat::IDENTITY;
+        for track in &self.tracks {
+            let AnimationTrack::Translation {
+                target: AnimationTarget::Group { .. },
+                interpolation,
+                keyframes,
+            } = track
+            else {
+                continue;
+            };
+            translation += sample_translation(keyframes, *interpolation, time_seconds);
+        }
+        for track in &self.tracks {
+            let AnimationTrack::Rotation {
+                target: AnimationTarget::Group { .. },
+                axis,
+                pivot,
+                interpolation,
+                keyframes,
+            } = track
+            else {
+                continue;
+            };
+            let sampled = Quat::from_axis_angle(
+                axis.normalize(),
+                sample_rotation(keyframes, *interpolation, time_seconds).to_radians(),
+            );
+            translation = *pivot + sampled * (translation - *pivot);
+            rotation = sampled * rotation;
+        }
+        Ok(RigidTransform {
+            translation,
+            rotation,
+        })
+    }
+}
+
 /// Checks track targets, time ordering, finite values, and attribute alignment.
 pub(crate) fn validate_animation(scene: &Scene) -> Result<()> {
     if scene.triangle_attributes.len() != scene.triangles.len() {
@@ -171,15 +272,43 @@ pub(crate) fn validate_animation(scene: &Scene) -> Result<()> {
                 .filter_map(|object| object.group.as_deref()),
         )
         .collect();
-    let physics_groups: HashSet<&str> = if scene.physics.is_some_and(|physics| physics.enabled) {
-        scene
-            .rigid_bodies
-            .iter()
-            .filter_map(|body| body.group.as_deref())
-            .collect()
-    } else {
-        HashSet::new()
-    };
+    let physics_enabled = scene.physics.is_some_and(|physics| physics.enabled);
+    let mut fixed_groups = HashSet::new();
+    let mut kinematic_groups = HashMap::<&str, Vec<&ObjectBinding>>::new();
+    if physics_enabled {
+        for body in &scene.rigid_bodies {
+            let Some(group) = body.group.as_deref() else {
+                continue;
+            };
+            match body.body {
+                RigidBodyKind::Static | RigidBodyKind::Dynamic => {
+                    fixed_groups.insert(group);
+                }
+                RigidBodyKind::Kinematic => {
+                    kinematic_groups
+                        .entry(group)
+                        .or_default()
+                        .push(&body.binding);
+                }
+            }
+        }
+    }
+
+    if physics_enabled {
+        for (group, bindings) in &kinematic_groups {
+            if bindings.len() != 1 {
+                bail!(
+                    "kinematic animation group '{group}' must identify exactly one physics object"
+                );
+            }
+            validate_exclusive_kinematic_group(scene, group, bindings[0])?;
+            if !scene.animation.tracks.iter().any(
+                |track| matches!(track.target(), AnimationTarget::Group { name } if name == group),
+            ) {
+                bail!("kinematic physics group '{group}' requires at least one animation track");
+            }
+        }
+    }
 
     for track in &scene.animation.tracks {
         if let AnimationTarget::Group { name } = track.target() {
@@ -189,9 +318,9 @@ pub(crate) fn validate_animation(scene: &Scene) -> Result<()> {
             if !groups.contains(name.as_str()) {
                 bail!("animation references unknown group '{name}'");
             }
-            if physics_groups.contains(name.as_str()) {
+            if fixed_groups.contains(name.as_str()) {
                 bail!(
-                    "animation group '{name}' is controlled by an enabled physics body; kinematic bodies are not supported"
+                    "animation group '{name}' is controlled by an enabled physics body (static or dynamic)"
                 );
             }
         }
@@ -219,6 +348,55 @@ pub(crate) fn validate_animation(scene: &Scene) -> Result<()> {
                 if keyframes.iter().any(|key| !key.degrees.is_finite()) {
                     bail!("rotation keyframe degrees must be finite");
                 }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Ensures a kinematic group refers only to the primitives owned by its binding.
+fn validate_exclusive_kinematic_group(
+    scene: &Scene,
+    group: &str,
+    binding: &ObjectBinding,
+) -> Result<()> {
+    match *binding {
+        ObjectBinding::Sphere { index } => {
+            let sphere_matches =
+                scene
+                    .spheres
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(candidate, sphere)| {
+                        (sphere.group.as_deref() == Some(group)).then_some(candidate)
+                    });
+            if sphere_matches.ne([index])
+                || scene
+                    .triangles
+                    .iter()
+                    .any(|triangle| triangle.group.as_deref() == Some(group))
+            {
+                bail!("kinematic animation group '{group}' must be exclusive to one source object");
+            }
+        }
+        ObjectBinding::Triangles { start, count, .. } => {
+            let end = start
+                .checked_add(count)
+                .ok_or_else(|| anyhow::anyhow!("kinematic triangle binding overflows"))?;
+            if scene
+                .spheres
+                .iter()
+                .any(|sphere| sphere.group.as_deref() == Some(group))
+                || scene.triangles.iter().enumerate().any(|(index, triangle)| {
+                    triangle.group.as_deref() == Some(group) && !(start..end).contains(&index)
+                })
+                || scene.triangles.get(start..end).is_none_or(|triangles| {
+                    triangles
+                        .iter()
+                        .any(|triangle| triangle.group.as_deref() != Some(group))
+                })
+            {
+                bail!("kinematic animation group '{group}' must be exclusive to one source object");
             }
         }
     }
@@ -517,6 +695,31 @@ mod tests {
             .center
             .abs_diff_eq(Vec3::new(0.0, 0.0, -2.0), 1e-5));
         assert_eq!(evaluated.spheres[1].center, -Vec3::X);
+        assert_eq!(scene.spheres[0].center, Vec3::X);
+    }
+
+    #[test]
+    fn neutral_group_transform_matches_geometry_animation() {
+        let offset = TranslationKeyframe {
+            time: 0.0,
+            value: Vec3::new(0.5, 0.0, 0.0),
+        };
+        let scene = base_scene(vec![
+            translation(Interpolation::Linear, vec![offset]),
+            rotation(
+                AnimationTarget::Group {
+                    name: "moving".into(),
+                },
+                90.0,
+            ),
+        ]);
+        let pose = evaluate_group_rigid_transform(&scene, "moving", Vec3::X, 0.0).unwrap();
+        let evaluated = scene.evaluate_at(0.0).unwrap();
+
+        assert!(pose
+            .translation
+            .abs_diff_eq(evaluated.spheres[0].center, 1.0e-5));
+        assert!((pose.rotation * Vec3::Y).abs_diff_eq(Vec3::Y, 1.0e-5));
         assert_eq!(scene.spheres[0].center, Vec3::X);
     }
 

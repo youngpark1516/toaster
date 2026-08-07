@@ -268,6 +268,8 @@ enum RigidBodyKindFile {
     Static,
     /// Simulated body.
     Dynamic,
+    /// Animation-driven moving collider.
+    Kinematic,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -763,6 +765,18 @@ fn validate_rigid_body(
                 file.initial_angular_velocity.unwrap_or(Vec3::ZERO),
             )
         }
+        RigidBodyKindFile::Kinematic => {
+            if group.is_none() {
+                bail!("kinematic physics bodies require a nonempty animation group");
+            }
+            if file.mass.is_some()
+                || file.initial_velocity.is_some()
+                || file.initial_angular_velocity.is_some()
+            {
+                bail!("kinematic physics bodies do not accept mass or initial velocities");
+            }
+            (RigidBodyKind::Kinematic, None, Vec3::ZERO, Vec3::ZERO)
+        }
     };
 
     Ok(RigidBodyDeclaration {
@@ -1120,6 +1134,26 @@ mod tests {
     }
 
     #[test]
+    fn loads_kinematic_platform_demo_with_stable_bindings() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/012_physics_kinematic_platform.json");
+        let scene = load_scene(path).unwrap();
+        let kinematic = scene
+            .rigid_bodies
+            .iter()
+            .filter(|body| body.body == RigidBodyKind::Kinematic)
+            .collect::<Vec<_>>();
+
+        assert_eq!(kinematic.len(), 2);
+        assert_eq!(scene.spheres.len(), 4);
+        assert_eq!(scene.triangles.len(), 134);
+        assert!(kinematic
+            .iter()
+            .all(|body| matches!(body.binding, ObjectBinding::Triangles { count: 12, .. })));
+        assert!(kinematic.iter().all(|body| body.mass.is_none()));
+    }
+
+    #[test]
     fn parses_rigid_body_sphere_and_expands_box() {
         let scene = parse(
             r#"{
@@ -1180,6 +1214,81 @@ mod tests {
                         "physics":{"body":"dynamic","mass":0}}]
         }"#;
         assert!(parse(invalid).is_err());
+    }
+
+    #[test]
+    fn parses_animation_driven_kinematic_sphere_and_box() {
+        let scene = parse(
+            r#"{
+            "camera":{"position":[0,2,5],"look_at":[0,1,0],"fov_degrees":45},
+            "render":{"width":4,"height":4,"samples":1,"max_bounces":1},
+            "physics":{"type":"rigid_body","substeps":2},
+            "materials":[{"name":"m","type":"diffuse","albedo":[0.5,0.5,0.5]}],
+            "objects":[
+                {"type":"sphere","center":[0,1,0],"radius":0.5,"material":"m","group":"orb",
+                 "physics":{"body":"kinematic","collider":"sphere","friction":0.4}},
+                {"type":"box","center":[0,0,0],"size":[2,0.2,2],"material":"m","group":"platform",
+                 "physics":{"body":"kinematic","collider":"cuboid","restitution":0.1}}
+            ],
+            "animation":{"tracks":[
+              {"type":"translation","target":{"type":"group","name":"orb"},"interpolation":"linear",
+               "keyframes":[{"time":0,"value":[0,0,0]},{"time":1,"value":[1,0,0]}]},
+              {"type":"rotation","target":{"type":"group","name":"platform"},"axis":[0,1,0],"pivot":[0,0,0],
+               "interpolation":"linear","keyframes":[{"time":0,"degrees":0},{"time":1,"degrees":90}]}
+            ]}
+        }"#,
+        )
+        .unwrap();
+
+        assert_eq!(scene.rigid_bodies.len(), 2);
+        assert!(scene
+            .rigid_bodies
+            .iter()
+            .all(|body| body.body == RigidBodyKind::Kinematic && body.mass.is_none()));
+        assert_eq!(scene.triangles.len(), 12);
+    }
+
+    #[test]
+    fn validates_kinematic_fields_and_enabled_ownership() {
+        fn scene_json(enabled: bool, objects: &str, tracks: &str) -> String {
+            format!(
+                r#"{{
+                  "camera":{{"position":[0,0,4],"look_at":[0,0,0],"fov_degrees":45}},
+                  "render":{{"width":1,"height":1,"samples":1,"max_bounces":1}},
+                  "physics":{{"enabled":{enabled},"type":"rigid_body"}},
+                  "materials":[{{"name":"m","type":"diffuse","albedo":[1,1,1]}}],
+                  "objects":[{objects}],
+                  "animation":{{"tracks":[{tracks}]}}
+                }}"#
+            )
+        }
+        let body = r#"{"type":"sphere","center":[0,0,0],"radius":1,"material":"m","group":"mover","physics":{"body":"kinematic"}}"#;
+        let track = r#"{"type":"translation","target":{"type":"group","name":"mover"},"interpolation":"linear","keyframes":[{"time":0,"value":[0,0,0]}]}"#;
+
+        assert!(parse(&scene_json(true, body, track)).is_ok());
+        assert!(parse(&scene_json(true, body, "")).is_err());
+        assert!(parse(&scene_json(false, body, "")).is_ok());
+
+        for field in [
+            r#","mass":1"#,
+            r#","initial_velocity":[1,0,0]"#,
+            r#","initial_angular_velocity":[0,1,0]"#,
+        ] {
+            let invalid = body.replace(
+                r#""physics":{"body":"kinematic"}"#,
+                &format!(r#""physics":{{"body":"kinematic"{field}}}"#),
+            );
+            assert!(parse(&scene_json(false, &invalid, "")).is_err());
+        }
+
+        let missing_group = body.replace(r#","group":"mover""#, "");
+        assert!(parse(&scene_json(false, &missing_group, "")).is_err());
+
+        let reused = format!(
+            "{body},{{\"type\":\"sphere\",\"center\":[2,0,0],\"radius\":0.5,\"material\":\"m\",\"group\":\"mover\"}}"
+        );
+        assert!(parse(&scene_json(true, &reused, track)).is_err());
+        assert!(parse(&scene_json(false, &reused, track)).is_ok());
     }
 
     #[test]

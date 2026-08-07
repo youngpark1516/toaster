@@ -187,20 +187,22 @@ Spheres and boxes may contain:
 }
 ```
 
-- `body` is required and is `static` or `dynamic`.
+- `body` is required and is `static`, `dynamic`, or `kinematic`.
 - `collider` is optional and inferred. If supplied, spheres require `sphere` and
   boxes require `cuboid`.
-- Dynamic `mass` defaults to `1.0` and must be finite and positive. Static bodies
-  reject mass and both velocity fields.
+- Dynamic `mass` defaults to `1.0` and must be finite and positive. Static and
+  kinematic bodies reject mass and both velocity fields.
 - `friction` defaults to `0.5` and must be finite and nonnegative.
 - `restitution` defaults to `0.0` and must be finite and between zero and one.
 - Initial linear velocity is in meters per second and angular velocity in
   radians per second; all components must be finite.
 
-Triangles and glTF meshes reject physics metadata. Static and dynamic spheres
-use analytic sphere colliders. Static and dynamic boxes use cuboids with half
-extents `size / 2`; the rendered triangle range is transformed from immutable
-base vertices after simulation.
+Triangles and glTF meshes reject physics metadata. All three body kinds support
+analytic sphere colliders and boxes support cuboids with half extents `size / 2`.
+Kinematic bodies require a nonempty group. With physics enabled, that group must
+be exclusive to one logical object and targeted by at least one animation track.
+Their rendered triangle range is reconstructed from immutable base vertices at
+the animation-driven Rapier pose.
 
 ### Triangle
 
@@ -297,17 +299,24 @@ Evaluation always starts from the immutable base scene. All translation tracks a
 
 CLI animation time is `frame_index / fps`. For enabled physics, scene time is
 wrapped by `--loop-duration` and converted to the latest completed fixed tick;
-each nominal tick performs `substeps` steps of `timestep / substeps`. There are
-no remainder steps or pose interpolation in the MVP. Frame zero is the authored
-state. A loop wrap resets the world before replaying from tick zero, while
-render RNG frame indices continue increasing.
+each nominal tick performs `substeps` steps of `timestep / substeps`. Before
+every substep, kinematic tracks are sampled at that substep's endpoint and the
+absolute target pose is sent to Rapier. This lets Rapier infer the velocity used
+to affect dynamic contacts. There are no remainder steps or render-pose
+interpolation. Dynamic and static frame-zero poses are authored; a kinematic
+frame-zero pose is its animation sample at time zero. A loop wrap resets the
+world before replaying from tick zero, while render RNG frame indices continue
+increasing.
 
-When physics is enabled, animation tracks cannot target any group containing a
-static or dynamic physics body. Camera animation and unrelated object animation
-remain allowed. Dynamic bodies are controlled only by physics and static bodies
-stay fixed; kinematic animation-driven bodies are not yet supported. When
-physics is disabled, these ownership checks are skipped and normal animation
-behavior applies.
+When physics is enabled, animation tracks cannot target a static or dynamic
+physics group. Each kinematic body requires its own exclusive group and at least
+one matching animation track; multiple translation and rotation tracks may
+compose for that object. Camera animation and unrelated object animation remain
+allowed. Dynamic bodies are controlled only by physics, static bodies stay
+fixed, and kinematic bodies follow animation while participating as moving
+colliders. When physics is disabled, required-track, exclusivity, and ownership
+checks are skipped and normal animation behavior applies, although declaration
+fields remain validated.
 
 Static progressive preview rejects every scene containing animation tracks and
 every scene with enabled physics, including static-only physics scenes. Normal
