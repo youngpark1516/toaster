@@ -1,19 +1,30 @@
+//! BVH-accelerated CPU ray intersections.
+
 use glam::Vec3;
 use toaster_bvh::{Aabb, FlatBvh, PrimitiveInfo, PrimitiveRef};
 use toaster_core::ray::Ray;
-use toaster_scene::{Scene, Sphere, Triangle};
+use toaster_scene::{Scene, Sphere, Triangle, TriangleAttributes};
 
 const TRIANGLE_BOUNDS_PADDING: f32 = 1e-5;
 
 #[derive(Clone, Copy, Debug)]
+/// Nearest surface information returned by an intersection query.
 pub struct HitRecord {
+    /// Parametric distance along the ray.
     pub distance: f32,
+    /// World-space hit point.
     pub point: glam::Vec3,
+    /// Shading normal oriented against the incoming ray.
     pub normal: glam::Vec3,
+    /// Whether the ray hit the geometric front face.
     pub front_face: bool,
+    /// Index into the scene material array.
     pub material_index: usize,
+    /// Interpolated texture coordinate, or zero when unavailable.
+    pub tex_coord: glam::Vec2,
 }
 
+/// Finds the nearest sphere hit inside the inclusive distance interval.
 pub fn intersect_sphere(
     ray: &Ray,
     sphere: &Sphere,
@@ -52,12 +63,31 @@ pub fn intersect_sphere(
         normal,
         front_face,
         material_index: sphere.material_index,
+        tex_coord: glam::Vec2::ZERO,
     })
 }
 
+/// Finds a double-sided triangle hit without optional vertex attributes.
 pub fn intersect_triangle(
     ray: &Ray,
     triangle: &Triangle,
+    min_distance: f32,
+    max_distance: f32,
+) -> Option<HitRecord> {
+    intersect_triangle_with_attributes(
+        ray,
+        triangle,
+        TriangleAttributes::default(),
+        min_distance,
+        max_distance,
+    )
+}
+
+/// Applies Möller–Trumbore intersection and interpolates optional attributes.
+fn intersect_triangle_with_attributes(
+    ray: &Ray,
+    triangle: &Triangle,
+    attributes: TriangleAttributes,
     min_distance: f32,
     max_distance: f32,
 ) -> Option<HitRecord> {
@@ -89,8 +119,20 @@ pub fn intersect_triangle(
         return None;
     }
 
-    let outward_normal = edge1.cross(edge2).normalize();
-    let front_face = ray.direction.dot(outward_normal) < 0.0;
+    let geometric_normal = edge1.cross(edge2).normalize();
+    let front_face = ray.direction.dot(geometric_normal) < 0.0;
+    let weight0 = 1.0 - u - v;
+    let mut outward_normal = attributes
+        .normals
+        .map(|normals| (weight0 * normals[0] + u * normals[1] + v * normals[2]).normalize())
+        .unwrap_or(geometric_normal);
+    if outward_normal.dot(geometric_normal) < 0.0 {
+        outward_normal = -outward_normal;
+    }
+    let tex_coord = attributes
+        .tex_coords
+        .map(|tex_coords| weight0 * tex_coords[0] + u * tex_coords[1] + v * tex_coords[2])
+        .unwrap_or(glam::Vec2::ZERO);
     Some(HitRecord {
         distance,
         point: ray.at(distance),
@@ -101,15 +143,18 @@ pub fn intersect_triangle(
         },
         front_face,
         material_index: triangle.material_index,
+        tex_coord,
     })
 }
 
 #[derive(Clone, Debug, Default)]
+/// Flattened acceleration structure built for one evaluated scene.
 pub struct SceneBvh {
     flat: FlatBvh,
 }
 
 impl SceneBvh {
+    /// Builds a hierarchy over all spheres and triangles in `scene`.
     pub fn build(scene: &Scene) -> Self {
         let mut primitives = primitive_info_for_scene(scene);
         Self {
@@ -117,11 +162,13 @@ impl SceneBvh {
         }
     }
 
+    /// Returns whether the source scene contained no primitives.
     pub fn is_empty(&self) -> bool {
         self.flat.is_empty()
     }
 }
 
+/// Traverses the scene hierarchy and returns the closest valid hit.
 pub fn intersect_scene(
     ray: &Ray,
     scene: &Scene,
@@ -158,12 +205,21 @@ pub fn intersect_scene(
                     PrimitiveRef::Sphere(index) => {
                         intersect_sphere(ray, &scene.spheres[index as usize], min_distance, closest)
                     }
-                    PrimitiveRef::Triangle(index) => intersect_triangle(
-                        ray,
-                        &scene.triangles[index as usize],
-                        min_distance,
-                        closest,
-                    ),
+                    PrimitiveRef::Triangle(index) => {
+                        let index = index as usize;
+                        let attributes = scene
+                            .triangle_attributes
+                            .get(index)
+                            .copied()
+                            .unwrap_or_default();
+                        intersect_triangle_with_attributes(
+                            ray,
+                            &scene.triangles[index],
+                            attributes,
+                            min_distance,
+                            closest,
+                        )
+                    }
                 };
                 if let Some(candidate) = candidate {
                     closest = candidate.distance;
@@ -206,6 +262,7 @@ pub fn intersect_scene(
     hit
 }
 
+/// Brute-force reference used to verify accelerated traversal.
 pub fn intersect_scene_linear(ray: &Ray, scene: &Scene, min_distance: f32) -> Option<HitRecord> {
     let mut closest = f32::INFINITY;
     let mut hit = None;
@@ -215,8 +272,15 @@ pub fn intersect_scene_linear(ray: &Ray, scene: &Scene, min_distance: f32) -> Op
             hit = Some(candidate);
         }
     }
-    for triangle in &scene.triangles {
-        if let Some(candidate) = intersect_triangle(ray, triangle, min_distance, closest) {
+    for (triangle_index, triangle) in scene.triangles.iter().enumerate() {
+        let attributes = scene
+            .triangle_attributes
+            .get(triangle_index)
+            .copied()
+            .unwrap_or_default();
+        if let Some(candidate) =
+            intersect_triangle_with_attributes(ray, triangle, attributes, min_distance, closest)
+        {
             closest = candidate.distance;
             hit = Some(candidate);
         }
@@ -346,6 +410,9 @@ mod tests {
                 sphere(Vec3::new(0.0, 0.0, -2.0), 0.5, 1),
             ],
             triangles: Vec::new(),
+            triangle_attributes: Vec::new(),
+            textures: Vec::new(),
+            environment: None,
             animation: Default::default(),
         };
         let bvh = SceneBvh::build(&scene);
@@ -440,6 +507,9 @@ mod tests {
                 material_index: 2,
                 group: None,
             }],
+            triangle_attributes: vec![TriangleAttributes::default()],
+            textures: Vec::new(),
+            environment: None,
             animation: Default::default(),
         };
         let bvh = SceneBvh::build(&scene);
@@ -467,5 +537,38 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn triangle_interpolates_smooth_normal_and_texture_coordinates() {
+        let triangle = Triangle {
+            vertices: [
+                Vec3::new(-1.0, -1.0, -2.0),
+                Vec3::new(1.0, -1.0, -2.0),
+                Vec3::new(0.0, 1.0, -2.0),
+            ],
+            material_index: 0,
+            group: None,
+        };
+        let attributes = TriangleAttributes {
+            normals: Some([Vec3::Z, Vec3::Z, Vec3::Z]),
+            tex_coords: Some([
+                glam::Vec2::new(0.0, 0.0),
+                glam::Vec2::new(1.0, 0.0),
+                glam::Vec2::new(0.5, 1.0),
+            ]),
+        };
+
+        let hit = intersect_triangle_with_attributes(
+            &Ray::new(Vec3::ZERO, -Vec3::Z),
+            &triangle,
+            attributes,
+            0.001,
+            f32::INFINITY,
+        )
+        .unwrap();
+
+        assert!(hit.normal.abs_diff_eq(Vec3::Z, 1e-6));
+        assert!(hit.tex_coord.abs_diff_eq(glam::Vec2::new(0.5, 0.5), 1e-6));
     }
 }

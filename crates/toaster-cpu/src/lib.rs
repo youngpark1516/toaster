@@ -1,5 +1,10 @@
+//! Deterministic, readable CPU reference path tracer for validated Toaster scenes.
+
+/// Recursive path integration, material scattering, and direct-light sampling.
 pub mod integrator;
+/// Sphere/triangle tests and BVH-accelerated scene intersection.
 pub mod intersect;
+/// Emissive-triangle collection and area sampling.
 pub mod light;
 
 pub use integrator::{ray_color, render};

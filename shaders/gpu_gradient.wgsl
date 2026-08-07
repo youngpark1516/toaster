@@ -1,3 +1,4 @@
+// Uniform render dimensions and diagnostic fields mirrored by Rust RenderParams.
 struct RenderParams {
     width: u32,
     height: u32,
@@ -5,12 +6,15 @@ struct RenderParams {
     max_bounces: u32,
 };
 
+// Linear RGBA output buffer, one element per image pixel.
 @group(0) @binding(0)
 var<storage, read_write> output: array<vec4<f32>>;
 
+// Render settings uploaded once for the dispatch.
 @group(0) @binding(1)
 var<uniform> params: RenderParams;
 
+// Writes a UV gradient for one in-bounds pixel in each 8x8 workgroup lane.
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let x = gid.x;

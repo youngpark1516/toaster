@@ -1,3 +1,5 @@
+//! CPU reference path integration and material scattering.
+
 use crate::intersect::{intersect_scene, HitRecord, SceneBvh};
 use crate::light::AreaLights;
 use glam::Vec3;
@@ -8,6 +10,17 @@ use toaster_scene::{Background, Material, Scene};
 const RENDER_SEED: u64 = 0x0054_4f41_5354_4552;
 const RAY_EPSILON: f32 = 0.001;
 
+#[derive(Clone, Copy)]
+struct TraceContext<'a> {
+    scene: &'a Scene,
+    bvh: &'a SceneBvh,
+    lights: &'a AreaLights,
+}
+
+/// Renders a complete scene into a deterministic linear-RGB image.
+///
+/// The scene loader is expected to have validated nonzero dimensions, samples,
+/// bounce depth, and camera vectors.
 pub fn render(scene: &Scene) -> ImageBuffer {
     let settings = scene.render;
     let camera = Camera::new(
@@ -19,8 +32,16 @@ pub fn render(scene: &Scene) -> ImageBuffer {
     )
     .expect("scene loader validates camera settings");
     let lights = AreaLights::collect(scene);
-    println!("Emissive area lights: {}", lights.len());
+    tracing::debug!(
+        emissive_area_lights = lights.len(),
+        "prepared CPU path trace"
+    );
     let bvh = SceneBvh::build(scene);
+    let trace = TraceContext {
+        scene,
+        bvh: &bvh,
+        lights: &lights,
+    };
 
     let mut image = ImageBuffer::new(settings.width, settings.height);
     let mut rng = StdRng::seed_from_u64(RENDER_SEED);
@@ -32,12 +53,11 @@ pub fn render(scene: &Scene) -> ImageBuffer {
                 let v = 1.0 - (y as f32 + rng.random::<f32>()) / settings.height as f32;
                 color += ray_color_inner(
                     &camera.ray(u, v),
-                    scene,
-                    &bvh,
-                    &lights,
+                    trace,
                     &mut rng,
                     settings.max_bounces,
                     true,
+                    None,
                 );
             }
             image.set_pixel(x, y, color / settings.samples as f32);
@@ -46,6 +66,10 @@ pub fn render(scene: &Scene) -> ImageBuffer {
     image
 }
 
+/// Traces one ray with caller-provided randomness and maximum path depth.
+///
+/// This convenience entry point rebuilds the emissive triangle list; full-image
+/// rendering uses an internal path that reuses the list.
 pub fn ray_color<R: Rng + ?Sized>(
     ray: &Ray,
     scene: &Scene,
@@ -54,24 +78,41 @@ pub fn ray_color<R: Rng + ?Sized>(
 ) -> Vec3 {
     let lights = AreaLights::collect(scene);
     let bvh = SceneBvh::build(scene);
-    ray_color_inner(ray, scene, &bvh, &lights, rng, remaining_depth, true)
+    ray_color_inner(
+        ray,
+        TraceContext {
+            scene,
+            bvh: &bvh,
+            lights: &lights,
+        },
+        rng,
+        remaining_depth,
+        true,
+        None,
+    )
 }
 
+/// Recursively integrates emitted, direct, indirect, and background radiance.
+///
+/// `include_emission` prevents double counting explicitly sampled lights, while
+/// `environment_bsdf_pdf` enables MIS when a diffuse path reaches the map.
 fn ray_color_inner<R: Rng + ?Sized>(
     ray: &Ray,
-    scene: &Scene,
-    bvh: &SceneBvh,
-    lights: &AreaLights,
+    trace: TraceContext<'_>,
     rng: &mut R,
     remaining_depth: u32,
     include_emission: bool,
+    environment_bsdf_pdf: Option<f32>,
 ) -> Vec3 {
+    let scene = trace.scene;
+    let bvh = trace.bvh;
+    let lights = trace.lights;
     if remaining_depth == 0 {
         return Vec3::ZERO;
     }
 
     if let Some(hit) = intersect_scene(ray, scene, bvh, RAY_EPSILON) {
-        let material = scene.materials[hit.material_index];
+        let material = material_at_hit(scene.materials[hit.material_index], &hit, scene);
         if let Material::Emissive { color, strength } = material {
             return if include_emission {
                 color * strength
@@ -84,15 +125,17 @@ fn ray_color_inner<R: Rng + ?Sized>(
             let indirect = scatter.attenuation
                 * ray_color_inner(
                     &scatter.ray,
-                    scene,
-                    bvh,
-                    lights,
+                    trace,
                     rng,
                     remaining_depth - 1,
                     next_include_emission,
+                    scatter.bsdf_pdf,
                 );
             let direct = match material {
-                Material::Diffuse { albedo } => direct_light(&hit, albedo, scene, bvh, lights, rng),
+                Material::Diffuse { albedo } => {
+                    direct_area_light(&hit, albedo, scene, bvh, lights, rng)
+                        + direct_environment(&hit, albedo, scene, bvh, rng)
+                }
                 _ => Vec3::ZERO,
             };
             return direct + indirect;
@@ -107,10 +150,22 @@ fn ray_color_inner<R: Rng + ?Sized>(
             Vec3::ONE.lerp(Vec3::new(0.35, 0.65, 1.0), blend)
         }
         Background::Black => Vec3::ZERO,
+        Background::Environment => {
+            let environment = scene
+                .environment
+                .as_ref()
+                .expect("scene loader provides an environment map");
+            let radiance = environment.sample(ray.direction);
+            let mis_weight = environment_bsdf_pdf.map_or(1.0, |bsdf_pdf| {
+                power_heuristic(bsdf_pdf, environment.pdf_solid_angle(ray.direction))
+            });
+            radiance * mis_weight
+        }
     }
 }
 
-fn direct_light<R: Rng + ?Sized>(
+/// Estimates one-sample direct illumination from emissive triangles.
+fn direct_area_light<R: Rng + ?Sized>(
     hit: &HitRecord,
     albedo: Vec3,
     scene: &Scene,
@@ -149,12 +204,69 @@ fn direct_light<R: Rng + ?Sized>(
         / (distance_squared * light.pdf_area)
 }
 
-#[derive(Clone, Copy, Debug)]
-struct Scatter {
-    ray: Ray,
-    attenuation: Vec3,
+/// Estimates one-sample direct environment illumination with visibility and MIS.
+fn direct_environment<R: Rng + ?Sized>(
+    hit: &HitRecord,
+    albedo: Vec3,
+    scene: &Scene,
+    bvh: &SceneBvh,
+    rng: &mut R,
+) -> Vec3 {
+    if scene.render.background != Background::Environment {
+        return Vec3::ZERO;
+    }
+    let environment = scene
+        .environment
+        .as_ref()
+        .expect("scene loader provides an environment map");
+    let Some(sample) = environment.sample_importance(
+        rng.random::<f32>(),
+        rng.random::<f32>(),
+        rng.random::<f32>(),
+    ) else {
+        return Vec3::ZERO;
+    };
+
+    let surface_cosine = hit.normal.dot(sample.direction).max(0.0);
+    if surface_cosine <= 0.0 || sample.pdf_solid_angle <= 0.0 {
+        return Vec3::ZERO;
+    }
+
+    let shadow_ray = Ray::new(hit.point + hit.normal * RAY_EPSILON, sample.direction);
+    if intersect_scene(&shadow_ray, scene, bvh, RAY_EPSILON).is_some() {
+        return Vec3::ZERO;
+    }
+
+    let bsdf_pdf = surface_cosine / std::f32::consts::PI;
+    let mis_weight = power_heuristic(sample.pdf_solid_angle, bsdf_pdf);
+    let diffuse_brdf = albedo / std::f32::consts::PI;
+    diffuse_brdf * sample.radiance * surface_cosine * mis_weight / sample.pdf_solid_angle
 }
 
+/// Returns the balance weight from the squared-PDF power heuristic.
+fn power_heuristic(first_pdf: f32, second_pdf: f32) -> f32 {
+    let first_squared = first_pdf * first_pdf;
+    let second_squared = second_pdf * second_pdf;
+    let denominator = first_squared + second_squared;
+    if denominator > 0.0 {
+        first_squared / denominator
+    } else {
+        0.0
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+/// Result of sampling a material's scattering distribution.
+struct Scatter {
+    /// Spawned ray from the hit point.
+    ray: Ray,
+    /// Multiplicative path throughput.
+    attenuation: Vec3,
+    /// Diffuse solid-angle PDF, or `None` for delta/specular events.
+    bsdf_pdf: Option<f32>,
+}
+
+/// Samples the outgoing direction and attenuation for a runtime material.
 fn scatter<R: Rng + ?Sized>(
     incoming: &Ray,
     hit: &HitRecord,
@@ -170,6 +282,22 @@ fn scatter<R: Rng + ?Sized>(
             Some(Scatter {
                 ray: Ray::new(hit.point, direction.normalize()),
                 attenuation: albedo,
+                bsdf_pdf: Some(
+                    hit.normal.dot(direction.normalize()).max(0.0) / std::f32::consts::PI,
+                ),
+            })
+        }
+        Material::TexturedDiffuse { albedo, .. } => {
+            let mut direction = hit.normal + random_unit_vector(rng);
+            if direction.length_squared() < 1e-8 {
+                direction = hit.normal;
+            }
+            Some(Scatter {
+                ray: Ray::new(hit.point, direction.normalize()),
+                attenuation: albedo,
+                bsdf_pdf: Some(
+                    hit.normal.dot(direction.normalize()).max(0.0) / std::f32::consts::PI,
+                ),
             })
         }
         Material::Metal { albedo, roughness } => {
@@ -181,6 +309,7 @@ fn scatter<R: Rng + ?Sized>(
             Some(Scatter {
                 ray: Ray::new(hit.point, direction.normalize()),
                 attenuation: albedo,
+                bsdf_pdf: None,
             })
         }
         Material::Dielectric { ior } => {
@@ -200,16 +329,32 @@ fn scatter<R: Rng + ?Sized>(
             Some(Scatter {
                 ray: Ray::new(hit.point, direction.normalize()),
                 attenuation,
+                bsdf_pdf: None,
             })
         }
         Material::Emissive { .. } => None,
     }
 }
 
+/// Resolves a textured diffuse material to its hit-specific constant albedo.
+fn material_at_hit(material: Material, hit: &HitRecord, scene: &Scene) -> Material {
+    match material {
+        Material::TexturedDiffuse {
+            albedo,
+            texture_index,
+        } => Material::Diffuse {
+            albedo: albedo * scene.textures[texture_index].sample_linear(hit.tex_coord),
+        },
+        material => material,
+    }
+}
+
+/// Reflects a direction around a surface normal.
 fn reflect(direction: Vec3, normal: Vec3) -> Vec3 {
     direction - 2.0 * direction.dot(normal) * normal
 }
 
+/// Refracts a normalized direction using the supplied index ratio.
 fn refract(direction: Vec3, normal: Vec3, ratio: f32) -> Vec3 {
     let cos_theta = (-direction).dot(normal).min(1.0);
     let perpendicular = ratio * (direction + cos_theta * normal);
@@ -217,15 +362,18 @@ fn refract(direction: Vec3, normal: Vec3, ratio: f32) -> Vec3 {
     perpendicular + parallel
 }
 
+/// Approximates dielectric Fresnel reflectance with Schlick's equation.
 fn reflectance(cosine: f32, refraction_ratio: f32) -> f32 {
     let r0 = ((1.0 - refraction_ratio) / (1.0 + refraction_ratio)).powi(2);
     r0 + (1.0 - r0) * (1.0 - cosine).powi(5)
 }
 
+/// Draws a uniformly distributed unit vector.
 fn random_unit_vector<R: Rng + ?Sized>(rng: &mut R) -> Vec3 {
     random_in_unit_sphere(rng).normalize()
 }
 
+/// Rejection-samples a nonzero point inside the unit sphere.
 fn random_in_unit_sphere<R: Rng + ?Sized>(rng: &mut R) -> Vec3 {
     loop {
         let vector = Vec3::new(
@@ -244,7 +392,9 @@ fn random_in_unit_sphere<R: Rng + ?Sized>(rng: &mut R) -> Vec3 {
 mod tests {
     use super::*;
     use rand::SeedableRng;
-    use toaster_scene::{Background, CameraSettings, Material, RenderSettings, Sphere, Triangle};
+    use toaster_scene::{
+        Background, CameraSettings, EnvironmentMap, Material, RenderSettings, Sphere, Triangle,
+    };
 
     fn test_scene(albedo: Vec3) -> Scene {
         Scene {
@@ -269,6 +419,9 @@ mod tests {
                 group: None,
             }],
             triangles: Vec::new(),
+            triangle_attributes: Vec::new(),
+            textures: Vec::new(),
+            environment: None,
             animation: Default::default(),
         }
     }
@@ -280,6 +433,7 @@ mod tests {
             normal,
             front_face,
             material_index: 0,
+            tex_coord: glam::Vec2::ZERO,
         }
     }
 
@@ -338,6 +492,12 @@ mod tests {
             ],
             spheres: Vec::new(),
             triangles,
+            triangle_attributes: vec![
+                toaster_scene::TriangleAttributes::default();
+                if blocked { 3 } else { 1 }
+            ],
+            textures: Vec::new(),
+            environment: None,
             animation: Default::default(),
         }
     }
@@ -374,6 +534,19 @@ mod tests {
             4,
         );
         assert!(color.abs_diff_eq(Vec3::new(0.35, 0.65, 1.0), 1e-6));
+    }
+
+    #[test]
+    fn miss_samples_environment_radiance() {
+        let mut scene = test_scene(Vec3::ONE);
+        scene.render.background = Background::Environment;
+        scene.environment =
+            Some(EnvironmentMap::new(1, 1, vec![Vec3::new(3.0, 2.0, 1.0)], 0.5, 0.0).unwrap());
+        let mut rng = StdRng::seed_from_u64(1);
+
+        let color = ray_color(&Ray::new(Vec3::ZERO, Vec3::X), &scene, &mut rng, 1);
+
+        assert_eq!(color, Vec3::new(1.5, 1.0, 0.5));
     }
 
     #[test]
@@ -520,7 +693,7 @@ mod tests {
         let bvh = SceneBvh::build(&scene);
         let lights = AreaLights::collect(&scene);
         let mut rng = StdRng::seed_from_u64(11);
-        let color = direct_light(
+        let color = direct_area_light(
             &test_hit(Vec3::Y, true),
             Vec3::splat(0.5),
             &scene,
@@ -537,7 +710,7 @@ mod tests {
         let bvh = SceneBvh::build(&scene);
         let lights = AreaLights::collect(&scene);
         let mut rng = StdRng::seed_from_u64(11);
-        let color = direct_light(
+        let color = direct_area_light(
             &test_hit(Vec3::Y, true),
             Vec3::splat(0.5),
             &scene,
@@ -549,10 +722,80 @@ mod tests {
     }
 
     #[test]
+    fn direct_environment_sampling_contributes_when_visible() {
+        let mut scene = test_scene(Vec3::ONE);
+        scene.spheres.clear();
+        scene.render.background = Background::Environment;
+        scene.environment =
+            Some(EnvironmentMap::new(1, 1, vec![Vec3::splat(2.0)], 1.0, 0.0).unwrap());
+        let mut rng = StdRng::seed_from_u64(12);
+        let hit = test_hit(Vec3::Y, true);
+        let bvh = SceneBvh::build(&scene);
+        let mut sum = Vec3::ZERO;
+        for _ in 0..64 {
+            sum += direct_environment(&hit, Vec3::splat(0.5), &scene, &bvh, &mut rng);
+        }
+
+        assert!(sum.cmpgt(Vec3::ZERO).all());
+    }
+
+    #[test]
+    fn environment_miss_uses_bsdf_mis_weight() {
+        let mut scene = test_scene(Vec3::ONE);
+        scene.render.background = Background::Environment;
+        scene.environment = Some(EnvironmentMap::new(1, 1, vec![Vec3::ONE], 1.0, 0.0).unwrap());
+        let ray = Ray::new(Vec3::ZERO, Vec3::X);
+        let bsdf_pdf = 1.0 / std::f32::consts::PI;
+        let environment_pdf = scene.environment.as_ref().unwrap().pdf_solid_angle(Vec3::X);
+        let expected = Vec3::splat(power_heuristic(bsdf_pdf, environment_pdf));
+        let mut rng = StdRng::seed_from_u64(13);
+        let bvh = SceneBvh::build(&scene);
+
+        let color = ray_color_inner(
+            &ray,
+            TraceContext {
+                scene: &scene,
+                bvh: &bvh,
+                lights: &AreaLights::default(),
+            },
+            &mut rng,
+            1,
+            true,
+            Some(bsdf_pdf),
+        );
+
+        assert!(color.abs_diff_eq(expected, 1e-6));
+    }
+
+    #[test]
+    fn power_heuristic_is_normalized() {
+        let first = power_heuristic(0.25, 0.75);
+        let second = power_heuristic(0.75, 0.25);
+        assert!((first + second - 1.0).abs() < 1e-6);
+        assert_eq!(power_heuristic(0.0, 0.0), 0.0);
+    }
+
+    #[test]
     fn renders_foreground_and_background() {
         let scene = test_scene(Vec3::new(1.0, 0.0, 0.0));
         let image = render(&scene);
         assert_eq!((image.width(), image.height()), (5, 5));
         assert_ne!(image.pixel(2, 2), image.pixel(0, 0));
+    }
+
+    #[test]
+    fn gltf_base_color_factor_modulates_bilinear_srgb_texture_sample() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/009_gltf_textured_quad.json");
+        let scene = toaster_scene::load_scene(path).unwrap();
+        let bvh = SceneBvh::build(&scene);
+        let hit =
+            intersect_scene(&Ray::new(Vec3::ZERO, -Vec3::Z), &scene, &bvh, RAY_EPSILON).unwrap();
+        let material = material_at_hit(scene.materials[hit.material_index], &hit, &scene);
+
+        let Material::Diffuse { albedo } = material else {
+            panic!("expected sampled diffuse material");
+        };
+        assert!(albedo.abs_diff_eq(Vec3::new(0.4, 0.5, 0.15), 1e-5));
     }
 }

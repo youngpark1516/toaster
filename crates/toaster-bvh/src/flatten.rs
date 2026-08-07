@@ -6,22 +6,29 @@ use crate::{
 };
 
 #[derive(Clone, Copy, Debug)]
+/// GPU-friendly node whose tag is encoded by `primitive_count`.
 pub struct FlatNode {
+    /// World-space node bounds.
     pub bounds: Aabb,
+    /// First leaf primitive or right-child node index.
     pub first_primitive_or_right_child: u32,
+    /// Leaf primitive count; zero identifies an interior node.
     pub primitive_count: u32,
 }
 
 impl FlatNode {
+    /// Returns whether this node owns a primitive range.
     pub fn is_leaf(self) -> bool {
         self.primitive_count > 0
     }
 
+    /// Returns the first primitive index for a leaf.
     pub fn first_primitive(self) -> u32 {
         debug_assert!(self.is_leaf());
         self.first_primitive_or_right_child
     }
 
+    /// Returns the right-child node index for an interior node.
     pub fn right_child(self) -> u32 {
         debug_assert!(!self.is_leaf());
         self.first_primitive_or_right_child
@@ -29,16 +36,21 @@ impl FlatNode {
 }
 
 #[derive(Clone, Debug, Default)]
+/// Depth-first flat hierarchy and its leaf-ordered primitive references.
 pub struct FlatBvh {
+    /// Nodes with each left child immediately following its parent.
     pub nodes: Vec<FlatNode>,
+    /// Primitive references stored in contiguous leaf ranges.
     pub primitives: Vec<PrimitiveRef>,
 }
 
 impl FlatBvh {
+    /// Constructs and flattens a hierarchy from primitive build records.
     pub fn build(primitive_info: &mut [crate::bvh::PrimitiveInfo]) -> Self {
         Self::from_bvh(Bvh::build(primitive_info))
     }
 
+    /// Converts a recursive hierarchy into depth-first storage.
     pub fn from_bvh(bvh: Bvh) -> Self {
         let mut nodes = Vec::new();
         if let Some(root) = &bvh.root {
@@ -51,6 +63,7 @@ impl FlatBvh {
         }
     }
 
+    /// Returns whether the hierarchy contains no nodes.
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }

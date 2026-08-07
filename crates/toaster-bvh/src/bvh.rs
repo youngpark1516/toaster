@@ -3,36 +3,54 @@
 use crate::aabb::Aabb;
 use glam::Vec3;
 
+/// Default maximum number of primitives stored in one leaf.
 pub const DEFAULT_MAX_LEAF_PRIMITIVES: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Stable reference to a primitive in the renderer-neutral scene arrays.
 pub enum PrimitiveRef {
+    /// Index into the scene sphere array.
     Sphere(u32),
+    /// Index into the scene triangle array.
     Triangle(u32),
 }
 
 #[derive(Clone, Copy, Debug)]
+/// Bounds and centroid used while partitioning one primitive.
 pub struct PrimitiveInfo {
+    /// World-space primitive bounds.
     pub bounds: Aabb,
+    /// Point used to select and sort along a split axis.
     pub centroid: Vec3,
+    /// Stable scene primitive reference.
     pub primitive: PrimitiveRef,
 }
 
 #[derive(Clone, Debug)]
+/// Recursive hierarchy node produced during construction.
 pub enum BvhNode {
+    /// Node with two non-empty children.
     Interior {
+        /// Bounds enclosing both children.
         bounds: Aabb,
+        /// Lower partition, flattened immediately after its parent.
         left: Box<BvhNode>,
+        /// Upper partition.
         right: Box<BvhNode>,
     },
+    /// Node referencing a contiguous range in the ordered primitive array.
     Leaf {
+        /// Bounds enclosing the leaf primitives.
         bounds: Aabb,
+        /// First index in [`Bvh::primitives`].
         first_primitive: u32,
+        /// Number of contiguous primitive references.
         primitive_count: u32,
     },
 }
 
 impl BvhNode {
+    /// Returns this node's world-space bounds.
     pub fn bounds(&self) -> Aabb {
         match self {
             Self::Interior { bounds, .. } | Self::Leaf { bounds, .. } => *bounds,
@@ -41,16 +59,21 @@ impl BvhNode {
 }
 
 #[derive(Clone, Debug)]
+/// Recursive hierarchy plus primitive references reordered into leaf ranges.
 pub struct Bvh {
+    /// Root node, or `None` when built from no primitives.
     pub root: Option<BvhNode>,
+    /// Primitive references in leaf traversal order.
     pub primitives: Vec<PrimitiveRef>,
 }
 
 impl Bvh {
+    /// Builds a median-split hierarchy with the default leaf size.
     pub fn build(primitive_info: &mut [PrimitiveInfo]) -> Self {
         Self::build_with_leaf_size(primitive_info, DEFAULT_MAX_LEAF_PRIMITIVES)
     }
 
+    /// Builds a median-split hierarchy with an explicit nonzero leaf limit.
     pub fn build_with_leaf_size(
         primitive_info: &mut [PrimitiveInfo],
         max_leaf_primitives: usize,

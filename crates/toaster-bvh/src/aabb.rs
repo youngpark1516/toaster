@@ -3,16 +3,21 @@
 use glam::Vec3;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+/// Finite axis-aligned bounds used during hierarchy construction and traversal.
 pub struct Aabb {
+    /// Minimum corner.
     pub min: Vec3,
+    /// Maximum corner.
     pub max: Vec3,
 }
 
 impl Aabb {
+    /// Creates bounds from ordered minimum and maximum corners.
     pub fn new(min: Vec3, max: Vec3) -> Self {
         Self { min, max }
     }
 
+    /// Creates the identity value for repeated [`Self::union`] operations.
     pub fn empty() -> Self {
         Self {
             min: Vec3::splat(f32::INFINITY),
@@ -20,6 +25,7 @@ impl Aabb {
         }
     }
 
+    /// Returns bounds enclosing both inputs.
     pub fn union(self, other: Self) -> Self {
         Self {
             min: self.min.min(other.min),
@@ -27,6 +33,7 @@ impl Aabb {
         }
     }
 
+    /// Expands every face outward by `amount`.
     pub fn expand(self, amount: f32) -> Self {
         let delta = Vec3::splat(amount);
         Self {
@@ -35,19 +42,23 @@ impl Aabb {
         }
     }
 
+    /// Returns the midpoint of the bounds.
     pub fn centroid(self) -> Vec3 {
         0.5 * (self.min + self.max)
     }
 
+    /// Returns the non-normalized diagonal from minimum to maximum.
     pub fn extent(self) -> Vec3 {
         self.max - self.min
     }
 
+    /// Returns the surface area after clamping negative extents to zero.
     pub fn surface_area(self) -> f32 {
         let extent = self.extent().max(Vec3::ZERO);
         2.0 * (extent.x * extent.y + extent.x * extent.z + extent.y * extent.z)
     }
 
+    /// Returns the index of the largest extent, preferring lower axes on ties.
     pub fn longest_axis(self) -> usize {
         let extent = self.extent();
         if extent.x >= extent.y && extent.x >= extent.z {
@@ -59,6 +70,7 @@ impl Aabb {
         }
     }
 
+    /// Tests a ray against all three slabs within the supplied distance range.
     pub fn intersects_ray(
         self,
         origin: Vec3,

@@ -7,55 +7,84 @@ use serde::Deserialize;
 use std::collections::HashSet;
 
 #[derive(Clone, Debug, Default, Deserialize)]
+/// Ordered animation tracks evaluated from an immutable base scene.
 pub struct Animation {
+    /// Tracks declared by the scene, preserved in declaration order.
     #[serde(default)]
     pub tracks: Vec<AnimationTrack>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+/// A camera or named object group affected by a track.
 pub enum AnimationTarget {
-    Group { name: String },
+    /// Every sphere and triangle with the matching group name.
+    Group {
+        /// Nonempty group name.
+        name: String,
+    },
+    /// The scene camera.
     Camera,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Interpolation applied between adjacent keyframes.
 pub enum Interpolation {
+    /// Blend continuously between keyframe values.
     Linear,
+    /// Hold the left keyframe until the next keyframe time.
     Step,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
+/// Translation offset at one animation time.
 pub struct TranslationKeyframe {
+    /// Nonnegative time in seconds.
     pub time: f32,
+    /// World-space translation offset from the base pose.
     pub value: Vec3,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
+/// Rotation angle at one animation time.
 pub struct RotationKeyframe {
+    /// Nonnegative time in seconds.
     pub time: f32,
+    /// Rotation angle in degrees from the base pose.
     pub degrees: f32,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+/// A translation or axis/pivot rotation track.
 pub enum AnimationTrack {
+    /// Translates a target by sampled offsets.
     Translation {
+        /// Camera or object group to translate.
         target: AnimationTarget,
+        /// Sampling rule between keyframes.
         interpolation: Interpolation,
+        /// Strictly time-ordered offsets.
         keyframes: Vec<TranslationKeyframe>,
     },
+    /// Rotates a target around a fixed world-space axis and pivot.
     Rotation {
+        /// Camera or object group to rotate.
         target: AnimationTarget,
+        /// Finite nonzero axis normalized during scene loading.
         axis: Vec3,
+        /// World-space rotation pivot.
         pivot: Vec3,
+        /// Sampling rule between keyframes.
         interpolation: Interpolation,
+        /// Strictly time-ordered angles.
         keyframes: Vec<RotationKeyframe>,
     },
 }
 
 impl AnimationTrack {
+    /// Returns the camera or group affected by this track.
     pub fn target(&self) -> &AnimationTarget {
         match self {
             Self::Translation { target, .. } | Self::Rotation { target, .. } => target,
@@ -64,6 +93,7 @@ impl AnimationTrack {
 }
 
 impl Animation {
+    /// Validates and normalizes every rotation axis in place.
     pub(crate) fn normalize_rotation_axes(&mut self) -> Result<()> {
         for track in &mut self.tracks {
             let AnimationTrack::Rotation { axis, .. } = track else {
@@ -80,6 +110,9 @@ impl Animation {
 
 impl Scene {
     /// Evaluates all tracks from this immutable base scene at `time_seconds`.
+    ///
+    /// Translation tracks compose before rotations; rotations retain declaration
+    /// order. The base scene is cloned and remains unchanged.
     pub fn evaluate_at(&self, time_seconds: f32) -> Result<Self> {
         if !time_seconds.is_finite() || time_seconds < 0.0 {
             bail!("animation time must be finite and non-negative");
@@ -122,7 +155,11 @@ impl Scene {
     }
 }
 
+/// Checks track targets, time ordering, finite values, and attribute alignment.
 pub(crate) fn validate_animation(scene: &Scene) -> Result<()> {
+    if scene.triangle_attributes.len() != scene.triangles.len() {
+        bail!("triangle attribute count must match triangle count");
+    }
     let groups: HashSet<&str> = scene
         .spheres
         .iter()
@@ -174,6 +211,7 @@ pub(crate) fn validate_animation(scene: &Scene) -> Result<()> {
     Ok(())
 }
 
+/// Ensures a keyframe time sequence is nonempty, finite, nonnegative, and strict.
 fn validate_times(times: impl Iterator<Item = f32>) -> Result<()> {
     let mut previous = None;
     let mut count = 0;
@@ -193,6 +231,7 @@ fn validate_times(times: impl Iterator<Item = f32>) -> Result<()> {
     Ok(())
 }
 
+/// Samples a translation track, clamping outside its keyframe range.
 fn sample_translation(
     keys: &[TranslationKeyframe],
     interpolation: Interpolation,
@@ -206,6 +245,7 @@ fn sample_translation(
         .unwrap_or_else(|| endpoint_translation(keys, time))
 }
 
+/// Samples a rotation track, clamping outside its keyframe range.
 fn sample_rotation(keys: &[RotationKeyframe], interpolation: Interpolation, time: f32) -> f32 {
     sample_segment(keys, time, |key| key.time)
         .map(|(left, right, amount)| match interpolation {
@@ -215,6 +255,7 @@ fn sample_rotation(keys: &[RotationKeyframe], interpolation: Interpolation, time
         .unwrap_or_else(|| endpoint_rotation(keys, time))
 }
 
+/// Locates the adjacent keyframes containing `time` and returns their blend amount.
 fn sample_segment<T>(keys: &[T], time: f32, key_time: impl Fn(&T) -> f32) -> Option<(&T, &T, f32)> {
     for pair in keys.windows(2) {
         let start = key_time(&pair[0]);
@@ -226,6 +267,9 @@ fn sample_segment<T>(keys: &[T], time: f32, key_time: impl Fn(&T) -> f32) -> Opt
     None
 }
 
+/// Returns the first or last translation when time lies outside the key range.
+///
+/// The caller guarantees that `keys` is nonempty through animation validation.
 fn endpoint_translation(keys: &[TranslationKeyframe], time: f32) -> Vec3 {
     if time < keys[0].time {
         keys[0].value
@@ -234,6 +278,9 @@ fn endpoint_translation(keys: &[TranslationKeyframe], time: f32) -> Vec3 {
     }
 }
 
+/// Returns the first or last rotation when time lies outside the key range.
+///
+/// The caller guarantees that `keys` is nonempty through animation validation.
 fn endpoint_rotation(keys: &[RotationKeyframe], time: f32) -> f32 {
     if time < keys[0].time {
         keys[0].degrees
@@ -242,6 +289,7 @@ fn endpoint_rotation(keys: &[RotationKeyframe], time: f32) -> f32 {
     }
 }
 
+/// Applies a sampled offset to the camera or every primitive in a group.
 fn apply_translation(scene: &mut Scene, target: &AnimationTarget, offset: Vec3) {
     match target {
         AnimationTarget::Camera => {
@@ -265,6 +313,10 @@ fn apply_translation(scene: &mut Scene, target: &AnimationTarget, offset: Vec3) 
     }
 }
 
+/// Applies an axis/pivot rotation to camera vectors or grouped geometry.
+///
+/// Smooth triangle normals rotate with their vertices; texture coordinates are
+/// invariant under geometric transforms.
 fn apply_rotation(
     scene: &mut Scene,
     target: &AnimationTarget,
@@ -287,10 +339,19 @@ fn apply_rotation(
                     sphere.center = rotate_point(sphere.center);
                 }
             }
-            for triangle in &mut scene.triangles {
+            for (triangle, attributes) in scene
+                .triangles
+                .iter_mut()
+                .zip(&mut scene.triangle_attributes)
+            {
                 if triangle.group.as_deref() == Some(name) {
                     for vertex in &mut triangle.vertices {
                         *vertex = rotate_point(*vertex);
+                    }
+                    if let Some(normals) = &mut attributes.normals {
+                        for normal in normals {
+                            *normal = rotation * *normal;
+                        }
                     }
                 }
             }
@@ -338,6 +399,9 @@ mod tests {
                 material_index: 0,
                 group: Some("moving".into()),
             }],
+            triangle_attributes: vec![crate::TriangleAttributes::default()],
+            textures: Vec::new(),
+            environment: None,
             animation: Animation { tracks },
         }
     }

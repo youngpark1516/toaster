@@ -1,0 +1,752 @@
+{
+  "camera": {
+    "position": [
+      0.0,
+      5.5,
+      8.0
+    ],
+    "look_at": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "up": [
+      0.0,
+      1.0,
+      0.0
+    ],
+    "fov_degrees": 45.0
+  },
+  "render": {
+    "width": 320,
+    "height": 180,
+    "samples": 4,
+    "max_bounces": 4,
+    "background": "black"
+  },
+  "materials": [
+    {
+      "name": "surface",
+      "type": "diffuse",
+      "albedo": [
+        0.62,
+        0.68,
+        0.74
+      ]
+    },
+    {
+      "name": "accent",
+      "type": "metal",
+      "albedo": [
+        0.82,
+        0.48,
+        0.2
+      ],
+      "roughness": 0.2
+    },
+    {
+      "name": "light",
+      "type": "emissive",
+      "color": [
+        1.0,
+        0.92,
+        0.78
+      ],
+      "strength": 14.0
+    }
+  ],
+  "objects": [
+    {
+      "type": "triangle",
+      "vertices": [
+        [
+          -5.0,
+          0.0,
+          -5.0
+        ],
+        [
+          -5.0,
+          0.0,
+          5.0
+        ],
+        [
+          5.0,
+          0.0,
+          -5.0
+        ]
+      ],
+      "material": "surface"
+    },
+    {
+      "type": "triangle",
+      "vertices": [
+        [
+          5.0,
+          0.0,
+          -5.0
+        ],
+        [
+          -5.0,
+          0.0,
+          5.0
+        ],
+        [
+          5.0,
+          0.0,
+          5.0
+        ]
+      ],
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -3.6,
+        0.3497143,
+        -3.6
+      ],
+      "radius": 0.3497143,
+      "material": "accent"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -2.5714286,
+        0.4030639,
+        -3.6
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -1.5428571,
+        0.4292238,
+        -3.6
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -0.5142857,
+        0.4148616,
+        -3.6
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        0.5142857,
+        0.367297,
+        -3.6
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        1.5428571,
+        0.3107714,
+        -3.6
+      ],
+      "radius": 0.3497143,
+      "material": "accent"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        2.5714286,
+        0.274093,
+        -3.6
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        3.6,
+        0.2759552,
+        -3.6
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -3.6,
+        0.3154087,
+        -2.5714286
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -2.5714286,
+        0.3723462,
+        -2.5714286
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -1.5428571,
+        0.4177492,
+        -2.5714286
+      ],
+      "radius": 0.3497143,
+      "material": "accent"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -0.5142857,
+        0.4284782,
+        -2.5714286
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        0.5142857,
+        0.399065,
+        -2.5714286
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        1.5428571,
+        0.3445002,
+        -2.5714286
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        2.5714286,
+        0.2925928,
+        -2.5714286
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        3.6,
+        0.2697974,
+        -2.5714286
+      ],
+      "radius": 0.3497143,
+      "material": "accent"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -3.6,
+        0.2877317,
+        -1.5428571
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -2.5714286,
+        0.3372556,
+        -1.5428571
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -1.5428571,
+        0.393129,
+        -1.5428571
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -0.5142857,
+        0.4268761,
+        -1.5428571
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        0.5142857,
+        0.4212976,
+        -1.5428571
+      ],
+      "radius": 0.3497143,
+      "material": "accent"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        1.5428571,
+        0.3792365,
+        -1.5428571
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        2.5714286,
+        0.3221295,
+        -1.5428571
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        3.6,
+        0.279081,
+        -1.5428571
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -3.6,
+        0.2720309,
+        -0.5142857
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -2.5714286,
+        0.3045722,
+        -0.5142857
+      ],
+      "radius": 0.3497143,
+      "material": "accent"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -1.5428571,
+        0.3601202,
+        -0.5142857
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -0.5142857,
+        0.4103649,
+        -0.5142857
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        0.5142857,
+        0.4296988,
+        -0.5142857
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        1.5428571,
+        0.4082686,
+        -0.5142857
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        2.5714286,
+        0.3569961,
+        -0.5142857
+      ],
+      "radius": 0.3497143,
+      "material": "accent"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        3.6,
+        0.3020124,
+        -0.5142857
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -3.6,
+        0.27134,
+        0.5142857
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -2.5714286,
+        0.2806112,
+        0.5142857
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -1.5428571,
+        0.3251008,
+        0.5142857
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -0.5142857,
+        0.3821348,
+        0.5142857
+      ],
+      "radius": 0.3497143,
+      "material": "accent"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        0.5142857,
+        0.4226455,
+        0.5142857
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        1.5428571,
+        0.4259868,
+        0.5142857
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        2.5714286,
+        0.3904557,
+        0.5142857
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        3.6,
+        0.3341607,
+        0.5142857
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -3.6,
+        0.2857926,
+        1.5428571
+      ],
+      "radius": 0.3497143,
+      "material": "accent"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -2.5714286,
+        0.2700022,
+        1.5428571
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -1.5428571,
+        0.2948372,
+        1.5428571
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -0.5142857,
+        0.3476404,
+        1.5428571
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        0.5142857,
+        0.4015005,
+        1.5428571
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        1.5428571,
+        0.4289677,
+        1.5428571
+      ],
+      "radius": 0.3497143,
+      "material": "accent"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        2.5714286,
+        0.4160433,
+        1.5428571
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        3.6,
+        0.3693142,
+        1.5428571
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -3.6,
+        0.312596,
+        2.5714286
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -2.5714286,
+        0.2747952,
+        2.5714286
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -1.5428571,
+        0.2751769,
+        2.5714286
+      ],
+      "radius": 0.3497143,
+      "material": "accent"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -0.5142857,
+        0.3135467,
+        2.5714286
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        0.5142857,
+        0.3703494,
+        2.5714286
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        1.5428571,
+        0.4166353,
+        2.5714286
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        2.5714286,
+        0.4288149,
+        2.5714286
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        3.6,
+        0.4006807,
+        2.5714286
+      ],
+      "radius": 0.3497143,
+      "material": "accent"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -3.6,
+        0.3465715,
+        3.6
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -2.5714286,
+        0.2940639,
+        3.6
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -1.5428571,
+        0.2699187,
+        3.6
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -0.5142857,
+        0.2864414,
+        3.6
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        0.5142857,
+        0.3352112,
+        3.6
+      ],
+      "radius": 0.3497143,
+      "material": "accent"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        1.5428571,
+        0.3913725,
+        3.6
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        2.5714286,
+        0.4263027,
+        3.6
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        3.6,
+        0.4221995,
+        3.6
+      ],
+      "radius": 0.3497143,
+      "material": "surface"
+    },
+    {
+      "type": "sphere",
+      "center": [
+        0.0,
+        4.5,
+        0.5
+      ],
+      "radius": 0.65,
+      "material": "light"
+    }
+  ]
+}

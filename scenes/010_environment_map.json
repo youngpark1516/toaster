@@ -1,0 +1,32 @@
+{
+  "camera": {
+    "position": [0.0, 1.25, 5.5],
+    "look_at": [0.0, 0.65, 0.0],
+    "up": [0.0, 1.0, 0.0],
+    "fov_degrees": 42.0
+  },
+  "render": {
+    "width": 480,
+    "height": 300,
+    "samples": 32,
+    "max_bounces": 6,
+    "background": {
+      "type": "environment",
+      "path": "../assets/environments/studio_test.hdr",
+      "intensity": 8.0,
+      "rotation_degrees": 20.0
+    }
+  },
+  "materials": [
+    { "name": "chrome", "type": "metal", "albedo": [0.95, 0.95, 0.95], "roughness": 0.04 },
+    { "name": "gold", "type": "metal", "albedo": [0.95, 0.62, 0.18], "roughness": 0.16 },
+    { "name": "matte", "type": "diffuse", "albedo": [0.55, 0.18, 0.12] },
+    { "name": "ground", "type": "diffuse", "albedo": [0.45, 0.48, 0.52] }
+  ],
+  "objects": [
+    { "type": "sphere", "center": [-1.25, 0.7, 0.0], "radius": 0.7, "material": "chrome" },
+    { "type": "sphere", "center": [0.0, 0.7, -0.2], "radius": 0.7, "material": "gold" },
+    { "type": "sphere", "center": [1.25, 0.7, 0.0], "radius": 0.7, "material": "matte" },
+    { "type": "sphere", "center": [0.0, -1000.0, 0.0], "radius": 1000.0, "material": "ground" }
+  ]
+}
