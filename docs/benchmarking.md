@@ -1,6 +1,7 @@
 # GPU Benchmarking and Logging
 
-This is the operational benchmark guide. See the [documentation index](README.md) or [codebase reference](codebase_reference.md) for API and implementation ownership.
+This is the operational benchmark guide. See the [documentation index](README.md)
+for related design and usage guides.
 
 Use Toaster's benchmark command to capture a baseline before changing renderer
 acceleration code and a candidate afterward. Always use a release build and the
@@ -130,3 +131,6 @@ The runner fails if wgpu selects a CPU adapter. Preserve the ignored baseline
 directory until comparison is complete. The environment control should remain
 approximately stable; triangle and sphere scaling cases show traversal gains
 and expose acceleration-structure overhead at small primitive counts.
+
+The checked-in [RTX 2080 Ti pre-BVH reports](benchmarks/pre-bvh/rtx-2080-ti/)
+provide the public linear-traversal baseline summarized in the root README.

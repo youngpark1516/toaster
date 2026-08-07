@@ -1,6 +1,8 @@
 # Rendering notes
 
-For shader bindings and the complete WGSL function catalog, see the [shader reference](shader_reference.md). For renderer call flows, see the [codebase reference](codebase_reference.md).
+For shader bindings, layout contracts, and active rendering algorithms, see the
+[shader reference](shader_reference.md). For system boundaries and data flow,
+see the [architecture guide](architecture.md).
 
 A **ray** has an origin and direction. The camera sends primary rays through image pixels; intersections create new rays that scatter according to surface materials.
 

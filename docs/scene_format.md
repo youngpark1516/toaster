@@ -264,4 +264,5 @@ CLI animation time is `frame_index / fps`. `--loop-duration` wraps that time whi
 }
 ```
 
-For known-good files, see [`scenes/`](../scenes/). For runtime commands, see the [project guide](project_guide.md).
+For known-good files, see [`scenes/`](../scenes/). The root
+[README](../README.md) contains the primary runtime commands.

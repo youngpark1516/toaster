@@ -2,7 +2,17 @@
 
 Toaster is a Rust-based headless GPU path tracer and procedural 3D scene sandbox. It begins with a small CPU reference renderer, then uses `wgpu` compute shaders so the same project can run on cluster GPUs and portable graphics backends.
 
-The [documentation index](docs/README.md) links the project guide, complete codebase/function reference, public API, scene schema, shader reference, benchmarking, and cluster workflows.
+The [documentation index](docs/README.md) links focused guides for the scene
+format, renderer architecture, shaders, benchmarking, and cluster workflows.
+
+## Ownership and project status
+
+- **Chanyoung Park** owns the overall renderer architecture and integration across
+  scene loading, GPU execution, animation, preview/export, and benchmarking.
+- **Srujam Dave** contributed core WGSL path-tracing work, including geometry
+  intersections, shading and direct lighting, antialiasing, and related fixes.
+
+> Development note: We used AI tools during development.
 
 ## Goals
 
@@ -14,6 +24,33 @@ The [documentation index](docs/README.md) links the project guide, complete code
 ## Non-goals
 
 Toaster is not a Blender replacement, game engine, or production DCC application. It deliberately avoids starting with CUDA, OptiX, or Vulkan ray-tracing extensions.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    JSON[JSON scene] --> Scene[toaster-scene]
+    GLTF[glTF / GLB] --> Assets[toaster-assets]
+    Assets --> Scene
+    Env[HDR / PNG / JPEG environment] --> Scene
+
+    Scene --> CPU[CPU reference renderer]
+    Scene --> GPU[wgpu compute renderer]
+    CPU --> PNG[PNG output]
+    GPU --> Readback[GPU readback]
+    Readback --> RGBA[Shared RGBA8 conversion]
+    RGBA --> PNG
+    RGBA --> JPEG[JPEG encoder]
+    JPEG --> MJPEG[MJPEG latest-frame server]
+    MJPEG --> Browser[Browser preview]
+    RGBA --> FFmpeg[Raw RGBA stdin to FFmpeg]
+    FFmpeg --> MP4[H.264 MP4]
+```
+
+The MP4 path still reads rendered pixels back to the CPU. Its advantage is that
+the shared RGBA frame is streamed straight to FFmpeg instead of being written as
+an intermediate PNG sequence. See [Architecture](docs/architecture.md) for the
+buffer, accumulation, and portability decisions behind this flow.
 
 ## Quickstart
 
@@ -167,6 +204,28 @@ cargo run -p toaster-cli -- cpu-render scenes/003_cornell_box.json \
 
 ### GPU benchmarks and logging
 
+The pre-BVH scaling baseline below was measured on an **NVIDIA GeForce RTX 2080
+Ti** through **Vulkan** with NVIDIA driver **610.43.02** on 2026-08-03. Every
+scene used 320×180 output, 4 samples per pixel, 4 bounces, 2 warmup frames, and 5
+measured frames at commit `d147e54`. FPS is `1000 / median total frame time`.
+
+| Workload | Loaded geometry | Median dispatch/wait | Median total | FPS |
+| --- | ---: | ---: | ---: | ---: |
+| [128 triangles](docs/benchmarks/pre-bvh/rtx-2080-ti/001_triangles_128.json) | 128 triangles + 1 light sphere | 1.133 ms | 2.528 ms | 395.5 |
+| [2,048 triangles](docs/benchmarks/pre-bvh/rtx-2080-ti/002_triangles_2048.json) | 2,048 triangles + 1 light sphere | 19.138 ms | 20.596 ms | 48.6 |
+| [8,192 triangles](docs/benchmarks/pre-bvh/rtx-2080-ti/003_triangles_8192.json) | 8,192 triangles + 1 light sphere | 55.955 ms | 57.749 ms | 17.3 |
+| [64 spheres](docs/benchmarks/pre-bvh/rtx-2080-ti/004_spheres_64.json) | 64 subject spheres + 1 light sphere + 2 triangles | 0.597 ms | 1.988 ms | 503.0 |
+| [512 spheres](docs/benchmarks/pre-bvh/rtx-2080-ti/005_spheres_512.json) | 512 subject spheres + 1 light sphere + 2 triangles | 2.799 ms | 4.177 ms | 239.4 |
+| [Mixed geometry](docs/benchmarks/pre-bvh/rtx-2080-ti/006_mixed_2048t_128s.json) | 2,048 triangles + 128 subject spheres + 1 light sphere | 23.171 ms | 24.649 ms | 40.6 |
+| [Environment control](docs/benchmarks/pre-bvh/rtx-2080-ti/007_environment_control.json) | 4 spheres | 0.245 ms | 1.619 ms | 617.7 |
+
+These are honest linear-traversal results, not projected BVH numbers. Reproduce
+the suite with:
+
+```sh
+./scripts/run_benchmark_suite.sh pre-bvh
+```
+
 Use the benchmark command in release mode to establish a repeatable baseline.
 It times GPU setup once, discards warmup frames, and summarizes steady-state
 frames rendered at animation time zero with a fixed random seed:
@@ -284,7 +343,5 @@ and GPU renderers use the same distribution and PDF convention.
 8. ✅ Static progressive GPU preview accumulation
 9. ✅ Repeatable GPU benchmark reports and structured logging
 
-See the [documentation index](docs/README.md) for the full documentation set,
-the [project guide](docs/project_guide.md) for the operational snapshot, or the
-shorter [roadmap](docs/roadmap.md) and [architecture](docs/architecture.md) notes
-for focused context.
+See the [documentation index](docs/README.md), [roadmap](docs/roadmap.md), and
+[architecture notes](docs/architecture.md) for focused context.

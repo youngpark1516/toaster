@@ -22,8 +22,7 @@ The [documentation index](docs/README.md) explains where information belongs. An
 
 - Rustdoc on the affected public and private items;
 - comments on affected WGSL structures, bindings, functions, and entry points;
-- the focused user/reference document that describes the behavior; and
-- the function catalog in [docs/codebase_reference.md](docs/codebase_reference.md) when functions are added, renamed, removed, or materially repurposed.
+- the focused user or design document that describes the behavior.
 
 `./scripts/check_docs.sh` generates private-item HTML under ignored `target/doc`, denies Rustdoc warnings and broken intra-doc links, and runs workspace doctests. Do not commit `target/doc`.
 
