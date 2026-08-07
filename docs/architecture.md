@@ -1,7 +1,5 @@
 # Architecture
 
-For the maintained repository tree, runtime flows, and complete production-function catalog, see the [codebase reference](codebase_reference.md). This file remains the short architectural overview.
-
 - `toaster-cli`: user-facing commands and process orchestration.
 - `toaster-core`: shared rays, cameras, colors, and image buffers.
 - `toaster-scene`: serializable scenes, objects, materials, transforms, and loading.
@@ -12,6 +10,55 @@ For the maintained repository tree, runtime flows, and complete production-funct
 - `toaster-server`: lightweight HTML, health, and latest-frame MJPEG preview endpoints.
 
 Dependencies point inward toward core data. Renderer-specific code stays out of scene descriptions, and GPU concerns remain isolated from the CPU reference implementation.
+
+## Engineering decisions
+
+### Keep host and shader storage layouts explicit
+
+GPU-facing Rust records use `#[repr(C)]`, explicit padding, and `bytemuck::Pod`.
+Their field order and the bind-group order are a contract with the corresponding
+WGSL structures and bindings; a change on either side requires a matching change
+on the other. Geometry, materials, lights, texture pixels, triangle attributes,
+and environment data use flat storage buffers so the shader can index them
+directly. Logical empty arrays receive a one-element dummy allocation because
+`wgpu` does not permit zero-sized buffer bindings, while explicit element counts
+prevent the shader from reading the sentinel.
+
+This design makes buffer sizes and transfers predictable and keeps the eventual
+BVH representation compatible with GPU storage buffers. The cost is more manual
+layout discipline than a higher-level GPU object model would require.
+
+### Accumulate progressive samples in the output buffer
+
+Static progressive preview treats the read/write linear-HDR output buffer as a
+persistent running average. Each dispatch receives the number of samples already
+represented by that buffer and combines them with the current batch:
+
+```text
+new_average = (old_average * old_samples + batch_average * batch_samples)
+              / (old_samples + batch_samples)
+```
+
+The host clamps the last batch so accumulation reaches the requested target
+exactly. Animation is rejected because averaging samples from different poses
+would not converge to a meaningful image. This contract avoids another GPU
+binding and CPU-side float accumulation while preserving independent-frame
+behavior by setting the prior sample count to zero.
+
+### Prefer portable compute and one output boundary
+
+Toaster uses `wgpu` and WGSL instead of CUDA so the renderer is not tied to one
+GPU vendor or one deployment backend. The same headless compute path can select
+Vulkan, Metal, Direct3D, or OpenGL-compatible adapters through `wgpu`, which is a
+better fit for cluster experiments and a future browser-facing project. The
+tradeoff is giving up CUDA-specific profiling, libraries, and vendor-tuned ray
+tracing features at this stage.
+
+All GPU outputs cross one explicit boundary: render to linear floating-point
+storage, copy to a map-readable buffer, read back on the CPU, and convert once to
+RGBA8. PNG, MJPEG, MP4, and benchmark consumers share that conversion. FFmpeg
+receives raw RGBA bytes over stdin and performs H.264 encoding without temporary
+PNGs; it does not consume GPU memory directly.
 
 GPU animation readback has two output paths over the same render loop. The PNG
 path writes each completed frame as a numbered image. The MP4 path converts the
@@ -38,10 +85,3 @@ either JPEG-encodes and publishes them through `toaster-server`, or sends their
 RGBA8 bytes directly to FFmpeg. A separate latest-value status channel feeds
 `/status` and the browser metrics display. Slow browser clients therefore drop
 superseded frames instead of blocking the GPU render loop.
-
-Static progressive preview reuses the path tracer's read/write output buffer as
-a persistent linear-color running average. Each dispatch supplies its previous
-sample count through the render uniform, and the completed-frame sink reports
-both batch and accumulated counts. No extra storage binding or CPU-side float
-accumulation is required. Independent PNG, video, and animated-preview frames set
-the previous count to zero and retain their existing behavior.

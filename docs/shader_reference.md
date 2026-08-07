@@ -73,42 +73,6 @@ Rust builds one area-weighted cumulative distribution over positive-emission tri
 
 Environment loading stores linear RGB and a CDF proportional to texel luminance times `sin(theta)`. `sample_environment_importance` binary-searches the CDF, jitters inside the selected texel, and converts probability mass to a solid-angle PDF. `direct_environment` combines this explicit estimate with the diffuse BSDF using the power heuristic. When a BSDF-sampled diffuse ray reaches the environment, `ray_color` applies the complementary MIS weight using `environment_pdf`. Environment rotation affects evaluation, sampling, and PDF lookup consistently.
 
-## Active path-tracer function catalog
-
-| Function/type | Role and invariants |
-| --- | --- |
-| `RenderParams` | Host-mirrored dispatch controls; counts gate every array read. |
-| `Camera` | Host-mirrored pinhole basis. |
-| `Sphere`, `Triangle`, `TriangleAttributes` | Host-mirrored geometry; flags bit 0 means normals and bit 1 means UVs. |
-| `Material` | Tag 0 diffuse, 1 metal, 2 dielectric, 3 emissive; texture dimensions zero mean no texture. |
-| `Ray`, `HitRecord` | Internal geometry records; hit normals face against the ray. |
-| `Light` | Tag 0 triangle, 1 sphere; `area_cumulative.xy` stores area/cumulative area. |
-| `EnvironmentDirectionSample` | Importance-sampled direction, radiance, and solid-angle PDF. |
-| `at` | Evaluates a ray point. |
-| `pcg_hash` | Permutes a 32-bit seed/state. |
-| `random_f32` | Advances RNG and yields a unit-interval scalar. |
-| `random_unit_vector` | Uniform sphere direction. |
-| `srgb_to_linear` | Piecewise standard sRGB decode. |
-| `unpack_srgb_texel` | Extracts packed RGB bytes and decodes them. |
-| `wrap_texel` | Positive modular coordinate wrapping. |
-| `read_texture_texel` | Reads one material-local atlas texel. |
-| `sample_base_color` | Repeating bilinear base-color sample times tint. |
-| `read_environment_texel` | Horizontal wrap and vertical clamp. |
-| `sample_environment` | Rotated bilinear equirectangular radiance lookup. |
-| `environment_probability` | Recovers texel mass from the CDF. |
-| `environment_pdf` | Maps texel probability to solid-angle density. |
-| `sample_environment_importance` | CDF inversion, texel jitter, direction/radiance/PDF result. |
-| `sample_light` | Area-proportional emissive primitive selection. |
-| `direct_light` | One visible area-light estimate for a diffuse hit. |
-| `power_heuristic` | Squared-PDF MIS weight. |
-| `direct_environment` | One visible importance-sampled environment estimate. |
-| `main` | Per-pixel batch tracing and optional progressive weighted average. |
-| `hit_sphere` | Closest valid analytic sphere hit. |
-| `hit_triangle` | Closest valid triangle hit with interpolated shading data. |
-| `calc_intersections` | Current brute-force closest-hit query. |
-| `ray_color` | Bounded multi-bounce radiance integrator. |
-| `reflect_vec`, `refract_vec`, `reflectance` | Specular vector math and Schlick Fresnel approximation. |
-
 ## Gradient shader
 
 `gpu_gradient.wgsl` contains a smaller four-field `RenderParams`, bindings for output and parameters, and one `main`. Each in-bounds invocation writes `(u, v, 0.25, 1)`. It exercises adapter creation, buffers, bind groups, dispatch, synchronous readback, common image conversion, and PNG output without scene resources.

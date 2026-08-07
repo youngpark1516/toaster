@@ -1,14 +1,13 @@
 # Toaster documentation
 
-This directory is the navigation hub for Toaster users, contributors, and maintainers. The documents describe the current working implementation. Planned BVH and physics work is always labeled as future work.
+This directory contains focused guides for Toaster users and contributors.
+Planned BVH and physics work is always labeled as future work.
 
 ## Start here
 
-- [Project guide](project_guide.md): build, run, preview, and use the current renderer.
-- [Codebase reference](codebase_reference.md): architecture, ownership, runtime flows, modules, and the complete production-function catalog.
-- [Public API](public_api.md): exported Rust interfaces plus CLI commands and HTTP routes.
+- [Root README](../README.md): ownership, quickstart, architecture, and measured performance.
 - [Scene format](scene_format.md): complete JSON input schema, defaults, validation, assets, and examples.
-- [Shader reference](shader_reference.md): active WGSL layouts, bindings, algorithms, and function catalog.
+- [Shader reference](shader_reference.md): active WGSL layouts, bindings, and algorithms.
 
 ## Operations and design
 
@@ -28,6 +27,8 @@ Rustdoc is generated locally under ignored `target/doc`:
 
 The check builds documentation for private items with warnings denied, validates intra-doc links, and runs workspace doctests. Open `target/doc/toaster_gpu/index.html` (or another crate index) after it completes. Generated HTML must not be committed.
 
-## Documentation ownership
+## Documentation maintenance
 
-When behavior or a public interface changes, update the relevant source Rustdoc and the focused guide in the same change. Keep operational procedures in their existing focused documents and link them here instead of duplicating them. The comprehensive reference records implementation detail; the public API and scene/shader references are the quick-lookup surfaces.
+When behavior or a public interface changes, update the relevant source Rustdoc
+and focused guide in the same change. Keep operational procedures in their
+existing documents and link to them instead of duplicating source-level detail.
