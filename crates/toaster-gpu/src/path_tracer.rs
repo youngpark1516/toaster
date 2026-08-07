@@ -3,6 +3,7 @@ use anyhow::{anyhow, ensure, Context, Result};
 use image::RgbaImage;
 use std::path::Path;
 use std::time::{Duration, Instant};
+use toaster_scene::{AnimationEvaluator, SceneChanges, SceneEvaluator};
 
 use crate::animation::{frame_output_path, AnimationConfig};
 use crate::buffers::create_scene_gpu_buffers;
@@ -266,6 +267,21 @@ pub async fn render_scene_gpu_animation(
     out_path: &Path,
     animation: AnimationConfig,
 ) -> Result<()> {
+    let source_scene = toaster_scene::load_scene(scene_path)?;
+    ensure!(
+        !source_scene.physics.is_some_and(|physics| physics.enabled),
+        "path-based GPU helpers do not evaluate enabled physics; use an evaluator-driven entrypoint"
+    );
+    let mut evaluator = AnimationEvaluator::new(source_scene);
+    render_evaluated_gpu_animation(&mut evaluator, out_path, animation).await
+}
+
+/// Renders a finite evaluator-driven schedule to numbered PNG files.
+pub async fn render_evaluated_gpu_animation(
+    evaluator: &mut dyn SceneEvaluator,
+    out_path: &Path,
+    animation: AnimationConfig,
+) -> Result<()> {
     let frame_count = animation
         .frame_limit()
         .context("PNG animation rendering requires a finite frame count")?;
@@ -273,13 +289,28 @@ pub async fn render_scene_gpu_animation(
         out_path,
         frame_count,
     };
-    render_scene_gpu_animation_with_sink(scene_path, animation, FramePacing::Unpaced, &mut sink)
+    render_evaluated_gpu_animation_with_sink(evaluator, animation, FramePacing::Unpaced, &mut sink)
         .await
 }
 
 /// Renders a finite animation and streams its RGBA frames into an MP4 encoder.
 pub async fn render_scene_gpu_video(
     scene_path: &Path,
+    video_path: &Path,
+    animation: AnimationConfig,
+) -> Result<()> {
+    let source_scene = toaster_scene::load_scene(scene_path)?;
+    ensure!(
+        !source_scene.physics.is_some_and(|physics| physics.enabled),
+        "path-based GPU helpers do not evaluate enabled physics; use an evaluator-driven entrypoint"
+    );
+    let mut evaluator = AnimationEvaluator::new(source_scene);
+    render_evaluated_gpu_video(&mut evaluator, video_path, animation).await
+}
+
+/// Renders a finite evaluator-driven schedule into an MP4 encoder.
+pub async fn render_evaluated_gpu_video(
+    evaluator: &mut dyn SceneEvaluator,
     video_path: &Path,
     animation: AnimationConfig,
 ) -> Result<()> {
@@ -290,19 +321,18 @@ pub async fn render_scene_gpu_video(
         animation.frame_limit().is_some(),
         "video export requires a finite --duration or --frames"
     );
-
-    let source_scene = toaster_scene::load_scene(scene_path)?;
+    let width = evaluator.source_scene().render.width;
+    let height = evaluator.source_scene().render.height;
     let mut sink = VideoFrameSink {
-        writer: Some(FfmpegVideoWriter::start(
-            video_path,
-            source_scene.render.width,
-            source_scene.render.height,
-            fps,
-        )?),
+        writer: Some(FfmpegVideoWriter::start(video_path, width, height, fps)?),
     };
-    let render_result =
-        render_gpu_animation_with_sink(&source_scene, animation, FramePacing::Unpaced, &mut sink)
-            .await;
+    let render_result = render_evaluated_gpu_animation_with_sink(
+        evaluator,
+        animation,
+        FramePacing::Unpaced,
+        &mut sink,
+    )
+    .await;
     let finish_result = sink.finish();
 
     match (render_result, finish_result) {
@@ -324,6 +354,10 @@ pub async fn render_scene_gpu_animation_with_sink(
 ) -> Result<()> {
     validate_pacing(animation, pacing)?;
     let source_scene = toaster_scene::load_scene(scene_path)?;
+    ensure!(
+        !source_scene.physics.is_some_and(|physics| physics.enabled),
+        "path-based GPU helpers do not evaluate enabled physics; use an evaluator-driven entrypoint"
+    );
     render_gpu_animation_with_sink(&source_scene, animation, pacing, sink).await
 }
 
@@ -334,8 +368,23 @@ pub async fn render_gpu_animation_with_sink(
     pacing: FramePacing,
     sink: &mut dyn FrameSink,
 ) -> Result<()> {
+    ensure!(
+        !source_scene.physics.is_some_and(|physics| physics.enabled),
+        "scene-only GPU helpers do not evaluate enabled physics; use an evaluator-driven entrypoint"
+    );
+    let mut evaluator = AnimationEvaluator::new(source_scene.clone());
+    render_evaluated_gpu_animation_with_sink(&mut evaluator, animation, pacing, sink).await
+}
+
+/// Renders frames supplied by a renderer-neutral scene evaluator.
+pub async fn render_evaluated_gpu_animation_with_sink(
+    evaluator: &mut dyn SceneEvaluator,
+    animation: AnimationConfig,
+    pacing: FramePacing,
+    sink: &mut dyn FrameSink,
+) -> Result<()> {
     render_gpu_with_sink(
-        source_scene,
+        evaluator,
         animation,
         pacing,
         None,
@@ -365,8 +414,13 @@ pub async fn render_gpu_progressive_with_sink(
         schedule.loop_duration().is_none(),
         "progressive preview does not support an animation loop duration"
     );
+    ensure!(
+        !source_scene.physics.is_some_and(|physics| physics.enabled),
+        "progressive preview does not support physics-enabled scenes"
+    );
+    let mut evaluator = AnimationEvaluator::new(source_scene.clone());
     render_gpu_with_sink(
-        source_scene,
+        &mut evaluator,
         schedule,
         pacing,
         Some(config),
@@ -396,9 +450,10 @@ pub async fn benchmark_gpu_scene(
         timings: Vec::with_capacity(measured_capacity),
         final_image: None,
     };
+    let mut evaluator = AnimationEvaluator::new(source_scene.clone());
 
     let summary = render_gpu_with_sink(
-        source_scene,
+        &mut evaluator,
         schedule,
         FramePacing::Unpaced,
         None,
@@ -424,7 +479,7 @@ pub async fn benchmark_gpu_scene(
 
 /// Implements the shared single-setup render loop for all sink-driven modes.
 async fn render_gpu_with_sink(
-    source_scene: &toaster_scene::Scene,
+    evaluator: &mut dyn SceneEvaluator,
     animation: AnimationConfig,
     pacing: FramePacing,
     progressive: Option<ProgressiveRenderConfig>,
@@ -433,8 +488,17 @@ async fn render_gpu_with_sink(
 ) -> Result<GpuRenderSummary> {
     validate_pacing(animation, pacing)?;
 
-    let initial_scene = source_scene.evaluate_at(0.0)?;
+    let initial_evaluated = evaluator.evaluate(animation.evaluation_request(0))?;
+    let initial_scene = initial_evaluated.scene;
     let mut scene = scene_to_gpu(&initial_scene)?;
+    let initial_counts = (
+        scene.spheres.len(),
+        scene.triangles.len(),
+        scene.triangle_attributes.len(),
+        scene.materials.len(),
+        scene.lights.len(),
+        scene.bvh_primitives.len(),
+    );
     let total_start = Instant::now();
 
     tracing::info!(
@@ -489,17 +553,35 @@ async fn render_gpu_with_sink(
 
         let frame_start = Instant::now();
         let scene_update_start = Instant::now();
-        let time_seconds = if progressive.is_some() || frame_mode == FrameMode::StaticIndependent {
-            0.0
+        let request = if progressive.is_some() || frame_mode == FrameMode::StaticIndependent {
+            toaster_scene::EvaluationRequest {
+                time_seconds: 0.0,
+                loop_cycle: 0,
+            }
         } else {
-            animation.time_for_frame(frame)
+            animation.evaluation_request(frame)
         };
-        scene = if progressive.is_some() || frame_mode == FrameMode::StaticIndependent {
-            scene_to_gpu_frame(&initial_scene)?
-        } else {
-            let evaluated = source_scene.evaluate_at(time_seconds)?;
-            scene_to_gpu_frame(&evaluated)?
-        };
+        let time_seconds = request.time_seconds;
+        let (next_scene, changes) =
+            if progressive.is_some() || frame_mode == FrameMode::StaticIndependent {
+                (scene_to_gpu_frame(&initial_scene)?, SceneChanges::default())
+            } else {
+                let evaluated = evaluator.evaluate(request)?;
+                let changes = evaluated.changes;
+                (scene_to_gpu_frame(&evaluated.scene)?, changes)
+            };
+        ensure!(
+            (
+                next_scene.spheres.len(),
+                next_scene.triangles.len(),
+                next_scene.triangle_attributes.len(),
+                next_scene.materials.len(),
+                next_scene.lights.len(),
+                next_scene.bvh_primitives.len(),
+            ) == initial_counts,
+            "evaluated scenes must preserve GPU geometry, material, light, and BVH primitive counts"
+        );
+        scene = next_scene;
         let requested_samples = sink.samples_for_frame().unwrap_or(scene.params.samples);
         ensure!(
             requested_samples > 0,
@@ -525,18 +607,20 @@ async fn render_gpu_with_sink(
             0
         };
 
-        context
-            .queue
-            .write_buffer(&buffers.camera, 0, bytemuck::bytes_of(&scene.camera));
+        if changes.camera {
+            context
+                .queue
+                .write_buffer(&buffers.camera, 0, bytemuck::bytes_of(&scene.camera));
+        }
         context
             .queue
             .write_buffer(&buffers.params, 0, bytemuck::bytes_of(&scene.params));
-        if !scene.spheres.is_empty() {
+        if changes.spheres && !scene.spheres.is_empty() {
             context
                 .queue
                 .write_buffer(&buffers.spheres, 0, bytemuck::cast_slice(&scene.spheres));
         }
-        if !scene.triangles.is_empty() {
+        if changes.triangles && !scene.triangles.is_empty() {
             context.queue.write_buffer(
                 &buffers.triangles,
                 0,
@@ -548,19 +632,19 @@ async fn render_gpu_with_sink(
                 bytemuck::cast_slice(&scene.triangle_attributes),
             );
         }
-        if !scene.lights.is_empty() {
+        if changes.emissive_geometry && !scene.lights.is_empty() {
             context
                 .queue
                 .write_buffer(&buffers.lights, 0, bytemuck::cast_slice(&scene.lights));
         }
-        if !scene.bvh_nodes.is_empty() {
+        if (changes.spheres || changes.triangles) && !scene.bvh_nodes.is_empty() {
             context.queue.write_buffer(
                 &buffers.bvh_nodes,
                 0,
                 bytemuck::cast_slice(&scene.bvh_nodes),
             );
         }
-        if !scene.bvh_primitives.is_empty() {
+        if (changes.spheres || changes.triangles) && !scene.bvh_primitives.is_empty() {
             context.queue.write_buffer(
                 &buffers.bvh_primitives,
                 0,
@@ -872,5 +956,26 @@ mod tests {
         assert!(error
             .to_string()
             .contains("requires a scene without animation tracks"));
+    }
+
+    #[test]
+    fn progressive_render_rejects_enabled_physics_before_gpu_setup() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/011_physics_rigid_bodies.json");
+        let mut scene = toaster_scene::load_scene(path).unwrap();
+        scene.animation.tracks.clear();
+        let mut sink = RecordingSink::default();
+        let error = pollster::block_on(render_gpu_progressive_with_sink(
+            &scene,
+            AnimationConfig::indefinite(12).unwrap(),
+            FramePacing::RealTime,
+            ProgressiveRenderConfig::new(16).unwrap(),
+            &mut sink,
+        ))
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("does not support physics-enabled scenes"));
     }
 }

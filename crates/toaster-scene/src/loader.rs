@@ -5,6 +5,10 @@ use crate::{
     environment::EnvironmentMap,
     material::Material,
     object::{Sphere, Triangle, TriangleAttributes},
+    physics::{
+        ColliderShape, ObjectBinding, PhysicsSettings, PhysicsType, RigidBodyDeclaration,
+        RigidBodyKind,
+    },
     scene::{Background, CameraSettings, RenderSettings, Scene},
     texture::Texture,
 };
@@ -30,6 +34,37 @@ struct SceneFile {
     /// Optional animation tracks.
     #[serde(default)]
     animation: Animation,
+    /// Optional renderer-neutral physics-world declaration.
+    physics: Option<PhysicsFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Raw top-level physics controls.
+struct PhysicsFile {
+    /// Whether physics participates in evaluation and ownership checks.
+    #[serde(default = "default_true")]
+    enabled: bool,
+    /// Simulation domain; only rigid bodies are accepted in the MVP.
+    #[serde(rename = "type")]
+    physics_type: PhysicsTypeFile,
+    /// World-space acceleration.
+    #[serde(default = "default_gravity")]
+    gravity: Vec3,
+    /// Nominal fixed timestep in seconds.
+    #[serde(default = "default_physics_timestep")]
+    timestep: f32,
+    /// Backend steps within one nominal tick.
+    #[serde(default = "default_physics_substeps")]
+    substeps: u32,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+/// Physics simulation domains accepted by this scene version.
+enum PhysicsTypeFile {
+    /// Discrete rigid bodies.
+    RigidBody,
 }
 
 #[derive(Deserialize)]
@@ -163,6 +198,21 @@ enum ObjectFile {
         material: String,
         /// Optional animation group.
         group: Option<String>,
+        /// Optional renderer-neutral rigid-body declaration.
+        physics: Option<RigidBodyFile>,
+    },
+    /// Generated axis-aligned box expanded into triangles during loading.
+    Box {
+        /// World-space box center.
+        center: Vec3,
+        /// Positive full extents on all axes.
+        size: Vec3,
+        /// Name of a declared Toaster material.
+        material: String,
+        /// Optional animation group.
+        group: Option<String>,
+        /// Optional renderer-neutral rigid-body declaration.
+        physics: Option<RigidBodyFile>,
     },
     /// Explicit triangle.
     Triangle {
@@ -172,6 +222,8 @@ enum ObjectFile {
         material: String,
         /// Optional animation group.
         group: Option<String>,
+        /// Rejected in the rigid-body MVP.
+        physics: Option<RigidBodyFile>,
     },
     /// Imported glTF/GLB triangle mesh.
     Mesh {
@@ -181,7 +233,51 @@ enum ObjectFile {
         material: Option<String>,
         /// Optional animation group assigned to all imported triangles.
         group: Option<String>,
+        /// Rejected in the rigid-body MVP.
+        physics: Option<RigidBodyFile>,
     },
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Raw per-object rigid-body properties.
+struct RigidBodyFile {
+    /// Static or dynamic ownership.
+    body: RigidBodyKindFile,
+    /// Optional explicit shape assertion.
+    collider: Option<ColliderKindFile>,
+    /// Optional dynamic mass.
+    mass: Option<f32>,
+    /// Coulomb friction coefficient.
+    #[serde(default = "default_friction")]
+    friction: f32,
+    /// Contact restitution coefficient.
+    #[serde(default)]
+    restitution: f32,
+    /// Optional initial linear velocity.
+    initial_velocity: Option<Vec3>,
+    /// Optional initial angular velocity.
+    initial_angular_velocity: Option<Vec3>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+/// Serialized rigid-body kinds.
+enum RigidBodyKindFile {
+    /// Immovable body.
+    Static,
+    /// Simulated body.
+    Dynamic,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+/// Serialized collider assertions.
+enum ColliderKindFile {
+    /// Sphere collider.
+    Sphere,
+    /// Box collider.
+    Cuboid,
 }
 
 /// Supplies positive Y as the default camera up vector.
@@ -192,6 +288,26 @@ fn default_up() -> Vec3 {
 /// Supplies unit intensity as the default environment multiplier.
 fn default_environment_intensity() -> f32 {
     1.0
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_gravity() -> Vec3 {
+    Vec3::new(0.0, -9.81, 0.0)
+}
+
+fn default_physics_timestep() -> f32 {
+    1.0 / 60.0
+}
+
+fn default_physics_substeps() -> u32 {
+    1
+}
+
+fn default_friction() -> f32 {
+    0.5
 }
 
 /// Loads, parses, validates, and expands a JSON scene and its relative assets.
@@ -232,6 +348,8 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
     if file.camera.up.cross(view).length_squared() <= f32::EPSILON {
         bail!("camera up vector must not be parallel to its view direction");
     }
+
+    let physics = file.physics.map(validate_physics_settings).transpose()?;
 
     let mut material_names = HashMap::new();
     let mut materials = Vec::with_capacity(file.materials.len());
@@ -284,6 +402,7 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
     let mut triangles = Vec::with_capacity(file.objects.len());
     let mut triangle_attributes = Vec::with_capacity(file.objects.len());
     let mut textures = Vec::new();
+    let mut rigid_bodies = Vec::new();
     for object in file.objects {
         match object {
             ObjectFile::Sphere {
@@ -291,6 +410,7 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
                 radius,
                 material,
                 group,
+                physics: body,
             } => {
                 if !center.is_finite() || !radius.is_finite() || radius <= 0.0 {
                     bail!("sphere radius must be positive and its center must be finite");
@@ -299,18 +419,77 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
                     .get(&material)
                     .copied()
                     .with_context(|| format!("sphere references unknown material '{material}'"))?;
+                let group = validate_group(group)?;
+                let sphere_index = spheres.len();
                 spheres.push(Sphere {
                     center,
                     radius,
                     material_index,
-                    group: validate_group(group)?,
+                    group: group.clone(),
                 });
+                if let Some(body) = body {
+                    ensure_physics_block(&physics)?;
+                    rigid_bodies.push(validate_rigid_body(
+                        body,
+                        ColliderKindFile::Sphere,
+                        ColliderShape::Sphere { radius },
+                        ObjectBinding::Sphere {
+                            index: sphere_index,
+                        },
+                        group,
+                    )?);
+                }
+            }
+            ObjectFile::Box {
+                center,
+                size,
+                material,
+                group,
+                physics: body,
+            } => {
+                if !center.is_finite() || !size.is_finite() || size.cmple(Vec3::ZERO).any() {
+                    bail!("box center must be finite and size components must be positive");
+                }
+                let material_index = material_names
+                    .get(&material)
+                    .copied()
+                    .with_context(|| format!("box references unknown material '{material}'"))?;
+                let group = validate_group(group)?;
+                let start = triangles.len();
+                for vertices in box_triangles(center, size) {
+                    triangles.push(Triangle {
+                        vertices,
+                        material_index,
+                        group: group.clone(),
+                    });
+                    triangle_attributes.push(TriangleAttributes::default());
+                }
+                if let Some(body) = body {
+                    ensure_physics_block(&physics)?;
+                    rigid_bodies.push(validate_rigid_body(
+                        body,
+                        ColliderKindFile::Cuboid,
+                        ColliderShape::Cuboid {
+                            half_extents: size * 0.5,
+                        },
+                        ObjectBinding::Triangles {
+                            start,
+                            count: 12,
+                            pivot: center,
+                        },
+                        group,
+                    )?);
+                }
             }
             ObjectFile::Triangle {
                 vertices,
                 material,
                 group,
+                physics,
             } => {
+                if physics.is_some() {
+                    bail!("triangle objects do not support physics in the rigid-body MVP");
+                }
                 validate_triangle(vertices)?;
                 let material_index = material_names.get(&material).copied().with_context(|| {
                     format!("triangle references unknown material '{material}'")
@@ -326,7 +505,11 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
                 path,
                 material,
                 group,
+                physics,
             } => {
+                if physics.is_some() {
+                    bail!("mesh objects do not support physics in the rigid-body MVP");
+                }
                 let material_override = material
                     .as_ref()
                     .map(|material| {
@@ -485,9 +668,144 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
         textures,
         environment,
         animation,
+        physics,
+        rigid_bodies,
     };
     validate_animation(&scene)?;
     Ok(scene)
+}
+
+/// Validates and converts backend-neutral top-level physics controls.
+fn validate_physics_settings(file: PhysicsFile) -> Result<PhysicsSettings> {
+    if !file.gravity.is_finite() {
+        bail!("physics gravity must be finite");
+    }
+    if !file.timestep.is_finite() || file.timestep <= 0.0 {
+        bail!("physics timestep must be finite and greater than zero");
+    }
+    if !(1..=64).contains(&file.substeps) {
+        bail!("physics substeps must be between 1 and 64");
+    }
+    Ok(PhysicsSettings {
+        enabled: file.enabled,
+        physics_type: match file.physics_type {
+            PhysicsTypeFile::RigidBody => PhysicsType::RigidBody,
+        },
+        gravity: file.gravity,
+        timestep: file.timestep,
+        substeps: file.substeps,
+    })
+}
+
+/// Prevents per-object declarations from silently doing nothing without a world block.
+fn ensure_physics_block(physics: &Option<PhysicsSettings>) -> Result<()> {
+    if physics.is_none() {
+        bail!("object physics declarations require a top-level physics block");
+    }
+    Ok(())
+}
+
+/// Validates one raw body and binds it to already-expanded render geometry.
+fn validate_rigid_body(
+    file: RigidBodyFile,
+    expected_collider: ColliderKindFile,
+    collider: ColliderShape,
+    binding: ObjectBinding,
+    group: Option<String>,
+) -> Result<RigidBodyDeclaration> {
+    if file
+        .collider
+        .is_some_and(|collider| collider != expected_collider)
+    {
+        bail!(
+            "physics collider must be '{}' for this object",
+            match expected_collider {
+                ColliderKindFile::Sphere => "sphere",
+                ColliderKindFile::Cuboid => "cuboid",
+            }
+        );
+    }
+    if !file.friction.is_finite() || file.friction < 0.0 {
+        bail!("physics friction must be finite and non-negative");
+    }
+    if !file.restitution.is_finite() || !(0.0..=1.0).contains(&file.restitution) {
+        bail!("physics restitution must be finite and between 0 and 1");
+    }
+    if file
+        .initial_velocity
+        .is_some_and(|velocity| !velocity.is_finite())
+        || file
+            .initial_angular_velocity
+            .is_some_and(|velocity| !velocity.is_finite())
+    {
+        bail!("physics initial velocities must be finite");
+    }
+
+    let (body, mass, initial_velocity, initial_angular_velocity) = match file.body {
+        RigidBodyKindFile::Static => {
+            if file.mass.is_some()
+                || file.initial_velocity.is_some()
+                || file.initial_angular_velocity.is_some()
+            {
+                bail!("static physics bodies do not accept mass or initial velocities");
+            }
+            (RigidBodyKind::Static, None, Vec3::ZERO, Vec3::ZERO)
+        }
+        RigidBodyKindFile::Dynamic => {
+            let mass = file.mass.unwrap_or(1.0);
+            if !mass.is_finite() || mass <= 0.0 {
+                bail!("dynamic physics body mass must be finite and greater than zero");
+            }
+            (
+                RigidBodyKind::Dynamic,
+                Some(mass),
+                file.initial_velocity.unwrap_or(Vec3::ZERO),
+                file.initial_angular_velocity.unwrap_or(Vec3::ZERO),
+            )
+        }
+    };
+
+    Ok(RigidBodyDeclaration {
+        body,
+        collider,
+        mass,
+        friction: file.friction,
+        restitution: file.restitution,
+        initial_velocity,
+        initial_angular_velocity,
+        binding,
+        group,
+    })
+}
+
+/// Expands an axis-aligned box into a stable 12-triangle face ordering.
+fn box_triangles(center: Vec3, size: Vec3) -> [[Vec3; 3]; 12] {
+    let half = size * 0.5;
+    let vertices = [
+        center + Vec3::new(-half.x, -half.y, -half.z),
+        center + Vec3::new(-half.x, -half.y, half.z),
+        center + Vec3::new(-half.x, half.y, -half.z),
+        center + Vec3::new(-half.x, half.y, half.z),
+        center + Vec3::new(half.x, -half.y, -half.z),
+        center + Vec3::new(half.x, -half.y, half.z),
+        center + Vec3::new(half.x, half.y, -half.z),
+        center + Vec3::new(half.x, half.y, half.z),
+    ];
+    const INDICES: [[usize; 3]; 12] = [
+        [1, 5, 7],
+        [1, 7, 3],
+        [4, 0, 2],
+        [4, 2, 6],
+        [0, 1, 3],
+        [0, 3, 2],
+        [5, 4, 6],
+        [5, 6, 7],
+        [3, 7, 6],
+        [3, 6, 2],
+        [0, 4, 5],
+        [0, 5, 1],
+    ];
+    INDICES.map(|face| face.map(|index| vertices[index]))
 }
 
 /// Returns three values only when every optional vertex attribute is present.
@@ -798,6 +1116,152 @@ mod tests {
             assert!(scene.animation.tracks.is_empty(), "{name}");
             assert_eq!((scene.render.width, scene.render.height), (320, 180));
             assert_eq!((scene.render.samples, scene.render.max_bounces), (4, 4));
+        }
+    }
+
+    #[test]
+    fn parses_rigid_body_sphere_and_expands_box() {
+        let scene = parse(
+            r#"{
+            "camera":{"position":[0,2,5],"look_at":[0,1,0],"fov_degrees":45},
+            "render":{"width":4,"height":4,"samples":1,"max_bounces":1},
+            "physics":{"type":"rigid_body"},
+            "materials":[{"name":"matte","type":"diffuse","albedo":[0.5,0.5,0.5]}],
+            "objects":[
+                {"type":"sphere","center":[0,3,0],"radius":0.5,"material":"matte","group":"ball",
+                 "physics":{"body":"dynamic","collider":"sphere","mass":2,"restitution":0.4}},
+                {"type":"box","center":[0,-0.25,0],"size":[4,0.5,4],"material":"matte","group":"floor",
+                 "physics":{"body":"static","collider":"cuboid","friction":0.8}}
+            ]
+        }"#,
+        )
+        .unwrap();
+
+        assert!(scene.physics.unwrap().enabled);
+        assert_eq!(scene.spheres.len(), 1);
+        assert_eq!(scene.triangles.len(), 12);
+        assert_eq!(scene.triangle_attributes.len(), 12);
+        assert_eq!(scene.rigid_bodies.len(), 2);
+        assert_eq!(scene.rigid_bodies[0].mass, Some(2.0));
+        assert!(scene.triangles.iter().all(|triangle| {
+            triangle.group.as_deref() == Some("floor") && triangle.material_index == 0
+        }));
+        let ObjectBinding::Triangles { count, pivot, .. } = scene.rigid_bodies[1].binding else {
+            panic!("expected box triangle binding");
+        };
+        assert_eq!(count, 12);
+        assert_eq!(pivot, Vec3::new(0.0, -0.25, 0.0));
+    }
+
+    #[test]
+    fn validates_physics_even_when_disabled_but_skips_ownership() {
+        let valid = parse(
+            r#"{
+            "camera":{"position":[0,0,3],"look_at":[0,0,0],"fov_degrees":45},
+            "render":{"width":1,"height":1,"samples":1,"max_bounces":1},
+            "physics":{"enabled":false,"type":"rigid_body"},
+            "materials":[{"name":"m","type":"diffuse","albedo":[1,1,1]}],
+            "objects":[{"type":"sphere","center":[0,0,0],"radius":1,"material":"m","group":"hero",
+                        "physics":{"body":"dynamic","mass":1}}],
+            "animation":{"tracks":[{"type":"translation","target":{"type":"group","name":"hero"},
+              "interpolation":"linear","keyframes":[{"time":0,"value":[0,0,0]},{"time":1,"value":[1,0,0]}]}]}
+        }"#,
+        )
+        .unwrap();
+        assert!(!valid.physics.unwrap().enabled);
+        assert_eq!(valid.evaluate_at(1.0).unwrap().spheres[0].center, Vec3::X);
+
+        let invalid = r#"{
+            "camera":{"position":[0,0,3],"look_at":[0,0,0],"fov_degrees":45},
+            "render":{"width":1,"height":1,"samples":1,"max_bounces":1},
+            "physics":{"enabled":false,"type":"rigid_body"},
+            "materials":[{"name":"m","type":"diffuse","albedo":[1,1,1]}],
+            "objects":[{"type":"sphere","center":[0,0,0],"radius":1,"material":"m",
+                        "physics":{"body":"dynamic","mass":0}}]
+        }"#;
+        assert!(parse(invalid).is_err());
+    }
+
+    #[test]
+    fn rejects_enabled_physics_animation_conflicts_and_invalid_bindings() {
+        let conflict = r#"{
+            "camera":{"position":[0,0,3],"look_at":[0,0,0],"fov_degrees":45},
+            "render":{"width":1,"height":1,"samples":1,"max_bounces":1},
+            "physics":{"type":"rigid_body"},
+            "materials":[{"name":"m","type":"diffuse","albedo":[1,1,1]}],
+            "objects":[{"type":"sphere","center":[0,0,0],"radius":1,"material":"m","group":"hero",
+                        "physics":{"body":"dynamic"}}],
+            "animation":{"tracks":[{"type":"translation","target":{"type":"group","name":"hero"},
+              "interpolation":"linear","keyframes":[{"time":0,"value":[0,0,0]}]}]}
+        }"#;
+        assert!(parse(conflict)
+            .unwrap_err()
+            .to_string()
+            .contains("enabled physics body"));
+        assert!(parse(&conflict.replace("\"dynamic\"", "\"static\""))
+            .unwrap_err()
+            .to_string()
+            .contains("enabled physics body"));
+
+        let without_world = r#"{
+            "camera":{"position":[0,0,3],"look_at":[0,0,0],"fov_degrees":45},
+            "render":{"width":1,"height":1,"samples":1,"max_bounces":1},
+            "materials":[{"name":"m","type":"diffuse","albedo":[1,1,1]}],
+            "objects":[{"type":"sphere","center":[0,0,0],"radius":1,"material":"m",
+                        "physics":{"body":"dynamic"}}]
+        }"#;
+        assert!(parse(without_world).is_err());
+
+        let mismatch = r#"{
+            "camera":{"position":[0,0,3],"look_at":[0,0,0],"fov_degrees":45},
+            "render":{"width":1,"height":1,"samples":1,"max_bounces":1},
+            "physics":{"type":"rigid_body"},
+            "materials":[{"name":"m","type":"diffuse","albedo":[1,1,1]}],
+            "objects":[{"type":"box","center":[0,0,0],"size":[1,1,1],"material":"m",
+                        "physics":{"body":"dynamic","collider":"sphere"}}]
+        }"#;
+        assert!(parse(mismatch).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_physics_world_and_body_parameters() {
+        fn scene_json(physics: &str, object: &str) -> String {
+            format!(
+                r#"{{
+                    "camera":{{"position":[0,0,3],"look_at":[0,0,0],"fov_degrees":45}},
+                    "render":{{"width":1,"height":1,"samples":1,"max_bounces":1}},
+                    "physics":{physics},
+                    "materials":[{{"name":"m","type":"diffuse","albedo":[1,1,1]}}],
+                    "objects":[{object}]
+                }}"#
+            )
+        }
+
+        let ordinary_sphere = r#"{"type":"sphere","center":[0,0,0],"radius":1,"material":"m"}"#;
+        for physics in [
+            r#"{"type":"rigid_body","gravity":[0,1e400,0]}"#,
+            r#"{"type":"rigid_body","timestep":0}"#,
+            r#"{"type":"rigid_body","substeps":0}"#,
+            r#"{"type":"rigid_body","substeps":65}"#,
+            r#"{"type":"rigid_body","unknown":true}"#,
+        ] {
+            assert!(parse(&scene_json(physics, ordinary_sphere)).is_err());
+        }
+
+        let invalid_bodies = [
+            r#"{"type":"sphere","center":[0,0,0],"radius":1,"material":"m","physics":{"body":"dynamic","mass":0}}"#,
+            r#"{"type":"sphere","center":[0,0,0],"radius":1,"material":"m","physics":{"body":"dynamic","friction":-0.1}}"#,
+            r#"{"type":"sphere","center":[0,0,0],"radius":1,"material":"m","physics":{"body":"dynamic","restitution":1.1}}"#,
+            r#"{"type":"sphere","center":[0,0,0],"radius":1,"material":"m","physics":{"body":"dynamic","initial_velocity":[0,1e400,0]}}"#,
+            r#"{"type":"sphere","center":[0,0,0],"radius":1,"material":"m","physics":{"body":"static","mass":1}}"#,
+            r#"{"type":"sphere","center":[0,0,0],"radius":1,"material":"m","physics":{"body":"static","initial_angular_velocity":[0,1,0]}}"#,
+            r#"{"type":"sphere","center":[0,0,0],"radius":1,"material":"m","physics":{"body":"dynamic","collider":"cuboid"}}"#,
+            r#"{"type":"sphere","center":[0,0,0],"radius":1,"material":"m","physics":{"body":"dynamic","unknown":true}}"#,
+            r#"{"type":"triangle","vertices":[[-1,0,0],[1,0,0],[0,1,0]],"material":"m","physics":{"body":"static"}}"#,
+            r#"{"type":"box","center":[0,0,0],"size":[1,0,1],"material":"m","physics":{"body":"dynamic"}}"#,
+        ];
+        for object in invalid_bodies {
+            assert!(parse(&scene_json(r#"{"type":"rigid_body"}"#, object)).is_err());
         }
     }
 }

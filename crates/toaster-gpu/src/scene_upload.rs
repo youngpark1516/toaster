@@ -607,6 +607,8 @@ mod tests {
             textures: Vec::new(),
             environment: None,
             animation: Default::default(),
+            physics: None,
+            rigid_bodies: Vec::new(),
         };
         let gpu_scene = scene_to_gpu(&scene).unwrap();
 
@@ -637,5 +639,75 @@ mod tests {
         let frame = scene_to_gpu_frame(&source).unwrap();
         assert_eq!(frame.params.environment_width, 4);
         assert!(frame.environment_pixels.is_empty());
+    }
+
+    #[test]
+    fn packs_neutrally_evaluated_physics_geometry_bvh_and_lights() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/011_physics_rigid_bodies.json");
+        let mut source = toaster_scene::load_scene(path).unwrap();
+        let sphere_body = source
+            .rigid_bodies
+            .iter()
+            .find(|body| body.group.as_deref() == Some("ball_0"))
+            .unwrap()
+            .clone();
+        let box_body = source
+            .rigid_bodies
+            .iter()
+            .find(|body| body.group.as_deref() == Some("crate_0"))
+            .unwrap()
+            .clone();
+        let sphere_index = match sphere_body.binding {
+            toaster_scene::ObjectBinding::Sphere { index } => index,
+            toaster_scene::ObjectBinding::Triangles { .. } => panic!("ball must bind a sphere"),
+        };
+        let box_start = match box_body.binding {
+            toaster_scene::ObjectBinding::Triangles { start, .. } => start,
+            toaster_scene::ObjectBinding::Sphere { .. } => panic!("crate must bind triangles"),
+        };
+        let sphere_material = source.spheres[sphere_index].material_index;
+        source.materials[sphere_material] = Material::Emissive {
+            color: Vec3::ONE,
+            strength: 2.0,
+        };
+        let before = scene_to_gpu_frame(&source).unwrap();
+        let mut evaluated = source.clone();
+        toaster_scene::apply_rigid_transform(
+            &source,
+            &mut evaluated,
+            &sphere_body.binding,
+            toaster_scene::RigidTransform {
+                translation: Vec3::new(20.0, 10.0, 0.0),
+                rotation: glam::Quat::IDENTITY,
+            },
+        )
+        .unwrap();
+        toaster_scene::apply_rigid_transform(
+            &source,
+            &mut evaluated,
+            &box_body.binding,
+            toaster_scene::RigidTransform {
+                translation: Vec3::new(-12.0, 4.0, -3.0),
+                rotation: glam::Quat::from_rotation_y(0.7),
+            },
+        )
+        .unwrap();
+        let after = scene_to_gpu_frame(&evaluated).unwrap();
+
+        assert_eq!(before.spheres.len(), after.spheres.len());
+        assert_eq!(before.triangles.len(), after.triangles.len());
+        assert_eq!(before.lights.len(), after.lights.len());
+        assert_eq!(
+            after.spheres[sphere_index].center_radius[..3],
+            [20.0, 10.0, 0.0]
+        );
+        assert_ne!(
+            before.triangles[box_start].v0,
+            after.triangles[box_start].v0
+        );
+        let moved_light = after.lights.iter().find(|light| light.kind == 1).unwrap();
+        assert_eq!(moved_light.center_radius[..3], [20.0, 10.0, 0.0]);
+        assert_ne!(before.bvh_nodes[0].max, after.bvh_nodes[0].max);
     }
 }

@@ -171,6 +171,15 @@ pub(crate) fn validate_animation(scene: &Scene) -> Result<()> {
                 .filter_map(|object| object.group.as_deref()),
         )
         .collect();
+    let physics_groups: HashSet<&str> = if scene.physics.is_some_and(|physics| physics.enabled) {
+        scene
+            .rigid_bodies
+            .iter()
+            .filter_map(|body| body.group.as_deref())
+            .collect()
+    } else {
+        HashSet::new()
+    };
 
     for track in &scene.animation.tracks {
         if let AnimationTarget::Group { name } = track.target() {
@@ -179,6 +188,11 @@ pub(crate) fn validate_animation(scene: &Scene) -> Result<()> {
             }
             if !groups.contains(name.as_str()) {
                 bail!("animation references unknown group '{name}'");
+            }
+            if physics_groups.contains(name.as_str()) {
+                bail!(
+                    "animation group '{name}' is controlled by an enabled physics body; kinematic bodies are not supported"
+                );
             }
         }
 
@@ -403,6 +417,8 @@ mod tests {
             textures: Vec::new(),
             environment: None,
             animation: Animation { tracks },
+            physics: None,
+            rigid_bodies: Vec::new(),
         }
     }
 

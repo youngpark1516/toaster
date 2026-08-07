@@ -1,8 +1,9 @@
 # Toaster
 
 Toaster is a Rust headless path tracer with a readable CPU renderer and a
-portable `wgpu` compute renderer. It supports animated JSON scenes, glTF meshes,
-environment lighting, PNG/MP4 output, and live browser previews.
+portable `wgpu` compute renderer. It supports animated and physically simulated
+JSON scenes, glTF meshes, environment lighting, PNG/MP4 output, and live browser
+previews.
 
 ## Ownership
 
@@ -17,6 +18,8 @@ environment lighting, PNG/MP4 output, and live browser previews.
 
 - Diffuse, metal, dielectric, emissive, textured, and environment-lit rendering.
 - Median-split BVH construction with flat CPU and GPU traversal.
+- Renderer-neutral rigid-body evaluation with CPU-side Rapier simulation for
+  dynamic spheres and boxes.
 - Static progressive preview, adaptive sampling, MJPEG streaming, and raw-RGBA
   FFmpeg export without intermediate PNGs.
 - Deterministic benchmark reports with per-stage timing and image hashes.
@@ -26,8 +29,9 @@ environment lighting, PNG/MP4 output, and live browser previews.
 ```mermaid
 flowchart LR
     Inputs[JSON + glTF + environment] --> Scene[Shared scene]
-    Scene --> CPU[CPU renderer]
-    Scene --> GPU[wgpu renderer + BVH]
+    Scene --> Evaluation[Animation + CPU physics evaluation]
+    Evaluation --> CPU[CPU renderer]
+    Evaluation --> GPU[wgpu renderer + BVH]
     CPU --> PNG
     GPU --> Readback[Readback + RGBA8]
     Readback --> PNG
@@ -48,6 +52,10 @@ cargo run -p toaster-cli -- cpu-render \
 
 cargo run --release -p toaster-cli -- gpu-render \
   scenes/010_environment_map.json --out out/environment.png
+
+cargo run --release -p toaster-cli -- gpu-render \
+  scenes/011_physics_rigid_bodies.json --video out/physics.mp4 \
+  --fps 24 --duration 5
 ```
 
 See the [scene format](docs/scene_format.md) and
@@ -91,6 +99,8 @@ TOASTER_BENCH_COMPARE_DIR=docs/benchmarks/pre-bvh/rtx-2080-ti \
   orchestration.
 - The CPU reference renderer is single-threaded, and progressive accumulation is
   limited to static scenes.
+- Moving physics geometry currently rebuilds the mixed BVH each frame rather
+  than refitting it.
 
 ## Documentation
 

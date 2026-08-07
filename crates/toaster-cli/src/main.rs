@@ -12,7 +12,7 @@ use std::sync::{
     Arc,
 };
 use std::time::{Duration, Instant};
-use toaster_scene::RenderSettings;
+use toaster_scene::{RenderSettings, SceneEvaluator};
 
 const STREAM_JPEG_QUALITY: u8 = 90;
 
@@ -269,6 +269,8 @@ fn run(command: Command) -> anyhow::Result<()> {
             frames,
         } => {
             let animation = resolve_animation(fps, duration, frames)?;
+            let scene = toaster_scene::load_scene(&scene_path)?;
+            let mut evaluator = toaster_physics::PhysicsSceneEvaluator::new(scene)?;
             match animation.fps() {
                 Some(fps) => tracing::info!(
                     scene = %scene_path.display(),
@@ -285,16 +287,16 @@ fn run(command: Command) -> anyhow::Result<()> {
             match (out, video) {
                 (Some(out), None) => {
                     tracing::info!(output = %out.display(), "selected PNG output");
-                    pollster::block_on(toaster_gpu::render_scene_gpu_animation(
-                        &scene_path,
+                    pollster::block_on(toaster_gpu::render_evaluated_gpu_animation(
+                        &mut evaluator,
                         &out,
                         animation,
                     ))?;
                 }
                 (None, Some(video)) => {
                     tracing::info!(output = %video.display(), "selected MP4 output");
-                    pollster::block_on(toaster_gpu::render_scene_gpu_video(
-                        &scene_path,
+                    pollster::block_on(toaster_gpu::render_evaluated_gpu_video(
+                        &mut evaluator,
                         &video,
                         animation,
                     ))?;
@@ -382,8 +384,9 @@ fn run(command: Command) -> anyhow::Result<()> {
                     "configured adaptive sampling"
                 );
             }
+            let mut evaluator = toaster_physics::PhysicsSceneEvaluator::new(scene)?;
             render_stream_preview(
-                &scene,
+                &mut evaluator,
                 animation,
                 adaptive_sampling,
                 progressive,
@@ -479,7 +482,9 @@ fn run(command: Command) -> anyhow::Result<()> {
         }
         Command::Info => {
             println!("Toaster {}", env!("CARGO_PKG_VERSION"));
-            println!("Modules: core, scene, CPU renderer, GPU renderer, BVH, assets, server");
+            println!(
+                "Modules: core, scene, physics, CPU renderer, GPU renderer, BVH, assets, server"
+            );
         }
     }
     Ok(())
@@ -490,7 +495,7 @@ fn run(command: Command) -> anyhow::Result<()> {
 /// The listener is bound before GPU setup. Both background tasks are always
 /// stopped and awaited (or aborted and joined) before this function returns.
 fn render_stream_preview(
-    scene: &toaster_scene::Scene,
+    evaluator: &mut dyn SceneEvaluator,
     animation: toaster_gpu::AnimationConfig,
     adaptive_sampling: Option<AdaptiveSampling>,
     progressive: Option<ProgressivePreview>,
@@ -537,7 +542,7 @@ fn render_stream_preview(
         let render_result = match progressive {
             Some(progressive) => {
                 toaster_gpu::render_gpu_progressive_with_sink(
-                    scene,
+                    evaluator.source_scene(),
                     animation,
                     toaster_gpu::FramePacing::RealTime,
                     toaster_gpu::ProgressiveRenderConfig::new(progressive.target_samples)?,
@@ -546,8 +551,8 @@ fn render_stream_preview(
                 .await
             }
             None => {
-                toaster_gpu::render_gpu_animation_with_sink(
-                    scene,
+                toaster_gpu::render_evaluated_gpu_animation_with_sink(
+                    evaluator,
                     animation,
                     toaster_gpu::FramePacing::RealTime,
                     &mut sink,
@@ -604,6 +609,10 @@ fn resolve_progressive_preview(
     anyhow::ensure!(
         scene.animation.tracks.is_empty(),
         "--progressive requires a scene without animation tracks"
+    );
+    anyhow::ensure!(
+        !scene.physics.is_some_and(|physics| physics.enabled),
+        "--progressive does not support physics-enabled scenes"
     );
 
     let config = ProgressivePreview {
@@ -908,6 +917,14 @@ mod tests {
         assert!(
             resolve_progressive_preview(true, None, None, None, None, &animated_scene).is_err()
         );
+
+        let physics_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/011_physics_rigid_bodies.json");
+        let mut physics_scene = toaster_scene::load_scene(physics_path).unwrap();
+        physics_scene.animation.tracks.clear();
+        assert!(resolve_progressive_preview(true, None, None, None, None, &physics_scene).is_err());
+        physics_scene.physics.as_mut().unwrap().enabled = false;
+        assert!(resolve_progressive_preview(true, None, None, None, None, &physics_scene).is_ok());
     }
 
     #[test]
