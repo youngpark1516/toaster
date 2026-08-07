@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "created_at_unix_seconds": 1786078676,
+  "toaster_version": "0.1.0",
+  "scene": {
+    "path": "scenes/benchmarks/003_triangles_8192.json",
+    "width": 320,
+    "height": 180,
+    "samples": 4,
+    "max_bounces": 4,
+    "spheres": 1,
+    "triangles": 8192,
+    "materials": 3,
+    "lights": 1
+  },
+  "gpu": {
+    "name": "NVIDIA GeForce RTX 2080 Ti",
+    "backend": "Vulkan",
+    "device_type": "DiscreteGpu",
+    "driver": "NVIDIA",
+    "driver_info": "610.43.02"
+  },
+  "configuration": {
+    "warmup_frames": 2,
+    "measured_frames": 5,
+    "fixed_animation_time_seconds": 0.0,
+    "fixed_frame_seed": 0
+  },
+  "setup_ms": 342.108786,
+  "frames": [
+    {
+      "scene_update_upload_ms": 3.671323,
+      "dispatch_wait_ms": 1.512312,
+      "readback_ms": 0.528898,
+      "conversion_ms": 1.108333,
+      "total_ms": 6.821116
+    },
+    {
+      "scene_update_upload_ms": 3.501921,
+      "dispatch_wait_ms": 1.485904,
+      "readback_ms": 0.073367,
+      "conversion_ms": 1.121778,
+      "total_ms": 6.183173
+    },
+    {
+      "scene_update_upload_ms": 3.5086549999999996,
+      "dispatch_wait_ms": 1.42737,
+      "readback_ms": 0.231431,
+      "conversion_ms": 1.114604,
+      "total_ms": 6.282267999999999
+    },
+    {
+      "scene_update_upload_ms": 3.473795,
+      "dispatch_wait_ms": 1.457169,
+      "readback_ms": 0.073476,
+      "conversion_ms": 1.118111,
+      "total_ms": 6.122800000000001
+    },
+    {
+      "scene_update_upload_ms": 3.465811,
+      "dispatch_wait_ms": 1.412926,
+      "readback_ms": 0.073735,
+      "conversion_ms": 1.114041,
+      "total_ms": 6.066736
+    }
+  ],
+  "summary": {
+    "scene_update_upload_ms": {
+      "min": 3.465811,
+      "mean": 3.524301,
+      "median": 3.501921,
+      "p95": 3.671323,
+      "max": 3.671323
+    },
+    "dispatch_wait_ms": {
+      "min": 1.412926,
+      "mean": 1.4591362,
+      "median": 1.457169,
+      "p95": 1.512312,
+      "max": 1.512312
+    },
+    "readback_ms": {
+      "min": 0.073367,
+      "mean": 0.1961814,
+      "median": 0.073735,
+      "p95": 0.528898,
+      "max": 0.528898
+    },
+    "conversion_ms": {
+      "min": 1.108333,
+      "mean": 1.1153734,
+      "median": 1.114604,
+      "p95": 1.121778,
+      "max": 1.121778
+    },
+    "total_ms": {
+      "min": 6.066736,
+      "mean": 6.2952186,
+      "median": 6.183173,
+      "p95": 6.821116,
+      "max": 6.821116
+    }
+  },
+  "image": {
+    "width": 320,
+    "height": 180,
+    "rgba_sha256": "d5acd54be077b61009eeaf5a94932299780981bb269f50a7bfcc48d585529821",
+    "reference_path": null
+  }
+}
