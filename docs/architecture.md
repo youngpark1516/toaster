@@ -22,7 +22,7 @@ The frame pipeline is:
 ```text
 immutable base scene
   -> allowed animation evaluation
-  -> backend-neutral physics evaluation
+  -> backend-neutral physics evaluation + event batch
   -> evaluated renderer-neutral scene
   -> GPU packing/BVH/upload
   -> render/output
@@ -44,6 +44,28 @@ be deterministic within the same platform, build, dependency versions,
 configuration, and scene construction order, not universally bit-identical
 across machines.
 
+Physics objects and invisible triggers use validated scene-authored
+`PhysicsEntityId` values. These identities are independent of render bindings
+and animation groups: a binding locates flattened geometry, a group defines
+shared animation ownership, and an entity ID identifies one public event
+participant. Rapier collider handles and event flags remain private to
+`toaster-physics`.
+
+Rapier contact transitions are converted immediately after every substep into
+renderer-neutral collision and trigger events. Physical contacts expose
+`Started`, one synthesized `Stayed` event per persistent nominal tick, and
+`Exited`; sensor overlaps expose `Entered` and `Exited`. Collision object IDs
+are canonically ordered. One evaluation batch contains every event from all
+fixed ticks crossed by that request, while evaluating the same tick twice emits
+no duplicate events. Event-only activity is separate from `SceneChanges` and
+therefore does not cause geometry, BVH, light, or GPU uploads.
+
+Loop changes and backward seeks reset the simulation and its active-pair sets,
+then replay from tick zero. The returned event batch marks that reset so a
+consumer can clear its own event-driven state before applying replayed events;
+discarded contacts do not receive synthetic exits. Renderers are allowed to
+ignore event batches.
+
 Enabled rigid-body groups have explicit ownership. Dynamic bodies are driven by
 Rapier and static bodies stay fixed, so neither kind may be an animation target.
 Kinematic bodies instead require one exclusive animation group and matching
@@ -59,6 +81,11 @@ triangles. A full mixed-BVH rebuild is uploaded whenever sphere or triangle
 geometry moves. Moving emissive geometry also rebuilds and uploads the light
 list; non-emissive motion reuses the prior light list. This prioritizes
 correctness; BVH refitting is a future optimization.
+
+Triggers are invisible fixed Rapier sensors with neutral sphere or cuboid
+geometry. They detect dynamic and kinematic bodies without changing motion and
+never add render primitives, BVH nodes, or lights. Static bodies and other
+triggers are not trigger-event participants.
 
 Frame diagnostics separately record animation evaluation, physics stepping,
 neutral geometry updates, light-list and BVH rebuilds, GPU uploads, dispatch,

@@ -416,6 +416,7 @@ mod tests {
             animation: Default::default(),
             physics: None,
             rigid_bodies: Vec::new(),
+            triggers: Vec::new(),
         };
         let bvh = SceneBvh::build(&scene);
         assert_eq!(
@@ -515,6 +516,7 @@ mod tests {
             animation: Default::default(),
             physics: None,
             rigid_bodies: Vec::new(),
+            triggers: Vec::new(),
         };
         let bvh = SceneBvh::build(&scene);
         let rays = [

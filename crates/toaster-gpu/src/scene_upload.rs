@@ -653,6 +653,7 @@ mod tests {
             animation: Default::default(),
             physics: None,
             rigid_bodies: Vec::new(),
+            triggers: Vec::new(),
         };
         let gpu_scene = scene_to_gpu(&scene).unwrap();
 
@@ -789,5 +790,22 @@ mod tests {
         assert_eq!(after.lights.len(), before.lights.len());
         assert_eq!(after.lights[0].v0, before.lights[0].v0);
         assert_ne!(after.bvh_nodes[0].min, before.bvh_nodes[0].min);
+    }
+
+    #[test]
+    fn invisible_triggers_do_not_change_gpu_geometry_or_lights() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/013_physics_events_triggers.json");
+        let source = toaster_scene::load_scene(path).unwrap();
+        let packed = scene_to_gpu(&source).unwrap();
+
+        assert_eq!(source.triggers.len(), 2);
+        assert_eq!(packed.spheres.len(), source.spheres.len());
+        assert_eq!(packed.triangles.len(), source.triangles.len());
+        assert_eq!(
+            packed.bvh_primitives.len(),
+            source.spheres.len() + source.triangles.len()
+        );
+        assert_eq!(packed.lights.len(), 53);
     }
 }

@@ -597,6 +597,7 @@ mod tests {
             animation: Animation { tracks },
             physics: None,
             rigid_bodies: Vec::new(),
+            triggers: Vec::new(),
         }
     }
 

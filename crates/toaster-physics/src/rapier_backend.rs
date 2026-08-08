@@ -4,9 +4,15 @@ use crate::{EvaluatedPhysicsState, PhysicsBackend, PhysicsEvaluationRequest, Phy
 use anyhow::{bail, Result};
 use glam::{Quat, Vec3};
 use rapier3d::prelude::*;
+use std::{
+    cmp::Ordering,
+    collections::{BTreeSet, HashMap},
+    sync::mpsc::{self, Receiver},
+};
 use toaster_scene::{
-    ColliderShape, GroupRigidTransformEvaluator, Material, ObjectBinding, RigidBodyDeclaration,
-    RigidBodyKind, RigidTransform, Scene, SceneChanges,
+    ColliderShape, CollisionPhase, GroupRigidTransformEvaluator, Material, ObjectBinding,
+    PhysicsEntityId, PhysicsEvent, PhysicsEventBatch, PhysicsEventKind, RigidBodyDeclaration,
+    RigidBodyKind, RigidTransform, Scene, SceneChanges, TriggerDeclaration, TriggerPhase,
 };
 
 #[derive(Clone)]
@@ -15,6 +21,45 @@ struct BoundBody {
     initial_transform: RigidTransform,
     kinematic_motion: Option<GroupRigidTransformEvaluator>,
     emissive: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ColliderEntity {
+    Object {
+        id: PhysicsEntityId,
+        body: RigidBodyKind,
+    },
+    Trigger {
+        id: PhysicsEntityId,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct CollisionPair {
+    object_a: PhysicsEntityId,
+    object_b: PhysicsEntityId,
+}
+
+impl CollisionPair {
+    fn new(first: PhysicsEntityId, second: PhysicsEntityId) -> Self {
+        if first <= second {
+            Self {
+                object_a: first,
+                object_b: second,
+            }
+        } else {
+            Self {
+                object_a: second,
+                object_b: first,
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct TriggerPair {
+    trigger: PhysicsEntityId,
+    object: PhysicsEntityId,
 }
 
 struct RapierWorld {
@@ -28,6 +73,9 @@ struct RapierWorld {
     multibody_joints: MultibodyJointSet,
     ccd_solver: CCDSolver,
     handles: Vec<Option<RigidBodyHandle>>,
+    collider_entities: HashMap<ColliderHandle, ColliderEntity>,
+    collision_events: Receiver<CollisionEvent>,
+    event_handler: ChannelEventCollector,
 }
 
 /// Rigid-body backend whose Rapier types never cross this crate boundary.
@@ -36,7 +84,10 @@ pub struct RapierRigidBodyBackend {
     timestep: f32,
     substeps: u32,
     bound_bodies: Vec<BoundBody>,
+    triggers: Vec<TriggerDeclaration>,
     world: RapierWorld,
+    active_collisions: BTreeSet<CollisionPair>,
+    active_triggers: BTreeSet<TriggerPair>,
     current_tick: u64,
     current_loop_cycle: Option<u64>,
 }
@@ -83,31 +134,35 @@ impl RapierRigidBodyBackend {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let world = build_world(&bound_bodies)?;
+        let triggers = scene.triggers.clone();
+        let world = build_world(&bound_bodies, &triggers)?;
         Ok(Self {
             gravity: settings.gravity,
             timestep: settings.timestep,
             substeps: settings.substeps,
             bound_bodies,
+            triggers,
             world,
+            active_collisions: BTreeSet::new(),
+            active_triggers: BTreeSet::new(),
             current_tick: 0,
             current_loop_cycle: None,
         })
     }
 
-    fn step_nominal_tick(&mut self) -> Result<()> {
+    fn step_nominal_tick(&mut self, loop_cycle: u64, events: &mut Vec<PhysicsEvent>) -> Result<()> {
         let gravity = rapier3d::math::Vector::new(self.gravity.x, self.gravity.y, self.gravity.z);
         let integration = IntegrationParameters {
             dt: self.timestep / self.substeps as f32,
             ..IntegrationParameters::default()
         };
+        let fixed_tick = self.current_tick + 1;
+        let active_at_start = self.active_collisions.clone();
+        let mut transitioned_collisions = BTreeSet::new();
         for substep in 0..self.substeps {
-            self.set_kinematic_targets(kinematic_substep_time(
-                self.current_tick,
-                substep,
-                self.substeps,
-                self.timestep,
-            ))?;
+            let substep_time =
+                kinematic_substep_time(self.current_tick, substep, self.substeps, self.timestep);
+            self.set_kinematic_targets(substep_time)?;
             self.world.pipeline.step(
                 gravity,
                 &integration,
@@ -120,10 +175,125 @@ impl RapierRigidBodyBackend {
                 &mut self.world.multibody_joints,
                 &mut self.world.ccd_solver,
                 &(),
-                &(),
+                &self.world.event_handler,
             );
+            self.drain_collision_events(
+                loop_cycle,
+                fixed_tick,
+                substep_time,
+                &mut transitioned_collisions,
+                events,
+            )?;
+        }
+        let tick_time = fixed_tick as f64 * self.timestep as f64;
+        for pair in active_at_start.intersection(&self.active_collisions) {
+            if transitioned_collisions.contains(pair) {
+                continue;
+            }
+            events.push(PhysicsEvent {
+                loop_cycle,
+                fixed_tick,
+                time_seconds: tick_time as f32,
+                kind: PhysicsEventKind::Collision {
+                    phase: CollisionPhase::Stayed,
+                    object_a: pair.object_a.clone(),
+                    object_b: pair.object_b.clone(),
+                },
+            });
         }
         self.current_tick += 1;
+        Ok(())
+    }
+
+    fn drain_collision_events(
+        &mut self,
+        loop_cycle: u64,
+        fixed_tick: u64,
+        time_seconds: f32,
+        transitioned_collisions: &mut BTreeSet<CollisionPair>,
+        events: &mut Vec<PhysicsEvent>,
+    ) -> Result<()> {
+        let rapier_events = self.world.collision_events.try_iter().collect::<Vec<_>>();
+        for event in rapier_events {
+            let (first_handle, second_handle, started) = match event {
+                CollisionEvent::Started(first, second, _) => (first, second, true),
+                CollisionEvent::Stopped(first, second, _) => (first, second, false),
+            };
+            let first = self
+                .world
+                .collider_entities
+                .get(&first_handle)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("collision event references unknown collider"))?;
+            let second = self
+                .world
+                .collider_entities
+                .get(&second_handle)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("collision event references unknown collider"))?;
+            match (first, second) {
+                (
+                    ColliderEntity::Object { id: first, .. },
+                    ColliderEntity::Object { id: second, .. },
+                ) => {
+                    let pair = CollisionPair::new(first, second);
+                    let changed = if started {
+                        self.active_collisions.insert(pair.clone())
+                    } else {
+                        self.active_collisions.remove(&pair)
+                    };
+                    if changed {
+                        transitioned_collisions.insert(pair.clone());
+                        events.push(PhysicsEvent {
+                            loop_cycle,
+                            fixed_tick,
+                            time_seconds,
+                            kind: PhysicsEventKind::Collision {
+                                phase: if started {
+                                    CollisionPhase::Started
+                                } else {
+                                    CollisionPhase::Exited
+                                },
+                                object_a: pair.object_a,
+                                object_b: pair.object_b,
+                            },
+                        });
+                    }
+                }
+                (ColliderEntity::Trigger { id: trigger }, ColliderEntity::Object { id, body })
+                | (ColliderEntity::Object { id, body }, ColliderEntity::Trigger { id: trigger }) => {
+                    if body == RigidBodyKind::Static {
+                        continue;
+                    }
+                    let pair = TriggerPair {
+                        trigger,
+                        object: id,
+                    };
+                    let changed = if started {
+                        self.active_triggers.insert(pair.clone())
+                    } else {
+                        self.active_triggers.remove(&pair)
+                    };
+                    if changed {
+                        events.push(PhysicsEvent {
+                            loop_cycle,
+                            fixed_tick,
+                            time_seconds,
+                            kind: PhysicsEventKind::Trigger {
+                                phase: if started {
+                                    TriggerPhase::Entered
+                                } else {
+                                    TriggerPhase::Exited
+                                },
+                                trigger: pair.trigger,
+                                object: pair.object,
+                            },
+                        });
+                    }
+                }
+                (ColliderEntity::Trigger { .. }, ColliderEntity::Trigger { .. }) => {}
+            }
+        }
         Ok(())
     }
 
@@ -143,7 +313,7 @@ impl RapierRigidBodyBackend {
         Ok(())
     }
 
-    fn evaluated_state(&self) -> Result<EvaluatedPhysicsState> {
+    fn evaluated_state(&self, physics_events: PhysicsEventBatch) -> Result<EvaluatedPhysicsState> {
         let mut updates = Vec::new();
         let mut changes = SceneChanges::default();
         for (bound, handle) in self.bound_bodies.iter().zip(&self.world.handles) {
@@ -174,7 +344,11 @@ impl RapierRigidBodyBackend {
             }
             changes.emissive_geometry |= bound.emissive;
         }
-        Ok(EvaluatedPhysicsState { updates, changes })
+        Ok(EvaluatedPhysicsState {
+            updates,
+            changes,
+            physics_events,
+        })
     }
 }
 
@@ -184,7 +358,9 @@ fn kinematic_substep_time(current_tick: u64, substep: u32, substeps: u32, timest
 
 impl PhysicsBackend for RapierRigidBodyBackend {
     fn reset(&mut self) -> Result<()> {
-        self.world = build_world(&self.bound_bodies)?;
+        self.world = build_world(&self.bound_bodies, &self.triggers)?;
+        self.active_collisions.clear();
+        self.active_triggers.clear();
         self.current_tick = 0;
         self.current_loop_cycle = None;
         Ok(())
@@ -194,25 +370,30 @@ impl PhysicsBackend for RapierRigidBodyBackend {
         if !request.scene_time_seconds.is_finite() || request.scene_time_seconds < 0.0 {
             bail!("physics evaluation time must be finite and non-negative");
         }
-        if self.current_loop_cycle != Some(request.loop_cycle)
-            || request.fixed_tick < self.current_tick
-        {
+        let mut reset = false;
+        if self.current_loop_cycle.is_some_and(|cycle| {
+            cycle != request.loop_cycle || request.fixed_tick < self.current_tick
+        }) {
             self.reset()?;
             self.current_loop_cycle = Some(request.loop_cycle);
+            reset = true;
         } else if self.current_loop_cycle.is_none() {
             self.current_loop_cycle = Some(request.loop_cycle);
         }
+        let mut events = Vec::new();
         while self.current_tick < request.fixed_tick {
-            self.step_nominal_tick()?;
+            self.step_nominal_tick(request.loop_cycle, &mut events)?;
         }
-        self.evaluated_state()
+        events.sort_by(compare_physics_events);
+        self.evaluated_state(PhysicsEventBatch { reset, events })
     }
 }
 
-fn build_world(bound_bodies: &[BoundBody]) -> Result<RapierWorld> {
+fn build_world(bound_bodies: &[BoundBody], triggers: &[TriggerDeclaration]) -> Result<RapierWorld> {
     let mut bodies = RigidBodySet::new();
     let mut colliders = ColliderSet::new();
     let mut handles = Vec::with_capacity(bound_bodies.len());
+    let mut collider_entities = HashMap::new();
     for bound in bound_bodies {
         let mut body_builder = match bound.declaration.body {
             RigidBodyKind::Static => RigidBodyBuilder::fixed(),
@@ -238,13 +419,52 @@ fn build_world(bound_bodies: &[BoundBody]) -> Result<RapierWorld> {
             }
         }
         .friction(bound.declaration.friction)
-        .restitution(bound.declaration.restitution);
+        .restitution(bound.declaration.restitution)
+        .active_events(ActiveEvents::COLLISION_EVENTS);
         if let Some(mass) = bound.declaration.mass {
             collider_builder = collider_builder.mass(mass);
         }
-        colliders.insert_with_parent(collider_builder.build(), handle, &mut bodies);
+        let collider_handle =
+            colliders.insert_with_parent(collider_builder.build(), handle, &mut bodies);
+        collider_entities.insert(
+            collider_handle,
+            ColliderEntity::Object {
+                id: bound.declaration.id.clone(),
+                body: bound.declaration.body,
+            },
+        );
         handles.push(Some(handle));
     }
+
+    for trigger in triggers {
+        let builder = match trigger.collider {
+            ColliderShape::Sphere { radius } => ColliderBuilder::ball(radius),
+            ColliderShape::Cuboid { half_extents } => {
+                ColliderBuilder::cuboid(half_extents.x, half_extents.y, half_extents.z)
+            }
+        }
+        .translation(rapier3d::math::Vector::new(
+            trigger.center.x,
+            trigger.center.y,
+            trigger.center.z,
+        ))
+        .sensor(true)
+        .active_events(ActiveEvents::COLLISION_EVENTS)
+        .active_collision_types(
+            ActiveCollisionTypes::default() | ActiveCollisionTypes::KINEMATIC_FIXED,
+        );
+        let handle = colliders.insert(builder.build());
+        collider_entities.insert(
+            handle,
+            ColliderEntity::Trigger {
+                id: trigger.id.clone(),
+            },
+        );
+    }
+
+    let (collision_sender, collision_events) = mpsc::channel();
+    let (force_sender, _force_events) = mpsc::channel();
+    let event_handler = ChannelEventCollector::new(collision_sender, force_sender);
 
     Ok(RapierWorld {
         pipeline: PhysicsPipeline::new(),
@@ -257,7 +477,50 @@ fn build_world(bound_bodies: &[BoundBody]) -> Result<RapierWorld> {
         multibody_joints: MultibodyJointSet::new(),
         ccd_solver: CCDSolver::new(),
         handles,
+        collider_entities,
+        collision_events,
+        event_handler,
     })
+}
+
+fn compare_physics_events(first: &PhysicsEvent, second: &PhysicsEvent) -> Ordering {
+    first
+        .fixed_tick
+        .cmp(&second.fixed_tick)
+        .then_with(|| first.time_seconds.total_cmp(&second.time_seconds))
+        .then_with(|| event_sort_key(&first.kind).cmp(&event_sort_key(&second.kind)))
+}
+
+fn event_sort_key(kind: &PhysicsEventKind) -> (u8, u8, &str, &str) {
+    match kind {
+        PhysicsEventKind::Collision {
+            phase,
+            object_a,
+            object_b,
+        } => (
+            match phase {
+                CollisionPhase::Started => 0,
+                CollisionPhase::Stayed => 1,
+                CollisionPhase::Exited => 2,
+            },
+            0,
+            object_a.as_str(),
+            object_b.as_str(),
+        ),
+        PhysicsEventKind::Trigger {
+            phase,
+            trigger,
+            object,
+        } => (
+            match phase {
+                TriggerPhase::Entered => 0,
+                TriggerPhase::Exited => 2,
+            },
+            1,
+            trigger.as_str(),
+            object.as_str(),
+        ),
+    }
 }
 
 fn rapier_pose(transform: RigidTransform) -> Pose {

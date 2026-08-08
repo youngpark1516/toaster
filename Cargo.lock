@@ -1970,6 +1970,7 @@ dependencies = [
  "glam 0.30.10",
  "rapier3d",
  "toaster-scene",
+ "tracing",
 ]
 
 [[package]]

@@ -20,6 +20,8 @@ previews.
 - Median-split BVH construction with flat CPU and GPU traversal.
 - Renderer-neutral rigid-body evaluation with CPU-side Rapier simulation for
   static, dynamic, and animation-driven kinematic spheres and boxes.
+- Renderer-neutral collision start/stay/exit events and invisible box/sphere
+  trigger zones with stable scene-authored identities.
 - Static progressive preview, adaptive sampling, MJPEG streaming, and raw-RGBA
   FFmpeg export without intermediate PNGs.
 - Deterministic benchmark reports with per-stage timing and image hashes.
@@ -58,8 +60,13 @@ cargo run --release -p toaster-cli -- gpu-render \
   --fps 24 --duration 5
 
 cargo run --release -p toaster-cli -- stream-preview \
-  scenes/012_physics_kinematic_platform.json \
+  scenes/013_physics_events_triggers.json \
   --host 127.0.0.1 --port 7878 --fps 12 --loop-duration 5
+
+cargo run --release -p toaster-cli -- \
+  --log-level debug --log-format json \
+  gpu-render scenes/013_physics_events_triggers.json \
+  --out out/events.png --fps 24 --frames 120
 ```
 
 See the [scene format](docs/scene_format.md) and

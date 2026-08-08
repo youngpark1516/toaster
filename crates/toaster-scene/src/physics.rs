@@ -1,6 +1,34 @@
 //! Renderer-neutral physics declarations and stable render-object bindings.
 
+use anyhow::{bail, Result};
 use glam::Vec3;
+use std::fmt;
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Stable renderer-neutral identity for a physics body or trigger.
+pub struct PhysicsEntityId(String);
+
+impl PhysicsEntityId {
+    /// Validates and owns one nonempty identifier.
+    pub fn new(value: impl Into<String>) -> Result<Self> {
+        let value = value.into();
+        if value.is_empty() {
+            bail!("physics entity id must not be empty");
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the identifier text used by scene declarations and events.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for PhysicsEntityId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Simulation domain selected by a scene physics block.
@@ -50,6 +78,71 @@ pub enum ColliderShape {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Lifecycle phase for a physical contact between two bodies.
+pub enum CollisionPhase {
+    /// The pair became active during this tick.
+    Started,
+    /// The pair remained active through this nominal fixed tick.
+    Stayed,
+    /// The pair stopped touching during this tick.
+    Exited,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Lifecycle phase for an object overlapping a trigger sensor.
+pub enum TriggerPhase {
+    /// The object entered the trigger.
+    Entered,
+    /// The object exited the trigger.
+    Exited,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+/// Backend-neutral payload describing one physics event.
+pub enum PhysicsEventKind {
+    /// Physical contact between two canonically ordered object identities.
+    Collision {
+        /// Start, stay, or exit phase.
+        phase: CollisionPhase,
+        /// Lexicographically first body identity.
+        object_a: PhysicsEntityId,
+        /// Lexicographically second body identity.
+        object_b: PhysicsEntityId,
+    },
+    /// Sensor overlap with fixed trigger and moving-object roles.
+    Trigger {
+        /// Enter or exit phase.
+        phase: TriggerPhase,
+        /// Trigger-zone identity.
+        trigger: PhysicsEntityId,
+        /// Dynamic or kinematic body identity.
+        object: PhysicsEntityId,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+/// One physics event positioned on the deterministic simulation timeline.
+pub struct PhysicsEvent {
+    /// Explicit loop identity from the evaluation request.
+    pub loop_cycle: u64,
+    /// One-based nominal tick completed when this event was observed.
+    pub fixed_tick: u64,
+    /// Wrapped scene-local event time in seconds.
+    pub time_seconds: f32,
+    /// Renderer-neutral event payload.
+    pub kind: PhysicsEventKind,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+/// Ordered physics-event delta produced by one scene evaluation.
+pub struct PhysicsEventBatch {
+    /// Whether consumers must clear prior event-driven state before applying this batch.
+    pub reset: bool,
+    /// Events from every nominal tick crossed by this evaluation.
+    pub events: Vec<PhysicsEvent>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 /// Stable link from one logical scene object to flattened render primitives.
 pub enum ObjectBinding {
@@ -72,6 +165,8 @@ pub enum ObjectBinding {
 #[derive(Clone, Debug, PartialEq)]
 /// One validated rigid-body declaration independent of any physics library.
 pub struct RigidBodyDeclaration {
+    /// Stable user-authored event identity.
+    pub id: PhysicsEntityId,
     /// Static or dynamic ownership.
     pub body: RigidBodyKind,
     /// Collision geometry and dimensions.
@@ -90,4 +185,15 @@ pub struct RigidBodyDeclaration {
     pub binding: ObjectBinding,
     /// Optional user-facing animation group attached to the source object.
     pub group: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+/// Invisible fixed sensor participating only in renderer-neutral trigger events.
+pub struct TriggerDeclaration {
+    /// Stable trigger identity in the shared physics namespace.
+    pub id: PhysicsEntityId,
+    /// Authored world-space sensor origin.
+    pub center: Vec3,
+    /// Sphere or cuboid sensor geometry.
+    pub collider: ColliderShape,
 }

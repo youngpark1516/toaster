@@ -19,8 +19,9 @@ cargo run -p toaster-cli -- stream-preview scenes/006_rotating_cube.json \
   --host 127.0.0.1 --port 7878 --fps 12 --duration 10
 ```
 
-The browser UI is at <http://127.0.0.1:7878/>. `/stream` serves MJPEG and
-`/healthz` is a health check. Omit `--duration` to run until Ctrl+C.
+The browser UI is at <http://127.0.0.1:7878/>. `/stream` serves MJPEG,
+`/healthz` is a health check, and `/status` reports the latest render metrics
+used by the page. Omit `--duration` to run until Ctrl+C.
 
 For static scenes, `--progressive --batch-samples 2 --target-samples 256`
 accumulates to an exact target. For bounded adaptive work, add
@@ -46,6 +47,21 @@ cargo run --release -p toaster-cli -- stream-preview \
   --host 127.0.0.1 --port 7878 --fps 12 --loop-duration 5
 ```
 
+The event demo adds collision lifecycle logging and invisible box/sphere
+triggers outlined by visible nonphysics markers:
+
+```sh
+cargo run --release -p toaster-cli -- \
+  --log-level debug --log-format json \
+  stream-preview scenes/013_physics_events_triggers.json \
+  --host 127.0.0.1 --port 7878 --fps 12 --loop-duration 5
+```
+
+Neutral events are emitted as structured debug records from
+`toaster_physics`. The existing page, `/stream`, `/healthz`, and `/status`
+routes are unchanged; the event workflow does not add or depend on a new
+server endpoint.
+
 Each loop resets and deterministically replays the physics world. Physical poses
 repeat while path-tracing noise may differ because render frame indices remain
 monotonic.
@@ -63,6 +79,11 @@ cargo run --release -p toaster-cli -- gpu-render \
 cargo run --release -p toaster-cli -- gpu-render \
   scenes/012_physics_kinematic_platform.json \
   --video out/kinematic.mp4 --fps 24 --duration 5
+
+cargo run --release -p toaster-cli -- \
+  --log-level debug --log-format json \
+  gpu-render scenes/013_physics_events_triggers.json \
+  --out out/events.png --fps 24 --frames 120
 ```
 
 MP4 export requires `ffmpeg` on `PATH`; on the documented cluster environment,

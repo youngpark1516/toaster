@@ -12,3 +12,4 @@ anyhow.workspace = true
 glam.workspace = true
 rapier3d.workspace = true
 toaster-scene = { path = "../toaster-scene" }
+tracing.workspace = true

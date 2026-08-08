@@ -35,7 +35,9 @@ pub use loader::load_scene;
 pub use material::Material;
 pub use object::{Sphere, Triangle, TriangleAttributes};
 pub use physics::{
-    ColliderShape, ObjectBinding, PhysicsSettings, PhysicsType, RigidBodyDeclaration, RigidBodyKind,
+    ColliderShape, CollisionPhase, ObjectBinding, PhysicsEntityId, PhysicsEvent, PhysicsEventBatch,
+    PhysicsEventKind, PhysicsSettings, PhysicsType, RigidBodyDeclaration, RigidBodyKind,
+    TriggerDeclaration, TriggerPhase,
 };
 pub use scene::{Background, CameraSettings, RenderSettings, Scene};
 pub use texture::Texture;

@@ -940,6 +940,13 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("physics-enabled"));
 
+        let event_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/013_physics_events_triggers.json");
+        let event_scene = toaster_scene::load_scene(event_path).unwrap();
+        let error =
+            resolve_progressive_preview(true, None, None, None, None, &event_scene).unwrap_err();
+        assert!(error.to_string().contains("physics-enabled"));
+
         physics_scene.animation.tracks.clear();
         physics_scene.physics.as_mut().unwrap().enabled = false;
         assert!(resolve_progressive_preview(true, None, None, None, None, &physics_scene).is_ok());

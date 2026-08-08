@@ -425,6 +425,7 @@ mod tests {
             animation: Default::default(),
             physics: None,
             rigid_bodies: Vec::new(),
+            triggers: Vec::new(),
         }
     }
 
@@ -503,6 +504,7 @@ mod tests {
             animation: Default::default(),
             physics: None,
             rigid_bodies: Vec::new(),
+            triggers: Vec::new(),
         }
     }
 

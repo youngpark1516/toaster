@@ -35,27 +35,27 @@
   "objects": [
     {
       "type": "box", "center": [0.0, -0.1, -3.0], "size": [8.0, 0.2, 8.0],
-      "material": "white", "group": "room_floor",
+      "material": "white", "id": "room_floor", "group": "room_floor",
       "physics": { "body": "static", "collider": "cuboid", "friction": 0.8, "restitution": 0.05 }
     },
     {
       "type": "box", "center": [0.0, 6.1, -3.0], "size": [8.0, 0.2, 8.0],
-      "material": "white", "group": "room_ceiling",
+      "material": "white", "id": "room_ceiling", "group": "room_ceiling",
       "physics": { "body": "static", "collider": "cuboid", "friction": 0.6, "restitution": 0.05 }
     },
     {
       "type": "box", "center": [0.0, 3.0, -7.1], "size": [8.0, 6.0, 0.2],
-      "material": "white", "group": "room_back",
+      "material": "white", "id": "room_back", "group": "room_back",
       "physics": { "body": "static", "collider": "cuboid", "friction": 0.65, "restitution": 0.08 }
     },
     {
       "type": "box", "center": [-4.1, 3.0, -3.0], "size": [0.2, 6.0, 8.0],
-      "material": "red_wall", "group": "room_left",
+      "material": "red_wall", "id": "room_left", "group": "room_left",
       "physics": { "body": "static", "collider": "cuboid", "friction": 0.65, "restitution": 0.08 }
     },
     {
       "type": "box", "center": [4.1, 3.0, -3.0], "size": [0.2, 6.0, 8.0],
-      "material": "green_wall", "group": "room_right",
+      "material": "green_wall", "id": "room_right", "group": "room_right",
       "physics": { "body": "static", "collider": "cuboid", "friction": 0.65, "restitution": 0.08 }
     },
 
@@ -64,53 +64,53 @@
 
     {
       "type": "box", "center": [-1.6, 0.75, -3.2], "size": [3.0, 0.3, 2.0],
-      "material": "platform_blue", "group": "moving_platform",
+      "material": "platform_blue", "id": "moving_platform", "group": "moving_platform",
       "physics": { "body": "kinematic", "collider": "cuboid", "friction": 0.95, "restitution": 0.05 }
     },
     {
       "type": "box", "center": [1.8, 2.25, -4.3], "size": [3.2, 0.28, 0.55],
-      "material": "paddle_orange", "group": "rotating_paddle",
+      "material": "paddle_orange", "id": "rotating_paddle", "group": "rotating_paddle",
       "physics": { "body": "kinematic", "collider": "cuboid", "friction": 0.75, "restitution": 0.35 }
     },
 
     {
       "type": "sphere", "center": [-2.5, 2.1, -2.8], "radius": 0.44,
-      "material": "red", "group": "ball_0",
+      "material": "red", "id": "ball_0", "group": "ball_0",
       "physics": { "body": "dynamic", "mass": 1.0, "friction": 0.45, "restitution": 0.45 }
     },
     {
       "type": "sphere", "center": [-1.3, 3.2, -3.5], "radius": 0.52,
-      "material": "yellow", "group": "ball_1",
+      "material": "yellow", "id": "ball_1", "group": "ball_1",
       "physics": { "body": "dynamic", "mass": 1.3, "friction": 0.55, "restitution": 0.35 }
     },
     {
       "type": "sphere", "center": [1.2, 4.3, -4.1], "radius": 0.42,
-      "material": "cyan", "group": "ball_2",
+      "material": "cyan", "id": "ball_2", "group": "ball_2",
       "physics": { "body": "dynamic", "mass": 0.8, "friction": 0.3, "restitution": 0.72 }
     },
     {
       "type": "sphere", "center": [2.7, 5.1, -4.5], "radius": 0.48,
-      "material": "violet", "group": "ball_3",
+      "material": "violet", "id": "ball_3", "group": "ball_3",
       "physics": { "body": "dynamic", "mass": 1.1, "friction": 0.4, "restitution": 0.58 }
     },
     {
       "type": "box", "center": [-2.0, 4.5, -3.0], "size": [0.85, 0.85, 0.85],
-      "material": "steel", "group": "crate_0",
+      "material": "steel", "id": "crate_0", "group": "crate_0",
       "physics": { "body": "dynamic", "mass": 1.6, "friction": 0.75, "restitution": 0.12, "initial_angular_velocity": [0.4, 0.8, 0.2] }
     },
     {
       "type": "box", "center": [-0.5, 5.2, -3.8], "size": [1.0, 0.7, 0.8],
-      "material": "red", "group": "crate_1",
+      "material": "red", "id": "crate_1", "group": "crate_1",
       "physics": { "body": "dynamic", "mass": 1.9, "friction": 0.65, "restitution": 0.16, "initial_angular_velocity": [0.8, 0.2, 0.5] }
     },
     {
       "type": "box", "center": [1.2, 3.3, -3.9], "size": [0.75, 1.15, 0.75],
-      "material": "yellow", "group": "crate_2",
+      "material": "yellow", "id": "crate_2", "group": "crate_2",
       "physics": { "body": "dynamic", "mass": 1.25, "friction": 0.82, "restitution": 0.1, "initial_angular_velocity": [0.3, 0.7, 0.9] }
     },
     {
       "type": "box", "center": [2.6, 3.8, -5.0], "size": [0.8, 0.8, 1.2],
-      "material": "cyan", "group": "crate_3",
+      "material": "cyan", "id": "crate_3", "group": "crate_3",
       "physics": { "body": "dynamic", "mass": 1.45, "friction": 0.55, "restitution": 0.22, "initial_angular_velocity": [0.7, 0.5, 0.3] }
     }
   ],

@@ -1,6 +1,6 @@
 //! Renderer-neutral frame evaluation contracts shared by all renderers.
 
-use crate::{AnimationTarget, Material, Scene};
+use crate::{AnimationTarget, Material, PhysicsEventBatch, Scene};
 use anyhow::Result;
 use std::time::{Duration, Instant};
 
@@ -68,6 +68,8 @@ pub struct EvaluatedScene {
     pub changes: SceneChanges,
     /// Optional-cost diagnostics gathered by the evaluator for this request.
     pub timings: SceneEvaluationTimings,
+    /// Ordered physics events crossed while producing this evaluated scene.
+    pub physics_events: PhysicsEventBatch,
 }
 
 /// Stateful or stateless provider of evaluated renderer-neutral frames.
@@ -125,6 +127,7 @@ impl SceneEvaluator for AnimationEvaluator {
             scene,
             changes,
             timings,
+            physics_events: PhysicsEventBatch::default(),
         })
     }
 }

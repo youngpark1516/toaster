@@ -6,8 +6,8 @@ use crate::{
     material::Material,
     object::{Sphere, Triangle, TriangleAttributes},
     physics::{
-        ColliderShape, ObjectBinding, PhysicsSettings, PhysicsType, RigidBodyDeclaration,
-        RigidBodyKind,
+        ColliderShape, ObjectBinding, PhysicsEntityId, PhysicsSettings, PhysicsType,
+        RigidBodyDeclaration, RigidBodyKind, TriggerDeclaration,
     },
     scene::{Background, CameraSettings, RenderSettings, Scene},
     texture::Texture,
@@ -16,7 +16,7 @@ use anyhow::{bail, Context, Result};
 use glam::Vec3;
 use serde::Deserialize;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
 };
 
@@ -36,6 +36,9 @@ struct SceneFile {
     animation: Animation,
     /// Optional renderer-neutral physics-world declaration.
     physics: Option<PhysicsFile>,
+    /// Optional invisible fixed trigger sensors.
+    #[serde(default)]
+    triggers: Vec<TriggerFile>,
 }
 
 #[derive(Deserialize)]
@@ -190,6 +193,8 @@ enum MaterialData {
 enum ObjectFile {
     /// Analytic sphere.
     Sphere {
+        /// Optional stable scene identity; required when physics is present.
+        id: Option<String>,
         /// World-space center.
         center: Vec3,
         /// Positive radius.
@@ -203,6 +208,8 @@ enum ObjectFile {
     },
     /// Generated axis-aligned box expanded into triangles during loading.
     Box {
+        /// Optional stable scene identity; required when physics is present.
+        id: Option<String>,
         /// World-space box center.
         center: Vec3,
         /// Positive full extents on all axes.
@@ -216,6 +223,8 @@ enum ObjectFile {
     },
     /// Explicit triangle.
     Triangle {
+        /// Optional stable identity reserved for future scene hooks.
+        id: Option<String>,
         /// Three finite non-collinear vertices.
         vertices: [Vec3; 3],
         /// Name of a declared Toaster material.
@@ -227,6 +236,8 @@ enum ObjectFile {
     },
     /// Imported glTF/GLB triangle mesh.
     Mesh {
+        /// Optional stable identity reserved for future scene hooks.
+        id: Option<String>,
         /// Absolute path or path relative to the scene file.
         path: PathBuf,
         /// Optional Toaster material overriding imported base colors.
@@ -235,6 +246,30 @@ enum ObjectFile {
         group: Option<String>,
         /// Rejected in the rigid-body MVP.
         physics: Option<RigidBodyFile>,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "shape", rename_all = "snake_case", deny_unknown_fields)]
+/// Raw invisible trigger-zone declarations.
+enum TriggerFile {
+    /// Fixed spherical sensor.
+    Sphere {
+        /// Stable identity shared with physics objects.
+        id: String,
+        /// World-space center.
+        center: Vec3,
+        /// Positive radius.
+        radius: f32,
+    },
+    /// Fixed axis-aligned box sensor.
+    Box {
+        /// Stable identity shared with physics objects.
+        id: String,
+        /// World-space center.
+        center: Vec3,
+        /// Positive full extents.
+        size: Vec3,
     },
 }
 
@@ -352,6 +387,9 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
     }
 
     let physics = file.physics.map(validate_physics_settings).transpose()?;
+    if !file.triggers.is_empty() {
+        ensure_physics_block(&physics)?;
+    }
 
     let mut material_names = HashMap::new();
     let mut materials = Vec::with_capacity(file.materials.len());
@@ -405,15 +443,18 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
     let mut triangle_attributes = Vec::with_capacity(file.objects.len());
     let mut textures = Vec::new();
     let mut rigid_bodies = Vec::new();
+    let mut entity_ids = HashSet::new();
     for object in file.objects {
         match object {
             ObjectFile::Sphere {
+                id,
                 center,
                 radius,
                 material,
                 group,
                 physics: body,
             } => {
+                let id = validate_object_id(id, body.is_some(), &mut entity_ids)?;
                 if !center.is_finite() || !radius.is_finite() || radius <= 0.0 {
                     bail!("sphere radius must be positive and its center must be finite");
                 }
@@ -433,6 +474,7 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
                     ensure_physics_block(&physics)?;
                     rigid_bodies.push(validate_rigid_body(
                         body,
+                        id.expect("physics object id was required and validated"),
                         ColliderKindFile::Sphere,
                         ColliderShape::Sphere { radius },
                         ObjectBinding::Sphere {
@@ -443,12 +485,14 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
                 }
             }
             ObjectFile::Box {
+                id,
                 center,
                 size,
                 material,
                 group,
                 physics: body,
             } => {
+                let id = validate_object_id(id, body.is_some(), &mut entity_ids)?;
                 if !center.is_finite() || !size.is_finite() || size.cmple(Vec3::ZERO).any() {
                     bail!("box center must be finite and size components must be positive");
                 }
@@ -470,6 +514,7 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
                     ensure_physics_block(&physics)?;
                     rigid_bodies.push(validate_rigid_body(
                         body,
+                        id.expect("physics object id was required and validated"),
                         ColliderKindFile::Cuboid,
                         ColliderShape::Cuboid {
                             half_extents: size * 0.5,
@@ -484,11 +529,13 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
                 }
             }
             ObjectFile::Triangle {
+                id,
                 vertices,
                 material,
                 group,
                 physics,
             } => {
+                validate_object_id(id, false, &mut entity_ids)?;
                 if physics.is_some() {
                     bail!("triangle objects do not support physics in the rigid-body MVP");
                 }
@@ -504,11 +551,13 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
                 triangle_attributes.push(TriangleAttributes::default());
             }
             ObjectFile::Mesh {
+                id,
                 path,
                 material,
                 group,
                 physics,
             } => {
+                validate_object_id(id, false, &mut entity_ids)?;
                 if physics.is_some() {
                     bail!("mesh objects do not support physics in the rigid-body MVP");
                 }
@@ -623,6 +672,12 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
         }
     }
 
+    let triggers = file
+        .triggers
+        .into_iter()
+        .map(|trigger| validate_trigger(trigger, &mut entity_ids))
+        .collect::<Result<Vec<_>>>()?;
+
     let (background, environment) = match file.render.background {
         BackgroundFile::Kind(BackgroundKindFile::Sky) => (Background::Sky, None),
         BackgroundFile::Kind(BackgroundKindFile::Black) => (Background::Black, None),
@@ -672,6 +727,7 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
         animation,
         physics,
         rigid_bodies,
+        triggers,
     };
     validate_animation(&scene)?;
     Ok(scene)
@@ -710,6 +766,7 @@ fn ensure_physics_block(physics: &Option<PhysicsSettings>) -> Result<()> {
 /// Validates one raw body and binds it to already-expanded render geometry.
 fn validate_rigid_body(
     file: RigidBodyFile,
+    id: PhysicsEntityId,
     expected_collider: ColliderKindFile,
     collider: ColliderShape,
     binding: ObjectBinding,
@@ -780,6 +837,7 @@ fn validate_rigid_body(
     };
 
     Ok(RigidBodyDeclaration {
+        id,
         body,
         collider,
         mass,
@@ -789,6 +847,61 @@ fn validate_rigid_body(
         initial_angular_velocity,
         binding,
         group,
+    })
+}
+
+/// Validates an optional source-object identity and reserves its global name.
+fn validate_object_id(
+    id: Option<String>,
+    required_for_physics: bool,
+    entity_ids: &mut HashSet<String>,
+) -> Result<Option<PhysicsEntityId>> {
+    let Some(id) = id else {
+        if required_for_physics {
+            bail!("physics objects require a nonempty object id");
+        }
+        return Ok(None);
+    };
+    let id = PhysicsEntityId::new(id)?;
+    if !entity_ids.insert(id.as_str().to_owned()) {
+        bail!("duplicate physics entity id '{}'", id.as_str());
+    }
+    Ok(Some(id))
+}
+
+/// Validates one static invisible trigger declaration.
+fn validate_trigger(
+    file: TriggerFile,
+    entity_ids: &mut HashSet<String>,
+) -> Result<TriggerDeclaration> {
+    let (id, center, collider) = match file {
+        TriggerFile::Sphere { id, center, radius } => {
+            if !center.is_finite() || !radius.is_finite() || radius <= 0.0 {
+                bail!("trigger sphere radius must be positive and its center must be finite");
+            }
+            (id, center, ColliderShape::Sphere { radius })
+        }
+        TriggerFile::Box { id, center, size } => {
+            if !center.is_finite() || !size.is_finite() || size.cmple(Vec3::ZERO).any() {
+                bail!("trigger box center must be finite and size components must be positive");
+            }
+            (
+                id,
+                center,
+                ColliderShape::Cuboid {
+                    half_extents: size * 0.5,
+                },
+            )
+        }
+    };
+    let id = PhysicsEntityId::new(id)?;
+    if !entity_ids.insert(id.as_str().to_owned()) {
+        bail!("duplicate physics entity id '{}'", id.as_str());
+    }
+    Ok(TriggerDeclaration {
+        id,
+        center,
+        collider,
     })
 }
 
@@ -1154,6 +1267,20 @@ mod tests {
     }
 
     #[test]
+    fn loads_physics_event_demo_with_invisible_triggers() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/013_physics_events_triggers.json");
+        let scene = load_scene(path).unwrap();
+
+        assert_eq!(scene.triggers.len(), 2);
+        assert_eq!(scene.rigid_bodies.len(), 10);
+        assert_eq!(scene.spheres.len(), 6);
+        assert_eq!(scene.triangles.len(), 134);
+        assert_eq!(scene.triggers[0].id.as_str(), "gate_zone");
+        assert_eq!(scene.triggers[1].id.as_str(), "orb_zone");
+    }
+
+    #[test]
     fn parses_rigid_body_sphere_and_expands_box() {
         let scene = parse(
             r#"{
@@ -1162,9 +1289,9 @@ mod tests {
             "physics":{"type":"rigid_body"},
             "materials":[{"name":"matte","type":"diffuse","albedo":[0.5,0.5,0.5]}],
             "objects":[
-                {"type":"sphere","center":[0,3,0],"radius":0.5,"material":"matte","group":"ball",
+                {"id":"ball","type":"sphere","center":[0,3,0],"radius":0.5,"material":"matte","group":"ball",
                  "physics":{"body":"dynamic","collider":"sphere","mass":2,"restitution":0.4}},
-                {"type":"box","center":[0,-0.25,0],"size":[4,0.5,4],"material":"matte","group":"floor",
+                {"id":"floor","type":"box","center":[0,-0.25,0],"size":[4,0.5,4],"material":"matte","group":"floor",
                  "physics":{"body":"static","collider":"cuboid","friction":0.8}}
             ]
         }"#,
@@ -1188,6 +1315,92 @@ mod tests {
     }
 
     #[test]
+    fn parses_stable_physics_ids_and_static_trigger_shapes() {
+        let scene = parse(
+            r#"{
+            "camera":{"position":[0,2,5],"look_at":[0,1,0],"fov_degrees":45},
+            "render":{"width":4,"height":4,"samples":1,"max_bounces":1},
+            "physics":{"enabled":false,"type":"rigid_body"},
+            "materials":[{"name":"m","type":"diffuse","albedo":[0.5,0.5,0.5]}],
+            "objects":[
+              {"id":"ball","type":"sphere","center":[0,2,0],"radius":0.5,"material":"m",
+               "physics":{"body":"dynamic"}}
+            ],
+            "triggers":[
+              {"id":"box_zone","shape":"box","center":[0,1,0],"size":[2,4,6]},
+              {"id":"sphere_zone","shape":"sphere","center":[2,1,0],"radius":1.25}
+            ]
+        }"#,
+        )
+        .unwrap();
+
+        assert_eq!(scene.rigid_bodies[0].id.as_str(), "ball");
+        assert_eq!(scene.triggers.len(), 2);
+        assert_eq!(scene.triggers[0].id.as_str(), "box_zone");
+        assert_eq!(scene.triggers[0].center, Vec3::Y);
+        assert_eq!(
+            scene.triggers[0].collider,
+            ColliderShape::Cuboid {
+                half_extents: Vec3::new(1.0, 2.0, 3.0)
+            }
+        );
+        assert_eq!(
+            scene.triggers[1].collider,
+            ColliderShape::Sphere { radius: 1.25 }
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_or_duplicate_event_identities_and_triggers() {
+        fn scene_json(physics: &str, object: &str, triggers: &str) -> String {
+            format!(
+                r#"{{
+                  "camera":{{"position":[0,0,4],"look_at":[0,0,0],"fov_degrees":45}},
+                  "render":{{"width":1,"height":1,"samples":1,"max_bounces":1}},
+                  {physics}
+                  "materials":[{{"name":"m","type":"diffuse","albedo":[1,1,1]}}],
+                  "objects":[{object}],
+                  "triggers":[{triggers}]
+                }}"#
+            )
+        }
+        let body_without_id = r#"{"type":"sphere","center":[0,0,0],"radius":1,"material":"m","physics":{"body":"dynamic"}}"#;
+        assert!(parse(&scene_json(
+            r#""physics":{"type":"rigid_body"},"#,
+            body_without_id,
+            ""
+        ))
+        .is_err());
+
+        let body = r#"{"id":"body","type":"sphere","center":[0,0,0],"radius":1,"material":"m","physics":{"body":"dynamic"}}"#;
+        let invalid_triggers = [
+            r#"{"id":"","shape":"sphere","center":[0,0,0],"radius":1}"#,
+            r#"{"id":"zone","shape":"sphere","center":[0,0,0],"radius":0}"#,
+            r#"{"id":"zone","shape":"box","center":[0,0,0],"size":[1,0,1]}"#,
+            r#"{"id":"zone","shape":"box","center":[0,0,0],"size":[1,1,1],"unknown":true}"#,
+        ];
+        for trigger in invalid_triggers {
+            assert!(parse(&scene_json(
+                r#""physics":{"type":"rigid_body"},"#,
+                body,
+                trigger
+            ))
+            .is_err());
+        }
+
+        let duplicate = r#"{"id":"body","shape":"sphere","center":[0,0,0],"radius":1}"#;
+        assert!(parse(&scene_json(
+            r#""physics":{"type":"rigid_body"},"#,
+            body,
+            duplicate
+        ))
+        .is_err());
+
+        let trigger = r#"{"id":"zone","shape":"sphere","center":[0,0,0],"radius":1}"#;
+        assert!(parse(&scene_json("", "", trigger)).is_err());
+    }
+
+    #[test]
     fn validates_physics_even_when_disabled_but_skips_ownership() {
         let valid = parse(
             r#"{
@@ -1195,7 +1408,7 @@ mod tests {
             "render":{"width":1,"height":1,"samples":1,"max_bounces":1},
             "physics":{"enabled":false,"type":"rigid_body"},
             "materials":[{"name":"m","type":"diffuse","albedo":[1,1,1]}],
-            "objects":[{"type":"sphere","center":[0,0,0],"radius":1,"material":"m","group":"hero",
+            "objects":[{"id":"hero","type":"sphere","center":[0,0,0],"radius":1,"material":"m","group":"hero",
                         "physics":{"body":"dynamic","mass":1}}],
             "animation":{"tracks":[{"type":"translation","target":{"type":"group","name":"hero"},
               "interpolation":"linear","keyframes":[{"time":0,"value":[0,0,0]},{"time":1,"value":[1,0,0]}]}]}
@@ -1225,9 +1438,9 @@ mod tests {
             "physics":{"type":"rigid_body","substeps":2},
             "materials":[{"name":"m","type":"diffuse","albedo":[0.5,0.5,0.5]}],
             "objects":[
-                {"type":"sphere","center":[0,1,0],"radius":0.5,"material":"m","group":"orb",
+                {"id":"orb","type":"sphere","center":[0,1,0],"radius":0.5,"material":"m","group":"orb",
                  "physics":{"body":"kinematic","collider":"sphere","friction":0.4}},
-                {"type":"box","center":[0,0,0],"size":[2,0.2,2],"material":"m","group":"platform",
+                {"id":"platform","type":"box","center":[0,0,0],"size":[2,0.2,2],"material":"m","group":"platform",
                  "physics":{"body":"kinematic","collider":"cuboid","restitution":0.1}}
             ],
             "animation":{"tracks":[
@@ -1262,7 +1475,7 @@ mod tests {
                 }}"#
             )
         }
-        let body = r#"{"type":"sphere","center":[0,0,0],"radius":1,"material":"m","group":"mover","physics":{"body":"kinematic"}}"#;
+        let body = r#"{"id":"mover","type":"sphere","center":[0,0,0],"radius":1,"material":"m","group":"mover","physics":{"body":"kinematic"}}"#;
         let track = r#"{"type":"translation","target":{"type":"group","name":"mover"},"interpolation":"linear","keyframes":[{"time":0,"value":[0,0,0]}]}"#;
 
         assert!(parse(&scene_json(true, body, track)).is_ok());
@@ -1300,7 +1513,7 @@ mod tests {
             "physics":{"type":"rigid_body"},
             "materials":[{"name":"m","type":"diffuse","albedo":[1,1,1]}],
             "objects":[
-              {"type":"sphere","center":[0,2,0],"radius":0.5,"material":"m","group":"body",
+              {"id":"body","type":"sphere","center":[0,2,0],"radius":0.5,"material":"m","group":"body",
                "physics":{"body":"dynamic"}},
               {"type":"sphere","center":[-1,0,0],"radius":0.25,"material":"m","group":"prop"}
             ],
@@ -1327,7 +1540,7 @@ mod tests {
             "render":{"width":1,"height":1,"samples":1,"max_bounces":1},
             "physics":{"type":"rigid_body"},
             "materials":[{"name":"m","type":"diffuse","albedo":[1,1,1]}],
-            "objects":[{"type":"sphere","center":[0,0,0],"radius":1,"material":"m","group":"hero",
+            "objects":[{"id":"hero","type":"sphere","center":[0,0,0],"radius":1,"material":"m","group":"hero",
                         "physics":{"body":"dynamic"}}],
             "animation":{"tracks":[{"type":"translation","target":{"type":"group","name":"hero"},
               "interpolation":"linear","keyframes":[{"time":0,"value":[0,0,0]}]}]}

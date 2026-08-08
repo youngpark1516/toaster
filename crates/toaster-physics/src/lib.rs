@@ -6,7 +6,7 @@ use anyhow::{bail, Context, Result};
 use std::time::Instant;
 use toaster_scene::{
     animation_changes, apply_rigid_transform, EvaluatedScene, EvaluationRequest, ObjectBinding,
-    RigidTransform, Scene, SceneChanges, SceneEvaluationTimings, SceneEvaluator,
+    PhysicsEventBatch, RigidTransform, Scene, SceneChanges, SceneEvaluationTimings, SceneEvaluator,
 };
 
 pub use rapier_backend::RapierRigidBodyBackend;
@@ -41,6 +41,8 @@ pub struct EvaluatedPhysicsState {
     pub updates: Vec<PhysicsSceneUpdate>,
     /// Renderer data categories invalidated by the updates.
     pub changes: SceneChanges,
+    /// Ordered neutral events crossed while reaching the requested tick.
+    pub physics_events: PhysicsEventBatch,
 }
 
 /// Replaceable physics simulation backend hidden from renderer crates.
@@ -135,6 +137,7 @@ impl SceneEvaluator for PhysicsSceneEvaluator {
         let mut changes = animation_changes(&self.source);
         let mut physics_evaluation = Default::default();
         let mut geometry_update = Default::default();
+        let mut physics_events = PhysicsEventBatch::default();
         if let Some(backend) = &mut self.backend {
             let settings = self
                 .source
@@ -142,15 +145,34 @@ impl SceneEvaluator for PhysicsSceneEvaluator {
                 .context("active physics evaluator requires physics settings")?;
             let backend_request = Self::physics_request(settings, request)?;
             let physics_start = Instant::now();
-            if self.last_physics_request.is_some_and(|previous| {
+            let reset = self.last_physics_request.is_some_and(|previous| {
                 previous.loop_cycle != backend_request.loop_cycle
                     || backend_request.fixed_tick < previous.fixed_tick
-            }) {
+            });
+            if reset {
                 backend.reset()?;
             }
-            let state = backend.evaluate(backend_request)?;
+            let mut state = backend.evaluate(backend_request)?;
+            state.physics_events.reset |= reset;
             physics_evaluation = physics_start.elapsed();
             self.last_physics_request = Some(backend_request);
+            if state.physics_events.reset {
+                tracing::debug!(
+                    loop_cycle = backend_request.loop_cycle,
+                    fixed_tick = backend_request.fixed_tick,
+                    "reset physics event timeline before replay"
+                );
+            }
+            for event in &state.physics_events.events {
+                tracing::debug!(
+                    loop_cycle = event.loop_cycle,
+                    fixed_tick = event.fixed_tick,
+                    event_time_seconds = event.time_seconds as f64,
+                    event = ?event.kind,
+                    "physics event"
+                );
+            }
+            physics_events = state.physics_events;
             let geometry_start = Instant::now();
             for update in state.updates {
                 match update {
@@ -174,6 +196,7 @@ impl SceneEvaluator for PhysicsSceneEvaluator {
                 physics_evaluation,
                 geometry_update,
             },
+            physics_events,
         })
     }
 }
@@ -185,9 +208,9 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
     use toaster_scene::{
         Animation, AnimationTarget, AnimationTrack, Background, CameraSettings, ColliderShape,
-        Interpolation, Material, PhysicsSettings, PhysicsType, RenderSettings,
-        RigidBodyDeclaration, RigidBodyKind, Sphere, TranslationKeyframe, Triangle,
-        TriangleAttributes,
+        CollisionPhase, Interpolation, Material, PhysicsEntityId, PhysicsEvent, PhysicsEventKind,
+        PhysicsSettings, PhysicsType, RenderSettings, RigidBodyDeclaration, RigidBodyKind, Sphere,
+        TranslationKeyframe, Triangle, TriangleAttributes, TriggerDeclaration, TriggerPhase,
     };
 
     fn base_scene() -> Scene {
@@ -240,6 +263,7 @@ mod tests {
             }),
             rigid_bodies: vec![
                 RigidBodyDeclaration {
+                    id: PhysicsEntityId::new("ball").unwrap(),
                     body: RigidBodyKind::Dynamic,
                     collider: ColliderShape::Sphere { radius: 0.5 },
                     mass: Some(1.0),
@@ -251,6 +275,7 @@ mod tests {
                     group: Some("ball".into()),
                 },
                 RigidBodyDeclaration {
+                    id: PhysicsEntityId::new("floor").unwrap(),
                     body: RigidBodyKind::Static,
                     collider: ColliderShape::Cuboid {
                         half_extents: Vec3::new(5.0, 0.1, 5.0),
@@ -264,6 +289,7 @@ mod tests {
                     group: Some("floor".into()),
                 },
             ],
+            triggers: Vec::new(),
         }
     }
 
@@ -278,6 +304,7 @@ mod tests {
         let mut scene = base_scene();
         scene.spheres[0].center = Vec3::new(0.0, 0.5, 0.0);
         scene.triangles[0].group = Some("platform".into());
+        scene.rigid_bodies[1].id = PhysicsEntityId::new("platform").unwrap();
         scene.rigid_bodies[1].body = RigidBodyKind::Kinematic;
         scene.rigid_bodies[1].group = Some("platform".into());
         scene.physics.as_mut().unwrap().substeps = 2;
@@ -302,6 +329,21 @@ mod tests {
         scene
     }
 
+    fn trigger_scene() -> Scene {
+        let mut scene = base_scene();
+        scene.physics.as_mut().unwrap().gravity = Vec3::ZERO;
+        scene.spheres[0].center = Vec3::new(-2.0, 1.0, 0.0);
+        scene.spheres[0].radius = 0.25;
+        scene.rigid_bodies[0].collider = ColliderShape::Sphere { radius: 0.25 };
+        scene.rigid_bodies[0].initial_velocity = Vec3::new(2.0, 0.0, 0.0);
+        scene.triggers = vec![TriggerDeclaration {
+            id: PhysicsEntityId::new("zone").unwrap(),
+            center: Vec3::Y,
+            collider: ColliderShape::Sphere { radius: 0.5 },
+        }];
+        scene
+    }
+
     #[test]
     fn sphere_falls_and_collides_with_static_floor() {
         let mut evaluator = PhysicsSceneEvaluator::new(base_scene()).unwrap();
@@ -314,6 +356,163 @@ mod tests {
         assert!(settled.scene.spheres[0].center.y >= 0.49);
         assert!(settled.scene.spheres[0].center.y < 0.6);
         assert_eq!(evaluator.source_scene().spheres[0].center.y, 3.0);
+    }
+
+    #[test]
+    fn collision_events_include_started_stayed_and_canonical_ids() {
+        let mut scene = base_scene();
+        scene.rigid_bodies.reverse();
+        let mut evaluator = PhysicsSceneEvaluator::new(scene).unwrap();
+        let evaluated = evaluator.evaluate(request(1.5, 0)).unwrap();
+        let phases = evaluated
+            .physics_events
+            .events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                PhysicsEventKind::Collision {
+                    phase,
+                    object_a,
+                    object_b,
+                } if object_a.as_str() == "ball" && object_b.as_str() == "floor" => Some(*phase),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(phases.contains(&CollisionPhase::Started));
+        assert!(phases.contains(&CollisionPhase::Stayed));
+        assert!(evaluated
+            .physics_events
+            .events
+            .windows(2)
+            .all(|events| events[0].fixed_tick <= events[1].fixed_tick));
+
+        let same_tick = evaluator.evaluate(request(1.5, 0)).unwrap();
+        assert!(same_tick.physics_events.events.is_empty());
+    }
+
+    #[test]
+    fn bouncing_contact_emits_collision_exit() {
+        let mut scene = base_scene();
+        scene.rigid_bodies[0].restitution = 1.0;
+        scene.rigid_bodies[1].restitution = 1.0;
+        let mut evaluator = PhysicsSceneEvaluator::new(scene).unwrap();
+        let evaluated = evaluator.evaluate(request(2.0, 0)).unwrap();
+
+        assert!(evaluated.physics_events.events.iter().any(|event| matches!(
+            event.kind,
+            PhysicsEventKind::Collision {
+                phase: CollisionPhase::Exited,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn preserves_start_and_exit_within_one_nominal_tick() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/013_physics_events_triggers.json");
+        let scene = toaster_scene::load_scene(path).unwrap();
+        let mut evaluator = PhysicsSceneEvaluator::new(scene).unwrap();
+        let evaluated = evaluator.evaluate(request(0.5, 0)).unwrap();
+        let transitions = evaluated
+            .physics_events
+            .events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                PhysicsEventKind::Collision {
+                    phase,
+                    object_a,
+                    object_b,
+                } if object_a.as_str() == "ball_red" && object_b.as_str() == "sweeper" => {
+                    Some((event.fixed_tick, *phase))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(transitions.windows(2).any(|events| {
+            events[0] == (4, CollisionPhase::Started) && events[1] == (4, CollisionPhase::Exited)
+        }));
+    }
+
+    #[test]
+    fn trigger_sensor_emits_enter_and_exit_without_changing_motion() {
+        let scene = trigger_scene();
+        let mut with_trigger = PhysicsSceneEvaluator::new(scene.clone()).unwrap();
+        let evaluated = with_trigger.evaluate(request(2.0, 0)).unwrap();
+        let phases = evaluated
+            .physics_events
+            .events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                PhysicsEventKind::Trigger {
+                    phase,
+                    trigger,
+                    object,
+                } if trigger.as_str() == "zone" && object.as_str() == "ball" => Some(*phase),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(phases, vec![TriggerPhase::Entered, TriggerPhase::Exited]);
+        let mut without_trigger_scene = scene;
+        without_trigger_scene.triggers.clear();
+        let mut without_trigger = PhysicsSceneEvaluator::new(without_trigger_scene).unwrap();
+        let expected = without_trigger.evaluate(request(2.0, 0)).unwrap();
+        assert_eq!(
+            evaluated.scene.spheres[0].center,
+            expected.scene.spheres[0].center
+        );
+    }
+
+    #[test]
+    fn kinematic_bodies_enter_fixed_trigger_sensors() {
+        let mut scene = kinematic_scene();
+        scene.triggers.push(TriggerDeclaration {
+            id: PhysicsEntityId::new("upper_zone").unwrap(),
+            center: Vec3::new(0.0, 0.8, 0.0),
+            collider: ColliderShape::Cuboid {
+                half_extents: Vec3::new(5.0, 0.1, 5.0),
+            },
+        });
+        let mut evaluator = PhysicsSceneEvaluator::new(scene).unwrap();
+        let evaluated = evaluator.evaluate(request(1.0, 0)).unwrap();
+
+        assert!(evaluated.physics_events.events.iter().any(|event| matches!(
+            &event.kind,
+            PhysicsEventKind::Trigger {
+                phase: TriggerPhase::Entered,
+                trigger,
+                object,
+            } if trigger.as_str() == "upper_zone" && object.as_str() == "platform"
+        )));
+    }
+
+    #[test]
+    fn fixed_bodies_and_triggers_do_not_emit_sensor_events() {
+        let mut scene = base_scene();
+        scene.physics.as_mut().unwrap().gravity = Vec3::ZERO;
+        scene.spheres[0].center = Vec3::new(20.0, 20.0, 20.0);
+        scene.triggers.push(TriggerDeclaration {
+            id: PhysicsEntityId::new("floor_zone").unwrap(),
+            center: Vec3::new(0.0, -0.1, 0.0),
+            collider: ColliderShape::Cuboid {
+                half_extents: Vec3::new(5.0, 0.2, 5.0),
+            },
+        });
+        scene.triggers.push(TriggerDeclaration {
+            id: PhysicsEntityId::new("overlapping_zone").unwrap(),
+            center: Vec3::new(0.0, -0.1, 0.0),
+            collider: ColliderShape::Sphere { radius: 1.0 },
+        });
+        let mut evaluator = PhysicsSceneEvaluator::new(scene).unwrap();
+        let evaluated = evaluator.evaluate(request(0.25, 0)).unwrap();
+
+        assert!(!evaluated
+            .physics_events
+            .events
+            .iter()
+            .any(|event| matches!(event.kind, PhysicsEventKind::Trigger { .. })));
     }
 
     #[test]
@@ -524,13 +723,27 @@ mod tests {
     #[test]
     fn loop_cycle_resets_world_before_replay() {
         let mut evaluator = PhysicsSceneEvaluator::new(base_scene()).unwrap();
-        let first_cycle = evaluator.evaluate(request(0.5, 0)).unwrap();
+        let first_cycle = evaluator.evaluate(request(1.5, 0)).unwrap();
         evaluator.evaluate(request(2.0, 0)).unwrap();
-        let second_cycle = evaluator.evaluate(request(0.5, 1)).unwrap();
+        let second_cycle = evaluator.evaluate(request(1.5, 1)).unwrap();
         assert_eq!(
             first_cycle.scene.spheres[0].center,
             second_cycle.scene.spheres[0].center
         );
+        assert!(second_cycle.physics_events.reset);
+        assert!(!first_cycle.physics_events.events.is_empty());
+        assert_eq!(
+            first_cycle.physics_events.events.len(),
+            second_cycle.physics_events.events.len()
+        );
+        assert!(first_cycle
+            .physics_events
+            .events
+            .iter()
+            .zip(&second_cycle.physics_events.events)
+            .all(|(first, second)| first.fixed_tick == second.fixed_tick
+                && first.time_seconds == second.time_seconds
+                && first.kind == second.kind));
     }
 
     #[test]
@@ -544,11 +757,51 @@ mod tests {
         assert!(!evaluator.is_time_varying());
         let evaluated = evaluator.evaluate(request(2.0, 4)).unwrap();
         assert_eq!(evaluated.scene.spheres[0].center, authored_center);
+        assert_eq!(evaluated.physics_events, PhysicsEventBatch::default());
+    }
+
+    #[test]
+    fn animation_only_evaluation_returns_an_empty_event_batch() {
+        let mut scene = base_scene();
+        scene.physics = None;
+        scene.rigid_bodies.clear();
+        let mut evaluator = toaster_scene::AnimationEvaluator::new(scene);
+
+        let evaluated = evaluator.evaluate(request(0.5, 0)).unwrap();
+        assert_eq!(evaluated.physics_events, PhysicsEventBatch::default());
     }
 
     struct FakeBackend {
         calls: Rc<RefCell<Vec<PhysicsEvaluationRequest>>>,
         resets: Rc<RefCell<u32>>,
+    }
+
+    struct EventOnlyBackend;
+
+    impl PhysicsBackend for EventOnlyBackend {
+        fn reset(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn evaluate(&mut self, request: PhysicsEvaluationRequest) -> Result<EvaluatedPhysicsState> {
+            Ok(EvaluatedPhysicsState {
+                updates: Vec::new(),
+                changes: SceneChanges::default(),
+                physics_events: PhysicsEventBatch {
+                    reset: false,
+                    events: vec![PhysicsEvent {
+                        loop_cycle: request.loop_cycle,
+                        fixed_tick: request.fixed_tick,
+                        time_seconds: request.scene_time_seconds,
+                        kind: PhysicsEventKind::Trigger {
+                            phase: TriggerPhase::Entered,
+                            trigger: PhysicsEntityId::new("zone").unwrap(),
+                            object: PhysicsEntityId::new("ball").unwrap(),
+                        },
+                    }],
+                },
+            })
+        }
     }
 
     impl PhysicsBackend for FakeBackend {
@@ -570,6 +823,19 @@ mod tests {
                 changes: SceneChanges {
                     spheres: true,
                     ..SceneChanges::default()
+                },
+                physics_events: PhysicsEventBatch {
+                    reset: false,
+                    events: vec![PhysicsEvent {
+                        loop_cycle: request.loop_cycle,
+                        fixed_tick: request.fixed_tick,
+                        time_seconds: request.scene_time_seconds,
+                        kind: PhysicsEventKind::Collision {
+                            phase: CollisionPhase::Started,
+                            object_a: PhysicsEntityId::new("ball").unwrap(),
+                            object_b: PhysicsEntityId::new("floor").unwrap(),
+                        },
+                    }],
                 },
             })
         }
@@ -594,5 +860,17 @@ mod tests {
         assert_eq!(calls.borrow()[0].loop_cycle, 2);
         assert_eq!(calls.borrow()[0].fixed_tick, 30);
         assert_eq!(*resets.borrow(), 2);
+        assert_eq!(evaluated.physics_events.events.len(), 1);
+    }
+
+    #[test]
+    fn event_only_results_do_not_invalidate_renderer_data() {
+        let mut evaluator =
+            PhysicsSceneEvaluator::with_backend(base_scene(), Box::new(EventOnlyBackend)).unwrap();
+        evaluator.evaluate(request(0.0, 0)).unwrap();
+        let evaluated = evaluator.evaluate(request(1.0 / 60.0, 0)).unwrap();
+
+        assert_eq!(evaluated.changes, SceneChanges::default());
+        assert_eq!(evaluated.physics_events.events.len(), 1);
     }
 }
