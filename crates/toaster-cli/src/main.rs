@@ -12,7 +12,7 @@ use std::sync::{
     Arc,
 };
 use std::time::{Duration, Instant};
-use toaster_scene::RenderSettings;
+use toaster_scene::{RenderSettings, SceneEvaluator};
 
 const STREAM_JPEG_QUALITY: u8 = 90;
 
@@ -269,6 +269,8 @@ fn run(command: Command) -> anyhow::Result<()> {
             frames,
         } => {
             let animation = resolve_animation(fps, duration, frames)?;
+            let scene = toaster_scene::load_scene(&scene_path)?;
+            let mut evaluator = toaster_physics::PhysicsSceneEvaluator::new(scene)?;
             match animation.fps() {
                 Some(fps) => tracing::info!(
                     scene = %scene_path.display(),
@@ -285,16 +287,16 @@ fn run(command: Command) -> anyhow::Result<()> {
             match (out, video) {
                 (Some(out), None) => {
                     tracing::info!(output = %out.display(), "selected PNG output");
-                    pollster::block_on(toaster_gpu::render_scene_gpu_animation(
-                        &scene_path,
+                    pollster::block_on(toaster_gpu::render_evaluated_gpu_animation(
+                        &mut evaluator,
                         &out,
                         animation,
                     ))?;
                 }
                 (None, Some(video)) => {
                     tracing::info!(output = %video.display(), "selected MP4 output");
-                    pollster::block_on(toaster_gpu::render_scene_gpu_video(
-                        &scene_path,
+                    pollster::block_on(toaster_gpu::render_evaluated_gpu_video(
+                        &mut evaluator,
                         &video,
                         animation,
                     ))?;
@@ -382,8 +384,9 @@ fn run(command: Command) -> anyhow::Result<()> {
                     "configured adaptive sampling"
                 );
             }
+            let mut evaluator = toaster_physics::PhysicsSceneEvaluator::new(scene)?;
             render_stream_preview(
-                &scene,
+                &mut evaluator,
                 animation,
                 adaptive_sampling,
                 progressive,
@@ -416,7 +419,9 @@ fn run(command: Command) -> anyhow::Result<()> {
                 measured_frames = runs,
                 "starting GPU benchmark"
             );
-            let result = pollster::block_on(toaster_gpu::benchmark_gpu_scene(&scene, config))?;
+            let mut evaluator = toaster_physics::PhysicsSceneEvaluator::new(scene.clone())?;
+            let result =
+                pollster::block_on(toaster_gpu::benchmark_gpu_evaluator(&mut evaluator, config))?;
 
             if let Some(image_path) = image_out.as_deref() {
                 benchmark::save_reference_image(&result, image_path)?;
@@ -433,6 +438,12 @@ fn run(command: Command) -> anyhow::Result<()> {
             tracing::info!(
                 path = %out.display(),
                 setup_ms = report.setup_ms,
+                median_animation_evaluation_ms = report.summary.animation_evaluation_ms.median,
+                median_physics_evaluation_ms = report.summary.physics_evaluation_ms.median,
+                median_geometry_update_ms = report.summary.geometry_update_ms.median,
+                median_light_rebuild_ms = report.summary.light_rebuild_ms.median,
+                median_bvh_rebuild_ms = report.summary.bvh_rebuild_ms.median,
+                median_gpu_upload_ms = report.summary.gpu_upload_ms.median,
                 median_total_ms = report.summary.total_ms.median,
                 p95_total_ms = report.summary.total_ms.p95,
                 image_sha256 = %report.image.rgba_sha256,
@@ -479,7 +490,9 @@ fn run(command: Command) -> anyhow::Result<()> {
         }
         Command::Info => {
             println!("Toaster {}", env!("CARGO_PKG_VERSION"));
-            println!("Modules: core, scene, CPU renderer, GPU renderer, BVH, assets, server");
+            println!(
+                "Modules: core, scene, physics, CPU renderer, GPU renderer, BVH, assets, server"
+            );
         }
     }
     Ok(())
@@ -490,7 +503,7 @@ fn run(command: Command) -> anyhow::Result<()> {
 /// The listener is bound before GPU setup. Both background tasks are always
 /// stopped and awaited (or aborted and joined) before this function returns.
 fn render_stream_preview(
-    scene: &toaster_scene::Scene,
+    evaluator: &mut dyn SceneEvaluator,
     animation: toaster_gpu::AnimationConfig,
     adaptive_sampling: Option<AdaptiveSampling>,
     progressive: Option<ProgressivePreview>,
@@ -537,7 +550,7 @@ fn render_stream_preview(
         let render_result = match progressive {
             Some(progressive) => {
                 toaster_gpu::render_gpu_progressive_with_sink(
-                    scene,
+                    evaluator.source_scene(),
                     animation,
                     toaster_gpu::FramePacing::RealTime,
                     toaster_gpu::ProgressiveRenderConfig::new(progressive.target_samples)?,
@@ -546,8 +559,8 @@ fn render_stream_preview(
                 .await
             }
             None => {
-                toaster_gpu::render_gpu_animation_with_sink(
-                    scene,
+                toaster_gpu::render_evaluated_gpu_animation_with_sink(
+                    evaluator,
                     animation,
                     toaster_gpu::FramePacing::RealTime,
                     &mut sink,
@@ -600,6 +613,10 @@ fn resolve_progressive_preview(
     anyhow::ensure!(
         loop_duration.is_none(),
         "--loop-duration cannot be used with --progressive"
+    );
+    anyhow::ensure!(
+        !scene.physics.is_some_and(|physics| physics.enabled),
+        "--progressive does not support physics-enabled scenes"
     );
     anyhow::ensure!(
         scene.animation.tracks.is_empty(),
@@ -908,6 +925,31 @@ mod tests {
         assert!(
             resolve_progressive_preview(true, None, None, None, None, &animated_scene).is_err()
         );
+
+        let physics_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/011_physics_rigid_bodies.json");
+        let mut physics_scene = toaster_scene::load_scene(physics_path).unwrap();
+        let error =
+            resolve_progressive_preview(true, None, None, None, None, &physics_scene).unwrap_err();
+        assert!(error.to_string().contains("physics-enabled"));
+
+        let kinematic_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/012_physics_kinematic_platform.json");
+        let kinematic_scene = toaster_scene::load_scene(kinematic_path).unwrap();
+        let error = resolve_progressive_preview(true, None, None, None, None, &kinematic_scene)
+            .unwrap_err();
+        assert!(error.to_string().contains("physics-enabled"));
+
+        let event_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/013_physics_events_triggers.json");
+        let event_scene = toaster_scene::load_scene(event_path).unwrap();
+        let error =
+            resolve_progressive_preview(true, None, None, None, None, &event_scene).unwrap_err();
+        assert!(error.to_string().contains("physics-enabled"));
+
+        physics_scene.animation.tracks.clear();
+        physics_scene.physics.as_mut().unwrap().enabled = false;
+        assert!(resolve_progressive_preview(true, None, None, None, None, &physics_scene).is_ok());
     }
 
     #[test]

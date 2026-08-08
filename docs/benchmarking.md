@@ -13,8 +13,11 @@ cargo run --release -p toaster-cli -- benchmark scenes/004_mesh.json \
 Setup is timed once. Warmups are discarded, and measured frames reuse the
 device, pipeline, and buffers. The JSON report records the adapter and driver,
 resolved workload, every frame, summary statistics for each stage, and a SHA-256
-hash of the final RGBA output. Image and report writes are outside the measured
-frame time.
+hash of the final RGBA output. The report separates animation evaluation,
+physics evaluation, neutral geometry updates, light-list rebuild, BVH rebuild,
+GPU upload, dispatch/wait, readback, conversion, output delivery, and total
+frame time. The final `--image-out` and JSON report writes occur after frame
+measurement.
 
 Compare a candidate with `--compare out/baseline.json`. Add
 `--max-regression-percent 10` when a script should fail on a median total-frame
@@ -53,3 +56,23 @@ Logs go to stderr. Use global `--log-level debug` for stage timings or
 crate when those flags are omitted. On Slurm, use the same allocation type and
 software environment, avoid a shared or throttled GPU, and retain the raw JSON
 reports with the command and commit being measured.
+
+For moving-physics diagnostics, render a short sequence with debug logs. Unlike
+the static benchmark command, this advances fixed physics ticks and therefore
+shows the MVP's per-frame BVH rebuild cost:
+
+```sh
+mkdir -p out
+
+cargo run --release -p toaster-cli -- --log-level debug --log-format json \
+  gpu-render scenes/011_physics_rigid_bodies.json \
+  --out out/physics_diagnostic.png --fps 24 --frames 24 \
+  2>out/physics_diagnostic.jsonl
+```
+
+Each `completed GPU frame` record contains
+`animation_evaluation_ms`, `physics_evaluation_ms`, `geometry_update_ms`,
+`light_rebuild_ms`, `bvh_rebuild_ms`, `gpu_upload_ms`, `dispatch_wait_ms`,
+`readback_ms`, `conversion_ms`, `output_ms`, and `total_ms`. Real-time preview
+uses sequential frame indices even when rendering misses its requested deadline;
+it lowers effective output FPS rather than skipping simulation states.

@@ -91,6 +91,24 @@ pub struct BenchmarkConfiguration {
 /// Millisecond timings for one measured frame.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct FrameTimingReport {
+    /// Base-scene cloning and animation evaluation duration.
+    #[serde(default)]
+    pub animation_evaluation_ms: f64,
+    /// Physics backend reset/replay/step duration.
+    #[serde(default)]
+    pub physics_evaluation_ms: f64,
+    /// Neutral physics-update application duration.
+    #[serde(default)]
+    pub geometry_update_ms: f64,
+    /// Direct-light-list rebuild duration.
+    #[serde(default)]
+    pub light_rebuild_ms: f64,
+    /// Mixed-BVH rebuild and flatten duration.
+    #[serde(default)]
+    pub bvh_rebuild_ms: f64,
+    /// Mutable GPU buffer write duration.
+    #[serde(default)]
+    pub gpu_upload_ms: f64,
     /// Scene evaluation and upload duration.
     pub scene_update_upload_ms: f64,
     /// Dispatch and synchronous wait duration.
@@ -99,13 +117,34 @@ pub struct FrameTimingReport {
     pub readback_ms: f64,
     /// Floating-point-to-RGBA conversion duration.
     pub conversion_ms: f64,
-    /// Total duration through conversion.
+    /// Output-sink delivery duration.
+    #[serde(default)]
+    pub output_ms: f64,
+    /// Total duration through output delivery.
     pub total_ms: f64,
 }
 
 /// Statistical summaries for each measured stage.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct TimingSummary {
+    /// Animation/evaluation statistics.
+    #[serde(default)]
+    pub animation_evaluation_ms: TimingStatistics,
+    /// Physics evaluation statistics.
+    #[serde(default)]
+    pub physics_evaluation_ms: TimingStatistics,
+    /// Neutral geometry-update statistics.
+    #[serde(default)]
+    pub geometry_update_ms: TimingStatistics,
+    /// Light-list rebuild statistics.
+    #[serde(default)]
+    pub light_rebuild_ms: TimingStatistics,
+    /// BVH rebuild statistics.
+    #[serde(default)]
+    pub bvh_rebuild_ms: TimingStatistics,
+    /// GPU upload statistics.
+    #[serde(default)]
+    pub gpu_upload_ms: TimingStatistics,
     /// Scene update/upload statistics.
     pub scene_update_upload_ms: TimingStatistics,
     /// Dispatch/wait statistics.
@@ -114,12 +153,15 @@ pub struct TimingSummary {
     pub readback_ms: TimingStatistics,
     /// Conversion statistics.
     pub conversion_ms: TimingStatistics,
+    /// Output delivery statistics.
+    #[serde(default)]
+    pub output_ms: TimingStatistics,
     /// Total-frame statistics.
     pub total_ms: TimingStatistics,
 }
 
 /// Five-number-style timing summary plus arithmetic mean.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct TimingStatistics {
     /// Smallest sample.
     pub min: f64,
@@ -337,10 +379,17 @@ impl From<GpuFrameTimings> for FrameTimingReport {
     /// Converts duration fields to milliseconds.
     fn from(timings: GpuFrameTimings) -> Self {
         Self {
+            animation_evaluation_ms: milliseconds(timings.animation_evaluation),
+            physics_evaluation_ms: milliseconds(timings.physics_evaluation),
+            geometry_update_ms: milliseconds(timings.geometry_update),
+            light_rebuild_ms: milliseconds(timings.light_rebuild),
+            bvh_rebuild_ms: milliseconds(timings.bvh_rebuild),
+            gpu_upload_ms: milliseconds(timings.gpu_upload),
             scene_update_upload_ms: milliseconds(timings.scene_update_upload),
             dispatch_wait_ms: milliseconds(timings.dispatch_wait),
             readback_ms: milliseconds(timings.readback),
             conversion_ms: milliseconds(timings.conversion),
+            output_ms: milliseconds(timings.output),
             total_ms: milliseconds(timings.total),
         }
     }
@@ -350,12 +399,23 @@ impl TimingSummary {
     /// Summarizes every timing stage across a nonempty frame slice.
     fn from_frames(frames: &[FrameTimingReport]) -> Result<Self> {
         Ok(Self {
+            animation_evaluation_ms: statistics(
+                frames.iter().map(|frame| frame.animation_evaluation_ms),
+            )?,
+            physics_evaluation_ms: statistics(
+                frames.iter().map(|frame| frame.physics_evaluation_ms),
+            )?,
+            geometry_update_ms: statistics(frames.iter().map(|frame| frame.geometry_update_ms))?,
+            light_rebuild_ms: statistics(frames.iter().map(|frame| frame.light_rebuild_ms))?,
+            bvh_rebuild_ms: statistics(frames.iter().map(|frame| frame.bvh_rebuild_ms))?,
+            gpu_upload_ms: statistics(frames.iter().map(|frame| frame.gpu_upload_ms))?,
             scene_update_upload_ms: statistics(
                 frames.iter().map(|frame| frame.scene_update_upload_ms),
             )?,
             dispatch_wait_ms: statistics(frames.iter().map(|frame| frame.dispatch_wait_ms))?,
             readback_ms: statistics(frames.iter().map(|frame| frame.readback_ms))?,
             conversion_ms: statistics(frames.iter().map(|frame| frame.conversion_ms))?,
+            output_ms: statistics(frames.iter().map(|frame| frame.output_ms))?,
             total_ms: statistics(frames.iter().map(|frame| frame.total_ms))?,
         })
     }
@@ -505,10 +565,17 @@ mod tests {
             setup_ms: total_median,
             frames: vec![],
             summary: TimingSummary {
+                animation_evaluation_ms: stats,
+                physics_evaluation_ms: stats,
+                geometry_update_ms: stats,
+                light_rebuild_ms: stats,
+                bvh_rebuild_ms: stats,
+                gpu_upload_ms: stats,
                 scene_update_upload_ms: stats,
                 dispatch_wait_ms: stats,
                 readback_ms: stats,
                 conversion_ms: stats,
+                output_ms: stats,
                 total_ms: stats,
             },
             image: ImageReport {
@@ -547,6 +614,17 @@ mod tests {
         assert_eq!(actual.schema_version, BENCHMARK_SCHEMA_VERSION);
         assert_eq!(actual.summary.total_ms.median, 10.0);
         assert_eq!(actual.gpu.name, "GPU");
+    }
+
+    #[test]
+    fn legacy_reports_default_new_diagnostic_fields() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/benchmarks/post-bvh/rtx-2080-ti/001_triangles_128.json");
+        let report = read_report(&path).unwrap();
+
+        assert_eq!(report.schema_version, BENCHMARK_SCHEMA_VERSION);
+        assert_eq!(report.frames[0].physics_evaluation_ms, 0.0);
+        assert_eq!(report.summary.bvh_rebuild_ms, TimingStatistics::default());
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
+use toaster_scene::EvaluationRequest;
 
 #[derive(Debug, Clone, Copy)]
 /// A validated finite or indefinite render schedule.
@@ -89,9 +90,26 @@ impl AnimationConfig {
 
     /// Maps an index to animation seconds and applies optional loop wrapping.
     pub fn time_for_frame(&self, frame: u32) -> f32 {
-        let time = self.fps.map_or(0.0, |fps| frame as f32 / fps as f32);
-        self.loop_duration_seconds
-            .map_or(time, |duration| time % duration)
+        self.evaluation_request(frame).time_seconds
+    }
+
+    /// Maps an index to wrapped scene time and an explicit loop cycle.
+    pub fn evaluation_request(&self, frame: u32) -> EvaluationRequest {
+        let absolute_time = self.fps.map_or(0.0_f64, |fps| frame as f64 / fps as f64);
+        match self.loop_duration_seconds {
+            Some(duration) => {
+                let duration = duration as f64;
+                let loop_cycle = (absolute_time / duration).floor();
+                EvaluationRequest {
+                    time_seconds: (absolute_time - loop_cycle * duration) as f32,
+                    loop_cycle: loop_cycle as u64,
+                }
+            }
+            None => EvaluationRequest {
+                time_seconds: absolute_time as f32,
+                loop_cycle: 0,
+            },
+        }
     }
 
     /// Returns the schedule FPS, absent for [`Self::single_frame`].
@@ -177,6 +195,7 @@ mod tests {
 
         assert_eq!(animation.time_for_frame(7), 1.75);
         assert_eq!(animation.time_for_frame(8), 0.0);
+        assert_eq!(animation.evaluation_request(8).loop_cycle, 1);
         assert_eq!(animation.time_for_frame(10), 0.5);
         assert_eq!(animation.frame_limit(), None);
         assert_eq!(animation.loop_duration(), Some(2.0));

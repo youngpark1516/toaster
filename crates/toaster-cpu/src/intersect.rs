@@ -414,6 +414,9 @@ mod tests {
             textures: Vec::new(),
             environment: None,
             animation: Default::default(),
+            physics: None,
+            rigid_bodies: Vec::new(),
+            triggers: Vec::new(),
         };
         let bvh = SceneBvh::build(&scene);
         assert_eq!(
@@ -511,6 +514,9 @@ mod tests {
             textures: Vec::new(),
             environment: None,
             animation: Default::default(),
+            physics: None,
+            rigid_bodies: Vec::new(),
+            triggers: Vec::new(),
         };
         let bvh = SceneBvh::build(&scene);
         let rays = [
@@ -536,6 +542,60 @@ mod tests {
                     panic!("linear hit {linear:?} did not match bvh hit {accelerated:?}");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn cpu_bvh_accepts_neutrally_evaluated_physics_geometry() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/011_physics_rigid_bodies.json");
+        let source = toaster_scene::load_scene(path).unwrap();
+        let sphere_binding = source
+            .rigid_bodies
+            .iter()
+            .find(|body| body.group.as_deref() == Some("ball_0"))
+            .unwrap()
+            .binding
+            .clone();
+        let box_binding = source
+            .rigid_bodies
+            .iter()
+            .find(|body| body.group.as_deref() == Some("crate_0"))
+            .unwrap()
+            .binding
+            .clone();
+        let mut evaluated = source.clone();
+        toaster_scene::apply_rigid_transform(
+            &source,
+            &mut evaluated,
+            &sphere_binding,
+            toaster_scene::RigidTransform {
+                translation: Vec3::new(0.0, 1.0, -2.0),
+                rotation: glam::Quat::IDENTITY,
+            },
+        )
+        .unwrap();
+        toaster_scene::apply_rigid_transform(
+            &source,
+            &mut evaluated,
+            &box_binding,
+            toaster_scene::RigidTransform {
+                translation: Vec3::new(1.5, 1.0, -3.0),
+                rotation: glam::Quat::from_rotation_y(0.6),
+            },
+        )
+        .unwrap();
+        let bvh = SceneBvh::build(&evaluated);
+
+        for target in [Vec3::new(0.0, 1.0, -2.0), Vec3::new(1.5, 1.0, -3.0)] {
+            let ray = Ray::new(
+                evaluated.camera.position,
+                (target - evaluated.camera.position).normalize(),
+            );
+            let linear = intersect_scene_linear(&ray, &evaluated, 0.001).unwrap();
+            let accelerated = intersect_scene(&ray, &evaluated, &bvh, 0.001).unwrap();
+            assert!((linear.distance - accelerated.distance).abs() < 1.0e-5);
+            assert_eq!(linear.material_index, accelerated.material_index);
         }
     }
 

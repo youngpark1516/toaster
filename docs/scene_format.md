@@ -8,13 +8,18 @@ Toaster scenes are UTF-8 JSON files loaded by `toaster_scene::load_scene`. All v
 {
   "camera": { "position": [0, 1, 4], "look_at": [0, 0, 0], "fov_degrees": 45 },
   "render": { "width": 640, "height": 360, "samples": 16, "max_bounces": 8 },
+  "physics": { "enabled": true, "type": "rigid_body" },
   "materials": [],
   "objects": [],
+  "triggers": [],
   "animation": { "tracks": [] }
 }
 ```
 
-`camera`, `render`, `materials`, and `objects` are required. `animation` defaults to an empty track list. Unknown fields are currently ignored by Serde; do not rely on that for forward compatibility.
+`camera`, `render`, `materials`, and `objects` are required. `physics` is
+optional; `triggers` and animation tracks default to empty arrays. Unknown
+fields are currently ignored by some general scene structures;
+physics-specific structures and trigger declarations reject them.
 
 ## Camera
 
@@ -64,6 +69,37 @@ An HDR environment is the detailed tagged form:
 
 `path` is required. `intensity` defaults to `1.0` and must be finite and nonnegative. `rotation_degrees` defaults to `0.0` and must be finite. Environment pixels are loaded as linear RGB, and Toaster builds a luminance-times-sine importance distribution for direct lighting. The environment is both visible on misses and sampled as illumination.
 
+## Physics
+
+The optional top-level block configures renderer-neutral scene evaluation:
+
+```json
+"physics": {
+  "enabled": true,
+  "type": "rigid_body",
+  "gravity": [0.0, -9.81, 0.0],
+  "timestep": 0.016666666666666666,
+  "substeps": 1
+}
+```
+
+| Field | Type | Default | Rules |
+| --- | --- | --- | --- |
+| `enabled` | boolean | `true` | disabled declarations are validated but not evaluated |
+| `type` | string | required | MVP accepts only `rigid_body` |
+| `gravity` | `[x,y,z]` | `[0,-9.81,0]` | finite, in meters per second squared |
+| `timestep` | number | `1/60` | finite and positive, in seconds |
+| `substeps` | integer | `1` | from 1 through 64 |
+
+Object physics declarations require this top-level block. Rapier is the private
+rigid-body implementation in `toaster-physics`; neither the scene format nor
+renderer APIs expose Rapier types.
+
+When `enabled` is `false`, all declarations are still parsed and validated, but
+no backend is constructed and they impose no animation ownership restrictions.
+The scene otherwise behaves like an ordinary scene, including under existing
+progressive-preview eligibility rules.
+
 ## Materials
 
 Materials have a unique `name` used by object references and a tagged `type`.
@@ -104,12 +140,18 @@ Materials have a unique `name` used by object references and a tagged `type`.
 
 ## Objects
 
-Every object is tagged by `type`. Optional `group` values assign primitives to animation targets; an explicit group must be nonempty.
+Every object is tagged by `type`. Optional `group` values assign primitives to
+animation targets; an explicit group must be nonempty. An optional object-level
+`id` is a stable identity distinct from `group`. Every sphere or box with a
+physics declaration requires a nonempty `id`; IDs must be unique across all
+declared object IDs and triggers. Nonphysics objects may carry IDs but do not
+participate in physics events in this version.
 
 ### Sphere
 
 ```json
 {
+  "id": "hero",
   "type": "sphere",
   "center": [0, 0, 0],
   "radius": 1,
@@ -119,6 +161,86 @@ Every object is tagged by `type`. Optional `group` values assign primitives to a
 ```
 
 The center must be finite, radius finite and positive, and material name known.
+
+### Box
+
+```json
+{
+  "id": "crate",
+  "type": "box",
+  "center": [0, 1, 0],
+  "size": [1, 2, 1],
+  "material": "matte",
+  "group": "crate"
+}
+```
+
+Centers and sizes must be finite, and every size component must be positive.
+Boxes begin axis-aligned and are expanded deterministically into twelve ordinary
+triangles. The generated triangles keep the box material and group.
+
+### Rigid-body object declaration
+
+Spheres and boxes may contain:
+
+```json
+"physics": {
+  "body": "dynamic",
+  "collider": "cuboid",
+  "mass": 2.0,
+  "friction": 0.7,
+  "restitution": 0.15,
+  "initial_velocity": [0.0, 0.0, 0.0],
+  "initial_angular_velocity": [0.5, 1.0, 0.25]
+}
+```
+
+- `body` is required and is `static`, `dynamic`, or `kinematic`.
+- `collider` is optional and inferred. If supplied, spheres require `sphere` and
+  boxes require `cuboid`.
+- Dynamic `mass` defaults to `1.0` and must be finite and positive. Static and
+  kinematic bodies reject mass and both velocity fields.
+- `friction` defaults to `0.5` and must be finite and nonnegative.
+- `restitution` defaults to `0.0` and must be finite and between zero and one.
+- Initial linear velocity is in meters per second and angular velocity in
+  radians per second; all components must be finite.
+
+Triangles and glTF meshes reject physics metadata. All three body kinds support
+analytic sphere colliders and boxes support cuboids with half extents `size / 2`.
+Kinematic bodies require a nonempty group. With physics enabled, that group must
+be exclusive to one logical object and targeted by at least one animation track.
+Their rendered triangle range is reconstructed from immutable base vertices at
+the animation-driven Rapier pose.
+
+### Trigger zones
+
+The optional top-level `triggers` array declares invisible fixed sensors:
+
+```json
+"triggers": [
+  {
+    "id": "reset_box",
+    "shape": "box",
+    "center": [0.0, 0.5, -3.0],
+    "size": [3.0, 1.0, 2.0]
+  },
+  {
+    "id": "goal_sphere",
+    "shape": "sphere",
+    "center": [2.0, 1.0, -4.0],
+    "radius": 1.25
+  }
+]
+```
+
+Triggers require a top-level physics block. Centers must be finite, sphere
+radii finite and positive, and every box size component finite and positive.
+Trigger IDs share the object-ID namespace. Triggers have no material, render
+binding, mass, friction, restitution, group, or animation. They detect dynamic
+and kinematic bodies, but ignore static bodies and other triggers. Sensors do
+not affect contact response and never contribute primitives, BVH data, or
+lights. When physics is disabled, trigger declarations are still validated but
+no sensors or events are created.
 
 ### Triangle
 
@@ -213,7 +335,47 @@ Group targets must name at least one loaded sphere or triangle. Imported mesh tr
 
 Evaluation always starts from the immutable base scene. All translation tracks are applied first (so their offsets compose), then rotation tracks in declaration order. Values clamp to the first/last keyframe outside their range. A camera translation moves both `position` and `look_at`; camera rotation orbits both about the pivot and rotates `up`. Group transforms update sphere centers and triangle positions; triangle normals rotate but translations do not affect them.
 
-CLI animation time is `frame_index / fps`. `--loop-duration` wraps that time while indices continue increasing. Static progressive preview rejects every scene containing animation tracks so samples from different poses cannot mix.
+CLI animation time is `frame_index / fps`. For enabled physics, scene time is
+wrapped by `--loop-duration` and converted to the latest completed fixed tick;
+each nominal tick performs `substeps` steps of `timestep / substeps`. Before
+every substep, kinematic tracks are sampled at that substep's endpoint and the
+absolute target pose is sent to Rapier. This lets Rapier infer the velocity used
+to affect dynamic contacts. There are no remainder steps or render-pose
+interpolation. Dynamic and static frame-zero poses are authored; a kinematic
+frame-zero pose is its animation sample at time zero. A loop wrap resets the
+world before replaying from tick zero, while render RNG frame indices continue
+increasing.
+
+When physics is enabled, animation tracks cannot target a static or dynamic
+physics group. Each kinematic body requires its own exclusive group and at least
+one matching animation track; multiple translation and rotation tracks may
+compose for that object. Camera animation and unrelated object animation remain
+allowed. Dynamic bodies are controlled only by physics, static bodies stay
+fixed, and kinematic bodies follow animation while participating as moving
+colliders. When physics is disabled, required-track, exclusivity, and ownership
+checks are skipped and normal animation behavior applies, although declaration
+fields remain validated.
+
+### Physics events
+
+Each evaluated frame carries an ordered renderer-neutral physics event batch.
+Physical body pairs emit `Started`, one `Stayed` event for each subsequent
+nominal fixed tick during which the contact remains active, and `Exited`.
+Triggers emit `Entered` and `Exited` only. Collision IDs are sorted
+lexicographically so a public pair has one stable ordering. Events contain the
+loop cycle, completed fixed tick, wrapped scene-local time, phase, and stable
+entity IDs; contact points, normals, forces, and impulses are not exposed.
+
+An evaluation that advances several ticks returns every crossed-tick event.
+Evaluating the same tick again does not duplicate events. Loop changes,
+backward seeks, and random access reset and replay the world and active-pair
+state. Such a batch has `reset: true`; consumers clear prior event-driven state
+before applying it. Reset does not synthesize exits for the discarded world.
+Animation-only and disabled-physics evaluation return an empty batch.
+
+Static progressive preview rejects every scene containing animation tracks and
+every scene with enabled physics, including static-only physics scenes. Normal
+MJPEG stream preview supports physics.
 
 ## Complete representative scene
 

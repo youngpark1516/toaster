@@ -44,19 +44,19 @@ impl LogLevel {
     pub fn directive(self) -> &'static str {
         match self {
             Self::Error => {
-                "off,toaster=error,toaster_cpu=error,toaster_gpu=error,toaster_server=error"
+                "off,toaster=error,toaster_cpu=error,toaster_gpu=error,toaster_physics=error,toaster_server=error"
             }
             Self::Warn => {
-                "off,toaster=warn,toaster_cpu=warn,toaster_gpu=warn,toaster_server=warn"
+                "off,toaster=warn,toaster_cpu=warn,toaster_gpu=warn,toaster_physics=warn,toaster_server=warn"
             }
             Self::Info => {
-                "off,toaster=info,toaster_cpu=info,toaster_gpu=info,toaster_server=info"
+                "off,toaster=info,toaster_cpu=info,toaster_gpu=info,toaster_physics=info,toaster_server=info"
             }
             Self::Debug => {
-                "off,toaster=debug,toaster_cpu=debug,toaster_gpu=debug,toaster_server=debug,tower_http=debug"
+                "off,toaster=debug,toaster_cpu=debug,toaster_gpu=debug,toaster_physics=debug,toaster_server=debug,tower_http=debug"
             }
             Self::Trace => {
-                "off,toaster=trace,toaster_cpu=trace,toaster_gpu=trace,toaster_server=trace,tower_http=trace"
+                "off,toaster=trace,toaster_cpu=trace,toaster_gpu=trace,toaster_physics=trace,toaster_server=trace,tower_http=trace"
             }
         }
     }
@@ -710,6 +710,19 @@ mod tests {
             ],
         ] {
             assert!(Cli::try_parse_from(args).is_err());
+        }
+    }
+
+    #[test]
+    fn logging_levels_include_renderer_neutral_physics_events() {
+        for level in [
+            LogLevel::Error,
+            LogLevel::Warn,
+            LogLevel::Info,
+            LogLevel::Debug,
+            LogLevel::Trace,
+        ] {
+            assert!(level.directive().contains("toaster_physics="));
         }
     }
 }

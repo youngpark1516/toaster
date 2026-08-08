@@ -15,7 +15,7 @@ pub fn init(level: Option<LogLevel>, format: LogFormat) -> Result<()> {
         None => match std::env::var("RUST_LOG") {
             Ok(directive) => EnvFilter::try_new(directive).context("invalid RUST_LOG filter")?,
             Err(std::env::VarError::NotPresent) => EnvFilter::try_new(
-                "off,toaster=info,toaster_cpu=info,toaster_gpu=info,toaster_server=info",
+                "off,toaster=info,toaster_cpu=info,toaster_gpu=info,toaster_physics=info,toaster_server=info",
             )?,
             Err(error) => return Err(error).context("RUST_LOG is not valid Unicode"),
         },
