@@ -5,7 +5,7 @@ pub mod routes;
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
@@ -72,6 +72,10 @@ pub struct PreviewStatus {
     pub adaptive_sampling: bool,
     /// Human-readable reason for the last adaptive decision.
     pub sample_adjustment: String,
+    /// Event counts reconstructed within the current physics loop.
+    pub loop_counters: BTreeMap<String, u64>,
+    /// Unique event counts observed during this evaluator session.
+    pub session_counters: BTreeMap<String, u64>,
 }
 
 #[derive(Clone)]

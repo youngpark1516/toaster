@@ -3,10 +3,14 @@
 mod rapier_backend;
 
 use anyhow::{bail, Context, Result};
-use std::time::Instant;
+use std::{
+    collections::{BTreeMap, HashMap},
+    time::Instant,
+};
 use toaster_scene::{
-    animation_changes, apply_rigid_transform, EvaluatedScene, EvaluationRequest, ObjectBinding,
-    PhysicsEventBatch, RigidTransform, Scene, SceneChanges, SceneEvaluationTimings, SceneEvaluator,
+    animation_changes, apply_rigid_transform, EvaluatedScene, EvaluationRequest,
+    NamedCounterSnapshot, ObjectBinding, PhysicsEntityId, PhysicsEventBatch, RigidTransform, Scene,
+    SceneChanges, SceneEvaluationTimings, SceneEvaluator,
 };
 
 pub use rapier_backend::RapierRigidBodyBackend;
@@ -60,17 +64,203 @@ pub struct PhysicsSceneEvaluator {
     backend: Option<Box<dyn PhysicsBackend>>,
     evaluated_once: bool,
     last_physics_request: Option<PhysicsEvaluationRequest>,
+    reactions: EventReactionState,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ActiveFlash {
+    material_index: usize,
+    expires_at_seconds: f64,
+}
+
+#[derive(Default)]
+struct EventReactionState {
+    loop_counts: BTreeMap<String, u64>,
+    session_counts: BTreeMap<String, u64>,
+    highest_tick_by_loop: HashMap<u64, u64>,
+    active_flashes: HashMap<PhysicsEntityId, ActiveFlash>,
+    output_materials: HashMap<PhysicsEntityId, usize>,
+}
+
+impl EventReactionState {
+    fn new(source: &Scene) -> Result<Self> {
+        let mut state = Self::default();
+        for reaction in &source.event_reactions {
+            if let Some(counter) = &reaction.counter {
+                state.loop_counts.entry(counter.clone()).or_insert(0);
+                state.session_counts.entry(counter.clone()).or_insert(0);
+            }
+            if let Some(flash) = &reaction.flash {
+                let body = source
+                    .rigid_bodies
+                    .iter()
+                    .find(|body| body.id == flash.target)
+                    .context("material flash target has no rigid-body declaration")?;
+                state.output_materials.insert(
+                    flash.target.clone(),
+                    binding_material_index(source, &body.binding)?,
+                );
+            }
+        }
+        Ok(state)
+    }
+
+    fn evaluate(
+        &mut self,
+        source: &Scene,
+        scene: &mut Scene,
+        request: PhysicsEvaluationRequest,
+        events: &PhysicsEventBatch,
+    ) -> Result<SceneChanges> {
+        if events.reset {
+            self.active_flashes.clear();
+            self.loop_counts.values_mut().for_each(|count| *count = 0);
+        }
+
+        let previous_highest_tick = self
+            .highest_tick_by_loop
+            .get(&request.loop_cycle)
+            .copied()
+            .unwrap_or(0);
+        for event in &events.events {
+            let new_session_tick = event.fixed_tick > previous_highest_tick;
+            for reaction in &source.event_reactions {
+                if !reaction.event_matcher.matches(&event.kind) {
+                    continue;
+                }
+                if let Some(counter) = &reaction.counter {
+                    increment_counter(&mut self.loop_counts, counter)?;
+                    if new_session_tick {
+                        increment_counter(&mut self.session_counts, counter)?;
+                    }
+                }
+                if let Some(flash) = &reaction.flash {
+                    self.active_flashes.insert(
+                        flash.target.clone(),
+                        ActiveFlash {
+                            material_index: flash.material_index,
+                            expires_at_seconds: f64::from(event.time_seconds)
+                                + f64::from(flash.duration_seconds),
+                        },
+                    );
+                }
+            }
+        }
+        self.highest_tick_by_loop
+            .entry(request.loop_cycle)
+            .and_modify(|tick| *tick = (*tick).max(request.fixed_tick))
+            .or_insert(request.fixed_tick);
+
+        let scene_time = f64::from(request.scene_time_seconds);
+        self.active_flashes
+            .retain(|_, flash| scene_time < flash.expires_at_seconds);
+
+        let mut changes = SceneChanges::default();
+        for (target, previous_material) in &mut self.output_materials {
+            let body = source
+                .rigid_bodies
+                .iter()
+                .find(|body| body.id == *target)
+                .context("material flash target has no rigid-body declaration")?;
+            let authored_material = binding_material_index(source, &body.binding)?;
+            let desired_material = self
+                .active_flashes
+                .get(target)
+                .map_or(authored_material, |flash| flash.material_index);
+            apply_binding_material(scene, &body.binding, desired_material)?;
+            if *previous_material != desired_material {
+                match body.binding {
+                    ObjectBinding::Sphere { .. } => changes.spheres = true,
+                    ObjectBinding::Triangles { .. } => changes.triangles = true,
+                }
+                *previous_material = desired_material;
+            }
+        }
+        Ok(changes)
+    }
+
+    fn snapshot(&self) -> NamedCounterSnapshot {
+        NamedCounterSnapshot {
+            loop_counts: self.loop_counts.clone(),
+            session_counts: self.session_counts.clone(),
+        }
+    }
+}
+
+fn increment_counter(counters: &mut BTreeMap<String, u64>, name: &str) -> Result<()> {
+    let counter = counters
+        .get_mut(name)
+        .context("event reaction counter was not initialized")?;
+    *counter = counter
+        .checked_add(1)
+        .context("event reaction counter overflowed")?;
+    Ok(())
+}
+
+fn binding_material_index(scene: &Scene, binding: &ObjectBinding) -> Result<usize> {
+    match *binding {
+        ObjectBinding::Sphere { index } => scene
+            .spheres
+            .get(index)
+            .map(|sphere| sphere.material_index)
+            .context("material flash sphere binding is out of range"),
+        ObjectBinding::Triangles { start, count, .. } => {
+            let triangles = scene
+                .triangles
+                .get(start..start.saturating_add(count))
+                .context("material flash triangle binding is out of range")?;
+            let material = triangles
+                .first()
+                .context("material flash triangle binding is empty")?
+                .material_index;
+            if triangles
+                .iter()
+                .any(|triangle| triangle.material_index != material)
+            {
+                bail!("material flash binding does not have one authored material");
+            }
+            Ok(material)
+        }
+    }
+}
+
+fn apply_binding_material(
+    scene: &mut Scene,
+    binding: &ObjectBinding,
+    material_index: usize,
+) -> Result<()> {
+    match *binding {
+        ObjectBinding::Sphere { index } => {
+            scene
+                .spheres
+                .get_mut(index)
+                .context("material flash sphere binding is out of range")?
+                .material_index = material_index;
+        }
+        ObjectBinding::Triangles { start, count, .. } => {
+            let triangles = scene
+                .triangles
+                .get_mut(start..start.saturating_add(count))
+                .context("material flash triangle binding is out of range")?;
+            for triangle in triangles {
+                triangle.material_index = material_index;
+            }
+        }
+    }
+    Ok(())
 }
 
 impl PhysicsSceneEvaluator {
     /// Builds the default backend selected by the scene's simulation domain.
     pub fn new(source: Scene) -> Result<Self> {
         let backend = create_backend(&source)?;
+        let reactions = EventReactionState::new(&source)?;
         Ok(Self {
             source,
             backend,
             evaluated_once: false,
             last_physics_request: None,
+            reactions,
         })
     }
 
@@ -79,11 +269,13 @@ impl PhysicsSceneEvaluator {
         if !source.physics.is_some_and(|settings| settings.enabled) {
             bail!("a custom physics backend requires physics.enabled to be true");
         }
+        let reactions = EventReactionState::new(&source)?;
         Ok(Self {
             source,
             backend: Some(backend),
             evaluated_once: false,
             last_physics_request: None,
+            reactions,
         })
     }
 
@@ -148,6 +340,7 @@ impl SceneEvaluator for PhysicsSceneEvaluator {
             let reset = self.last_physics_request.is_some_and(|previous| {
                 previous.loop_cycle != backend_request.loop_cycle
                     || backend_request.fixed_tick < previous.fixed_tick
+                    || backend_request.scene_time_seconds < previous.scene_time_seconds
             });
             if reset {
                 backend.reset()?;
@@ -172,7 +365,6 @@ impl SceneEvaluator for PhysicsSceneEvaluator {
                     "physics event"
                 );
             }
-            physics_events = state.physics_events;
             let geometry_start = Instant::now();
             for update in state.updates {
                 match update {
@@ -181,8 +373,15 @@ impl SceneEvaluator for PhysicsSceneEvaluator {
                     }
                 }
             }
+            let reaction_changes = self.reactions.evaluate(
+                &self.source,
+                &mut scene,
+                backend_request,
+                &state.physics_events,
+            )?;
             geometry_update = geometry_start.elapsed();
-            changes = changes.union(state.changes);
+            changes = changes.union(state.changes).union(reaction_changes);
+            physics_events = state.physics_events;
         }
         if !self.evaluated_once {
             changes = SceneChanges::all();
@@ -197,6 +396,7 @@ impl SceneEvaluator for PhysicsSceneEvaluator {
                 geometry_update,
             },
             physics_events,
+            counters: self.reactions.snapshot(),
         })
     }
 }
@@ -208,9 +408,11 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
     use toaster_scene::{
         Animation, AnimationTarget, AnimationTrack, Background, CameraSettings, ColliderShape,
-        CollisionPhase, Interpolation, Material, PhysicsEntityId, PhysicsEvent, PhysicsEventKind,
-        PhysicsSettings, PhysicsType, RenderSettings, RigidBodyDeclaration, RigidBodyKind, Sphere,
-        TranslationKeyframe, Triangle, TriangleAttributes, TriggerDeclaration, TriggerPhase,
+        CollisionPhase, EventReactionDeclaration, Interpolation, Material,
+        MaterialFlashDeclaration, PhysicsEntityId, PhysicsEvent, PhysicsEventKind,
+        PhysicsEventMatcher, PhysicsSettings, PhysicsType, RenderSettings, RigidBodyDeclaration,
+        RigidBodyKind, Sphere, TranslationKeyframe, Triangle, TriangleAttributes,
+        TriggerDeclaration, TriggerPhase,
     };
 
     fn base_scene() -> Scene {
@@ -290,6 +492,7 @@ mod tests {
                 },
             ],
             triggers: Vec::new(),
+            event_reactions: Vec::new(),
         }
     }
 
@@ -344,6 +547,40 @@ mod tests {
         scene
     }
 
+    fn reaction_scene() -> Scene {
+        let mut scene = base_scene();
+        scene.materials.push(Material::Diffuse {
+            albedo: Vec3::new(1.0, 1.0, 0.0),
+        });
+        scene.event_reactions = vec![EventReactionDeclaration {
+            event_matcher: PhysicsEventMatcher::Collision {
+                phase: CollisionPhase::Started,
+                object: Some(PhysicsEntityId::new("ball").unwrap()),
+                other: Some(PhysicsEntityId::new("floor").unwrap()),
+            },
+            flash: Some(MaterialFlashDeclaration {
+                target: PhysicsEntityId::new("ball").unwrap(),
+                material_index: 1,
+                duration_seconds: 0.2,
+            }),
+            counter: Some("hits".into()),
+        }];
+        scene
+    }
+
+    fn collision_event(loop_cycle: u64, fixed_tick: u64, time_seconds: f32) -> PhysicsEvent {
+        PhysicsEvent {
+            loop_cycle,
+            fixed_tick,
+            time_seconds,
+            kind: PhysicsEventKind::Collision {
+                phase: CollisionPhase::Started,
+                object_a: PhysicsEntityId::new("ball").unwrap(),
+                object_b: PhysicsEntityId::new("floor").unwrap(),
+            },
+        }
+    }
+
     #[test]
     fn sphere_falls_and_collides_with_static_floor() {
         let mut evaluator = PhysicsSceneEvaluator::new(base_scene()).unwrap();
@@ -388,6 +625,389 @@ mod tests {
 
         let same_tick = evaluator.evaluate(request(1.5, 0)).unwrap();
         assert!(same_tick.physics_events.events.is_empty());
+    }
+
+    #[test]
+    fn reaction_flash_activates_extends_expires_and_preserves_source() {
+        let source = reaction_scene();
+        let mut state = EventReactionState::new(&source).unwrap();
+        let mut evaluated = source.clone();
+        let started = PhysicsEventBatch {
+            reset: false,
+            events: vec![collision_event(0, 6, 0.1)],
+        };
+        let changes = state
+            .evaluate(
+                &source,
+                &mut evaluated,
+                PhysicsEvaluationRequest {
+                    scene_time_seconds: 0.15,
+                    fixed_tick: 9,
+                    loop_cycle: 0,
+                },
+                &started,
+            )
+            .unwrap();
+        assert!(changes.spheres);
+        assert_eq!(evaluated.spheres[0].material_index, 1);
+        assert_eq!(source.spheres[0].material_index, 0);
+        assert_eq!(state.snapshot().loop_counts["hits"], 1);
+
+        let extended = PhysicsEventBatch {
+            reset: false,
+            events: vec![collision_event(0, 12, 0.2)],
+        };
+        let mut extended_scene = source.clone();
+        let changes = state
+            .evaluate(
+                &source,
+                &mut extended_scene,
+                PhysicsEvaluationRequest {
+                    scene_time_seconds: 0.35,
+                    fixed_tick: 21,
+                    loop_cycle: 0,
+                },
+                &extended,
+            )
+            .unwrap();
+        assert!(!changes.spheres);
+        assert_eq!(extended_scene.spheres[0].material_index, 1);
+
+        let mut expired_scene = source.clone();
+        let changes = state
+            .evaluate(
+                &source,
+                &mut expired_scene,
+                PhysicsEvaluationRequest {
+                    scene_time_seconds: 0.4,
+                    fixed_tick: 24,
+                    loop_cycle: 0,
+                },
+                &PhysicsEventBatch::default(),
+            )
+            .unwrap();
+        assert!(changes.spheres);
+        assert_eq!(expired_scene.spheres[0].material_index, 0);
+    }
+
+    #[test]
+    fn reaction_flash_marks_bound_triangle_material_changes() {
+        let mut source = reaction_scene();
+        source.event_reactions.push(EventReactionDeclaration {
+            event_matcher: PhysicsEventMatcher::Collision {
+                phase: CollisionPhase::Started,
+                object: Some(PhysicsEntityId::new("ball").unwrap()),
+                other: Some(PhysicsEntityId::new("floor").unwrap()),
+            },
+            flash: Some(MaterialFlashDeclaration {
+                target: PhysicsEntityId::new("floor").unwrap(),
+                material_index: 1,
+                duration_seconds: 0.2,
+            }),
+            counter: None,
+        });
+        let mut state = EventReactionState::new(&source).unwrap();
+        let mut evaluated = source.clone();
+        let changes = state
+            .evaluate(
+                &source,
+                &mut evaluated,
+                PhysicsEvaluationRequest {
+                    scene_time_seconds: 0.15,
+                    fixed_tick: 9,
+                    loop_cycle: 0,
+                },
+                &PhysicsEventBatch {
+                    reset: false,
+                    events: vec![collision_event(0, 6, 0.1)],
+                },
+            )
+            .unwrap();
+
+        assert!(changes.spheres);
+        assert!(changes.triangles);
+        assert_eq!(evaluated.triangles[0].material_index, 1);
+        assert_eq!(source.triangles[0].material_index, 0);
+    }
+
+    #[test]
+    fn loop_reset_clears_boundary_flash_and_replay_can_recreate_it() {
+        let source = reaction_scene();
+        let mut state = EventReactionState::new(&source).unwrap();
+        let mut end_of_loop = source.clone();
+        state
+            .evaluate(
+                &source,
+                &mut end_of_loop,
+                PhysicsEvaluationRequest {
+                    scene_time_seconds: 0.99,
+                    fixed_tick: 59,
+                    loop_cycle: 0,
+                },
+                &PhysicsEventBatch {
+                    reset: false,
+                    events: vec![collision_event(0, 57, 0.95)],
+                },
+            )
+            .unwrap();
+        assert_eq!(end_of_loop.spheres[0].material_index, 1);
+
+        let mut next_loop = source.clone();
+        state
+            .evaluate(
+                &source,
+                &mut next_loop,
+                PhysicsEvaluationRequest {
+                    scene_time_seconds: 0.01,
+                    fixed_tick: 0,
+                    loop_cycle: 1,
+                },
+                &PhysicsEventBatch {
+                    reset: true,
+                    events: Vec::new(),
+                },
+            )
+            .unwrap();
+        assert_eq!(next_loop.spheres[0].material_index, 0);
+        assert_eq!(state.snapshot().loop_counts["hits"], 0);
+        assert_eq!(state.snapshot().session_counts["hits"], 1);
+
+        let mut replayed = source.clone();
+        state
+            .evaluate(
+                &source,
+                &mut replayed,
+                PhysicsEvaluationRequest {
+                    scene_time_seconds: 0.16,
+                    fixed_tick: 9,
+                    loop_cycle: 1,
+                },
+                &PhysicsEventBatch {
+                    reset: false,
+                    events: vec![collision_event(1, 6, 0.1)],
+                },
+            )
+            .unwrap();
+        assert_eq!(replayed.spheres[0].material_index, 1);
+        assert_eq!(state.snapshot().session_counts["hits"], 2);
+    }
+
+    #[test]
+    fn rewind_rebuilds_loop_counters_without_inflating_session_counts() {
+        let source = reaction_scene();
+        let mut state = EventReactionState::new(&source).unwrap();
+        let mut evaluated = source.clone();
+        state
+            .evaluate(
+                &source,
+                &mut evaluated,
+                PhysicsEvaluationRequest {
+                    scene_time_seconds: 0.2,
+                    fixed_tick: 2,
+                    loop_cycle: 0,
+                },
+                &PhysicsEventBatch {
+                    reset: false,
+                    events: vec![collision_event(0, 1, 0.1), collision_event(0, 2, 0.2)],
+                },
+            )
+            .unwrap();
+        assert_eq!(state.snapshot().loop_counts["hits"], 2);
+        assert_eq!(state.snapshot().session_counts["hits"], 2);
+
+        let mut rewound = source.clone();
+        state
+            .evaluate(
+                &source,
+                &mut rewound,
+                PhysicsEvaluationRequest {
+                    scene_time_seconds: 0.1,
+                    fixed_tick: 1,
+                    loop_cycle: 0,
+                },
+                &PhysicsEventBatch {
+                    reset: true,
+                    events: vec![collision_event(0, 1, 0.1)],
+                },
+            )
+            .unwrap();
+        assert_eq!(state.snapshot().loop_counts["hits"], 1);
+        assert_eq!(state.snapshot().session_counts["hits"], 2);
+
+        let mut forward = source.clone();
+        state
+            .evaluate(
+                &source,
+                &mut forward,
+                PhysicsEvaluationRequest {
+                    scene_time_seconds: 0.3,
+                    fixed_tick: 3,
+                    loop_cycle: 0,
+                },
+                &PhysicsEventBatch {
+                    reset: false,
+                    events: vec![collision_event(0, 2, 0.2), collision_event(0, 3, 0.3)],
+                },
+            )
+            .unwrap();
+        assert_eq!(state.snapshot().loop_counts["hits"], 3);
+        assert_eq!(state.snapshot().session_counts["hits"], 3);
+    }
+
+    #[test]
+    fn stayed_and_trigger_counters_increment_only_matching_rules() {
+        let mut source = trigger_scene();
+        source.event_reactions = vec![
+            EventReactionDeclaration {
+                event_matcher: PhysicsEventMatcher::Collision {
+                    phase: CollisionPhase::Started,
+                    object: None,
+                    other: None,
+                },
+                flash: None,
+                counter: Some("starts".into()),
+            },
+            EventReactionDeclaration {
+                event_matcher: PhysicsEventMatcher::Collision {
+                    phase: CollisionPhase::Stayed,
+                    object: None,
+                    other: None,
+                },
+                flash: None,
+                counter: Some("stays".into()),
+            },
+            EventReactionDeclaration {
+                event_matcher: PhysicsEventMatcher::Trigger {
+                    phase: TriggerPhase::Entered,
+                    trigger: Some(PhysicsEntityId::new("zone").unwrap()),
+                    object: None,
+                },
+                flash: None,
+                counter: Some("entries".into()),
+            },
+        ];
+        let mut state = EventReactionState::new(&source).unwrap();
+        let mut evaluated = source.clone();
+        state
+            .evaluate(
+                &source,
+                &mut evaluated,
+                PhysicsEvaluationRequest {
+                    scene_time_seconds: 0.2,
+                    fixed_tick: 2,
+                    loop_cycle: 0,
+                },
+                &PhysicsEventBatch {
+                    reset: false,
+                    events: vec![
+                        collision_event(0, 1, 0.1),
+                        PhysicsEvent {
+                            loop_cycle: 0,
+                            fixed_tick: 2,
+                            time_seconds: 0.2,
+                            kind: PhysicsEventKind::Collision {
+                                phase: CollisionPhase::Stayed,
+                                object_a: PhysicsEntityId::new("ball").unwrap(),
+                                object_b: PhysicsEntityId::new("floor").unwrap(),
+                            },
+                        },
+                        PhysicsEvent {
+                            loop_cycle: 0,
+                            fixed_tick: 2,
+                            time_seconds: 0.2,
+                            kind: PhysicsEventKind::Trigger {
+                                phase: TriggerPhase::Entered,
+                                trigger: PhysicsEntityId::new("zone").unwrap(),
+                                object: PhysicsEntityId::new("ball").unwrap(),
+                            },
+                        },
+                    ],
+                },
+            )
+            .unwrap();
+        let snapshot = state.snapshot();
+        assert_eq!(snapshot.loop_counts["starts"], 1);
+        assert_eq!(snapshot.loop_counts["stays"], 1);
+        assert_eq!(snapshot.loop_counts["entries"], 1);
+    }
+
+    #[test]
+    fn disabled_physics_exposes_declared_zero_counters_without_flashing() {
+        let mut source = reaction_scene();
+        source.physics.as_mut().unwrap().enabled = false;
+        let mut evaluator = PhysicsSceneEvaluator::new(source).unwrap();
+        let evaluated = evaluator.evaluate(request(1.0, 0)).unwrap();
+
+        assert_eq!(evaluated.scene.spheres[0].material_index, 0);
+        assert_eq!(evaluated.counters.loop_counts["hits"], 0);
+        assert_eq!(evaluated.counters.session_counts["hits"], 0);
+    }
+
+    #[test]
+    fn event_reaction_demo_flashes_and_reports_loop_and_session_counters() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/014_physics_event_reactions.json");
+        let source = toaster_scene::load_scene(path).unwrap();
+        let authored_counts = (source.spheres.len(), source.triangles.len());
+        let ball = source
+            .rigid_bodies
+            .iter()
+            .find(|body| body.id.as_str() == "ball_red")
+            .unwrap();
+        let ObjectBinding::Sphere { index } = ball.binding else {
+            panic!("ball_red must remain an analytic sphere");
+        };
+        let authored_material = source.spheres[index].material_index;
+        let flash_material = source
+            .event_reactions
+            .iter()
+            .find_map(|reaction| {
+                reaction
+                    .flash
+                    .as_ref()
+                    .filter(|flash| flash.target.as_str() == "ball_red")
+                    .map(|flash| flash.material_index)
+            })
+            .unwrap();
+        let mut evaluator = PhysicsSceneEvaluator::new(source).unwrap();
+        let first_loop = evaluator.evaluate(request(0.5, 0)).unwrap();
+
+        assert_eq!(
+            (
+                first_loop.scene.spheres.len(),
+                first_loop.scene.triangles.len()
+            ),
+            authored_counts
+        );
+        assert_ne!(authored_material, flash_material);
+        assert_eq!(
+            first_loop.scene.spheres[index].material_index,
+            flash_material
+        );
+        assert!(first_loop.counters.loop_counts["collision_starts"] > 0);
+        assert!(first_loop.counters.loop_counts["gate_entries"] > 0);
+        assert!(first_loop.counters.loop_counts["orb_entries"] > 0);
+        assert_eq!(
+            first_loop.counters.loop_counts,
+            first_loop.counters.session_counts
+        );
+
+        evaluator.evaluate(request(2.0, 0)).unwrap();
+        let second_loop = evaluator.evaluate(request(0.5, 1)).unwrap();
+        assert_eq!(
+            second_loop.counters.loop_counts,
+            first_loop.counters.loop_counts
+        );
+        assert!(
+            second_loop.counters.session_counts["collision_starts"]
+                > first_loop.counters.session_counts["collision_starts"]
+        );
+    }
+
+    #[test]
+    fn counter_overflow_is_reported() {
+        let mut counters = [("hits".to_owned(), u64::MAX)].into();
+        assert!(increment_counter(&mut counters, "hits").is_err());
     }
 
     #[test]

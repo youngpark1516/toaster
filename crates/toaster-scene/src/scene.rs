@@ -5,7 +5,9 @@ use crate::{
     environment::EnvironmentMap,
     material::Material,
     object::{Sphere, Triangle, TriangleAttributes},
-    physics::{PhysicsSettings, RigidBodyDeclaration, TriggerDeclaration},
+    physics::{
+        EventReactionDeclaration, PhysicsSettings, RigidBodyDeclaration, TriggerDeclaration,
+    },
     texture::Texture,
 };
 use glam::Vec3;
@@ -37,6 +39,8 @@ pub struct Scene {
     pub rigid_bodies: Vec<RigidBodyDeclaration>,
     /// Invisible fixed sensors used by renderer-neutral trigger events.
     pub triggers: Vec<TriggerDeclaration>,
+    /// Declarative material and counter responses to neutral physics events.
+    pub event_reactions: Vec<EventReactionDeclaration>,
 }
 
 #[derive(Clone, Copy, Debug)]

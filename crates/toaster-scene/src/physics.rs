@@ -2,7 +2,7 @@
 
 use anyhow::{bail, Result};
 use glam::Vec3;
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// Stable renderer-neutral identity for a physics body or trigger.
@@ -141,6 +141,107 @@ pub struct PhysicsEventBatch {
     pub reset: bool,
     /// Events from every nominal tick crossed by this evaluation.
     pub events: Vec<PhysicsEvent>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+/// Renderer-neutral selector for one class of physics events.
+pub enum PhysicsEventMatcher {
+    /// Unordered physical-contact matching with optional participant filters.
+    Collision {
+        /// Required contact lifecycle phase.
+        phase: CollisionPhase,
+        /// Optional concrete participant; absence represents a wildcard.
+        object: Option<PhysicsEntityId>,
+        /// Optional second concrete participant; absence represents a wildcard.
+        other: Option<PhysicsEntityId>,
+    },
+    /// Trigger-overlap matching with optional trigger and object filters.
+    Trigger {
+        /// Required sensor lifecycle phase.
+        phase: TriggerPhase,
+        /// Optional concrete trigger; absence represents a wildcard.
+        trigger: Option<PhysicsEntityId>,
+        /// Optional concrete moving object; absence represents a wildcard.
+        object: Option<PhysicsEntityId>,
+    },
+}
+
+impl PhysicsEventMatcher {
+    /// Returns whether one neutral event satisfies this selector.
+    pub fn matches(&self, event: &PhysicsEventKind) -> bool {
+        match (self, event) {
+            (
+                Self::Collision {
+                    phase,
+                    object,
+                    other,
+                },
+                PhysicsEventKind::Collision {
+                    phase: event_phase,
+                    object_a,
+                    object_b,
+                },
+            ) => {
+                phase == event_phase
+                    && match (object, other) {
+                        (None, None) => true,
+                        (Some(id), None) | (None, Some(id)) => id == object_a || id == object_b,
+                        (Some(first), Some(second)) => {
+                            (first == object_a && second == object_b)
+                                || (first == object_b && second == object_a)
+                        }
+                    }
+            }
+            (
+                Self::Trigger {
+                    phase,
+                    trigger,
+                    object,
+                },
+                PhysicsEventKind::Trigger {
+                    phase: event_phase,
+                    trigger: event_trigger,
+                    object: event_object,
+                },
+            ) => {
+                phase == event_phase
+                    && trigger.as_ref().is_none_or(|id| id == event_trigger)
+                    && object.as_ref().is_none_or(|id| id == event_object)
+            }
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+/// Temporary material-index override caused by a matching event.
+pub struct MaterialFlashDeclaration {
+    /// Concrete rendered physics body to modify.
+    pub target: PhysicsEntityId,
+    /// Existing non-emissive scene material used during the flash.
+    pub material_index: usize,
+    /// Half-open flash lifetime in wrapped scene seconds.
+    pub duration_seconds: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+/// Declarative renderer-neutral response to matching physics events.
+pub struct EventReactionDeclaration {
+    /// Event selector evaluated against the ordered neutral event stream.
+    pub event_matcher: PhysicsEventMatcher,
+    /// Optional temporary material override.
+    pub flash: Option<MaterialFlashDeclaration>,
+    /// Optional named counter incremented once per matching event.
+    pub counter: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// Named counter values accompanying one evaluated scene.
+pub struct NamedCounterSnapshot {
+    /// Counts reconstructed within the current loop cycle.
+    pub loop_counts: BTreeMap<String, u64>,
+    /// Counts observed once per fixed tick and loop cycle by this evaluator.
+    pub session_counts: BTreeMap<String, u64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

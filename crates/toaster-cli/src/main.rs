@@ -168,6 +168,8 @@ impl toaster_gpu::FrameSink for ServerFrameSink {
                 max_bounces: frame.max_bounces,
                 adaptive_sampling: self.adaptive_sampling.is_some(),
                 sample_adjustment: sample_adjustment.to_owned(),
+                loop_counters: frame.counters.loop_counts.clone(),
+                session_counters: frame.counters.session_counts.clone(),
             },
         );
         if let Some(target_samples) = self.progressive_target_samples {
@@ -945,6 +947,13 @@ mod tests {
         let event_scene = toaster_scene::load_scene(event_path).unwrap();
         let error =
             resolve_progressive_preview(true, None, None, None, None, &event_scene).unwrap_err();
+        assert!(error.to_string().contains("physics-enabled"));
+
+        let reaction_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/014_physics_event_reactions.json");
+        let reaction_scene = toaster_scene::load_scene(reaction_path).unwrap();
+        let error =
+            resolve_progressive_preview(true, None, None, None, None, &reaction_scene).unwrap_err();
         assert!(error.to_string().contains("physics-enabled"));
 
         physics_scene.animation.tracks.clear();

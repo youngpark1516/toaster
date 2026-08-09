@@ -598,6 +598,7 @@ mod tests {
             physics: None,
             rigid_bodies: Vec::new(),
             triggers: Vec::new(),
+            event_reactions: Vec::new(),
         }
     }
 

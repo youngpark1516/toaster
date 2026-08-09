@@ -3,7 +3,9 @@ use anyhow::{anyhow, ensure, Context, Result};
 use image::RgbaImage;
 use std::path::Path;
 use std::time::{Duration, Instant};
-use toaster_scene::{AnimationEvaluator, SceneChanges, SceneEvaluationTimings, SceneEvaluator};
+use toaster_scene::{
+    AnimationEvaluator, NamedCounterSnapshot, SceneChanges, SceneEvaluationTimings, SceneEvaluator,
+};
 
 use crate::animation::{frame_output_path, AnimationConfig};
 use crate::buffers::create_scene_gpu_buffers;
@@ -149,6 +151,8 @@ pub struct CompletedFrame<'a> {
     pub render_time: Duration,
     /// Shared converted image; valid only for the duration of delivery.
     pub image: &'a RgbaImage,
+    /// Renderer-neutral named counters corresponding to this evaluated frame.
+    pub counters: &'a NamedCounterSnapshot,
 }
 
 /// Consumer invoked synchronously for every completed GPU frame.
@@ -522,6 +526,7 @@ async fn render_gpu_with_sink(
     validate_pacing(animation, pacing)?;
 
     let initial_evaluated = evaluator.evaluate(animation.evaluation_request(0))?;
+    let initial_counters = initial_evaluated.counters;
     let initial_scene = initial_evaluated.scene;
     let mut scene = scene_to_gpu(&initial_scene)?;
     let initial_counts = (
@@ -602,25 +607,33 @@ async fn render_gpu_with_sink(
             animation.evaluation_request(frame)
         };
         let time_seconds = request.time_seconds;
-        let (next_scene, changes, evaluation_timings, packing_timings) = if progressive.is_some() {
-            let cached_lights = Some((scene.lights.as_slice(), scene.params.total_light_area));
-            let (next_scene, packing_timings) =
-                scene_to_gpu_frame_with_timings(&initial_scene, cached_lights)?;
-            (
-                next_scene,
-                SceneChanges::default(),
-                SceneEvaluationTimings::default(),
-                packing_timings,
-            )
-        } else {
-            let evaluated = evaluator.evaluate(request)?;
-            let changes = evaluated.changes;
-            let cached_lights = (!changes.emissive_geometry)
-                .then_some((scene.lights.as_slice(), scene.params.total_light_area));
-            let (next_scene, packing_timings) =
-                scene_to_gpu_frame_with_timings(&evaluated.scene, cached_lights)?;
-            (next_scene, changes, evaluated.timings, packing_timings)
-        };
+        let (next_scene, changes, evaluation_timings, packing_timings, counters) =
+            if progressive.is_some() {
+                let cached_lights = Some((scene.lights.as_slice(), scene.params.total_light_area));
+                let (next_scene, packing_timings) =
+                    scene_to_gpu_frame_with_timings(&initial_scene, cached_lights)?;
+                (
+                    next_scene,
+                    SceneChanges::default(),
+                    SceneEvaluationTimings::default(),
+                    packing_timings,
+                    initial_counters.clone(),
+                )
+            } else {
+                let evaluated = evaluator.evaluate(request)?;
+                let changes = evaluated.changes;
+                let cached_lights = (!changes.emissive_geometry)
+                    .then_some((scene.lights.as_slice(), scene.params.total_light_area));
+                let (next_scene, packing_timings) =
+                    scene_to_gpu_frame_with_timings(&evaluated.scene, cached_lights)?;
+                (
+                    next_scene,
+                    changes,
+                    evaluated.timings,
+                    packing_timings,
+                    evaluated.counters,
+                )
+            };
         ensure!(
             (
                 next_scene.spheres.len(),
@@ -763,6 +776,7 @@ async fn render_gpu_with_sink(
             timings,
             render_time,
             image: &image,
+            counters: &counters,
         })?;
         timings.output = output_start.elapsed();
         timings.total = frame_start.elapsed();
@@ -924,12 +938,14 @@ mod tests {
     #[derive(Default)]
     struct RecordingSink {
         frames: Vec<Vec<u8>>,
+        counters: Vec<NamedCounterSnapshot>,
     }
 
     impl FrameSink for RecordingSink {
         fn deliver(&mut self, frame: CompletedFrame<'_>) -> Result<()> {
             let jpeg = crate::image_output::encode_rgba_image_to_jpeg(frame.image, 90)?;
             self.frames.push(jpeg);
+            self.counters.push(frame.counters.clone());
             Ok(())
         }
     }
@@ -938,6 +954,10 @@ mod tests {
     fn frame_sink_accepts_encoded_completed_frame() {
         let image = pixels_to_rgba_image(&[[0.25, 0.5, 0.75, 1.0]], 1, 1).unwrap();
         let mut sink = RecordingSink::default();
+        let counters = NamedCounterSnapshot {
+            loop_counts: [("hits".to_owned(), 2)].into(),
+            session_counts: [("hits".to_owned(), 7)].into(),
+        };
 
         sink.deliver(CompletedFrame {
             index: 0,
@@ -953,10 +973,12 @@ mod tests {
             },
             render_time: Duration::from_millis(1),
             image: &image,
+            counters: &counters,
         })
         .unwrap();
 
         assert_eq!(sink.frames.len(), 1);
+        assert_eq!(sink.counters, vec![counters]);
         let decoded =
             image::load_from_memory_with_format(&sink.frames[0], image::ImageFormat::Jpeg).unwrap();
         assert_eq!(decoded.dimensions(), (1, 1));
