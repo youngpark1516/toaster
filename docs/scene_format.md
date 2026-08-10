@@ -12,14 +12,16 @@ Toaster scenes are UTF-8 JSON files loaded by `toaster_scene::load_scene`. All v
   "materials": [],
   "objects": [],
   "triggers": [],
+  "event_reactions": [],
   "animation": { "tracks": [] }
 }
 ```
 
 `camera`, `render`, `materials`, and `objects` are required. `physics` is
-optional; `triggers` and animation tracks default to empty arrays. Unknown
+optional; `triggers`, `event_reactions`, and animation tracks default to empty arrays. Unknown
 fields are currently ignored by some general scene structures;
-physics-specific structures and trigger declarations reject them.
+physics-specific structures, trigger declarations, and event reactions reject
+them.
 
 ## Camera
 
@@ -372,6 +374,70 @@ backward seeks, and random access reset and replay the world and active-pair
 state. Such a batch has `reset: true`; consumers clear prior event-driven state
 before applying it. Reset does not synthesize exits for the discarded world.
 Animation-only and disabled-physics evaluation return an empty batch.
+
+### Event reactions
+
+The optional top-level `event_reactions` array matches neutral physics events
+and applies renderer-neutral material flashes or counter increments:
+
+```json
+"event_reactions": [
+  {
+    "match": {
+      "type": "collision",
+      "phase": "started",
+      "object": "ball_red",
+      "other": "room_floor"
+    },
+    "flash": {
+      "target": "ball_red",
+      "material": "impact_flash",
+      "duration": 0.2
+    },
+    "counter": "floor_impacts"
+  },
+  {
+    "match": {
+      "type": "trigger",
+      "phase": "entered",
+      "trigger": "gate_zone",
+      "object": "*"
+    },
+    "counter": "gate_entries"
+  }
+]
+```
+
+Every rule requires `match` and at least one action. Collision phases are
+`started`, `stayed`, and `exited`; trigger phases are `entered` and `exited`.
+Omitted filters and `"*"` are wildcards. Collision participants are unordered:
+two wildcards match every pair, one concrete ID matches any pair containing it,
+and two concrete IDs match that exact pair. Trigger and object filters are
+independent.
+
+A flash target must be a concrete rendered physics-object ID explicitly named
+by its matcher. A wildcard cannot authorize a flash target. Trigger IDs and
+nonphysics marker objects cannot be flashed. `duration` is finite, positive,
+and measured in wrapped scene seconds. The active interval is half-open:
+`[event_time, event_time + duration)`. A later event replaces the active flash;
+ties follow declaration order. Expiry restores the immutable authored material.
+Loop/reset replay first clears active flashes, preventing a late-cycle flash
+from leaking into the next cycle. Flashes that begin and expire between output
+frames are not held artificially.
+
+The v4 MVP accepts only non-emissive authored and flash materials. It swaps an
+existing material index, preserving all renderer buffer and light counts.
+
+A counter increments once for each event matched by its rule, and multiple
+rules may share a name. `stayed` counting is opt-in: a rule must explicitly use
+`"phase": "stayed"`. Such a counter can increase quickly because an active
+contact emits one stay event per nominal fixed tick.
+
+Evaluated scenes expose `loop_counts` and `session_counts`. Loop counts clear
+and replay on a wrap or rewind. Session counts continue across loop cycles and
+deduplicate replay at or below the highest fixed tick already observed for that
+cycle. Skipped cycles are not synthesized. With physics disabled, reactions
+remain validated, flashes do nothing, and declared counter names remain zero.
 
 Static progressive preview rejects every scene containing animation tracks and
 every scene with enabled physics, including static-only physics scenes. Normal

@@ -6,8 +6,9 @@ use crate::{
     material::Material,
     object::{Sphere, Triangle, TriangleAttributes},
     physics::{
-        ColliderShape, ObjectBinding, PhysicsEntityId, PhysicsSettings, PhysicsType,
-        RigidBodyDeclaration, RigidBodyKind, TriggerDeclaration,
+        ColliderShape, CollisionPhase, EventReactionDeclaration, MaterialFlashDeclaration,
+        ObjectBinding, PhysicsEntityId, PhysicsEventMatcher, PhysicsSettings, PhysicsType,
+        RigidBodyDeclaration, RigidBodyKind, TriggerDeclaration, TriggerPhase,
     },
     scene::{Background, CameraSettings, RenderSettings, Scene},
     texture::Texture,
@@ -39,6 +40,9 @@ struct SceneFile {
     /// Optional invisible fixed trigger sensors.
     #[serde(default)]
     triggers: Vec<TriggerFile>,
+    /// Optional renderer-neutral event response declarations.
+    #[serde(default)]
+    event_reactions: Vec<EventReactionFile>,
 }
 
 #[derive(Deserialize)]
@@ -275,6 +279,77 @@ enum TriggerFile {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Raw declarative response to one physics-event matcher.
+struct EventReactionFile {
+    /// Tagged collision or trigger selector.
+    #[serde(rename = "match")]
+    event_matcher: EventMatcherFile,
+    /// Optional temporary material override.
+    flash: Option<MaterialFlashFile>,
+    /// Optional counter name incremented by each matching event.
+    counter: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+/// Raw physics-event selector with `"*"` and omitted fields as wildcards.
+enum EventMatcherFile {
+    /// Unordered physical-contact selector.
+    Collision {
+        /// Required contact lifecycle phase.
+        phase: CollisionPhaseFile,
+        /// Optional concrete participant or `"*"`.
+        object: Option<String>,
+        /// Optional second concrete participant or `"*"`.
+        other: Option<String>,
+    },
+    /// Trigger-overlap selector.
+    Trigger {
+        /// Required sensor lifecycle phase.
+        phase: TriggerPhaseFile,
+        /// Optional concrete trigger or `"*"`.
+        trigger: Option<String>,
+        /// Optional concrete moving body or `"*"`.
+        object: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+/// Collision phases accepted by event reaction rules.
+enum CollisionPhaseFile {
+    /// Contact began.
+    Started,
+    /// Contact persisted for one nominal fixed tick.
+    Stayed,
+    /// Contact ended.
+    Exited,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+/// Trigger phases accepted by event reaction rules.
+enum TriggerPhaseFile {
+    /// A body entered a sensor.
+    Entered,
+    /// A body left a sensor.
+    Exited,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Raw material-flash action.
+struct MaterialFlashFile {
+    /// Concrete physics body ID.
+    target: String,
+    /// Existing named non-emissive material.
+    material: String,
+    /// Positive flash lifetime in scene seconds.
+    duration: f32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 /// Raw per-object rigid-body properties.
 struct RigidBodyFile {
     /// Static or dynamic ownership.
@@ -388,6 +463,9 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
 
     let physics = file.physics.map(validate_physics_settings).transpose()?;
     if !file.triggers.is_empty() {
+        ensure_physics_block(&physics)?;
+    }
+    if !file.event_reactions.is_empty() {
         ensure_physics_block(&physics)?;
     }
 
@@ -678,6 +756,22 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
         .map(|trigger| validate_trigger(trigger, &mut entity_ids))
         .collect::<Result<Vec<_>>>()?;
 
+    let event_reactions = file
+        .event_reactions
+        .into_iter()
+        .map(|reaction| {
+            validate_event_reaction(
+                reaction,
+                &rigid_bodies,
+                &triggers,
+                &material_names,
+                &materials,
+                &spheres,
+                &triangles,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+
     let (background, environment) = match file.render.background {
         BackgroundFile::Kind(BackgroundKindFile::Sky) => (Background::Sky, None),
         BackgroundFile::Kind(BackgroundKindFile::Black) => (Background::Black, None),
@@ -728,6 +822,7 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
         physics,
         rigid_bodies,
         triggers,
+        event_reactions,
     };
     validate_animation(&scene)?;
     Ok(scene)
@@ -903,6 +998,201 @@ fn validate_trigger(
         center,
         collider,
     })
+}
+
+/// Validates one backend-neutral event response after all IDs and bindings exist.
+fn validate_event_reaction(
+    file: EventReactionFile,
+    rigid_bodies: &[RigidBodyDeclaration],
+    triggers: &[TriggerDeclaration],
+    material_names: &HashMap<String, usize>,
+    materials: &[Material],
+    spheres: &[Sphere],
+    triangles: &[Triangle],
+) -> Result<EventReactionDeclaration> {
+    if file.flash.is_none() && file.counter.is_none() {
+        bail!("event reaction must declare a flash or counter action");
+    }
+    let counter = file
+        .counter
+        .map(|counter| {
+            if counter.is_empty() {
+                bail!("event reaction counter name must not be empty");
+            }
+            Ok(counter)
+        })
+        .transpose()?;
+
+    let event_matcher = match file.event_matcher {
+        EventMatcherFile::Collision {
+            phase,
+            object,
+            other,
+        } => {
+            let object = validate_reaction_body_filter(object, rigid_bodies, false)?;
+            let other = validate_reaction_body_filter(other, rigid_bodies, false)?;
+            if object.is_some() && object == other {
+                bail!("collision reaction cannot match the same body twice");
+            }
+            PhysicsEventMatcher::Collision {
+                phase: match phase {
+                    CollisionPhaseFile::Started => CollisionPhase::Started,
+                    CollisionPhaseFile::Stayed => CollisionPhase::Stayed,
+                    CollisionPhaseFile::Exited => CollisionPhase::Exited,
+                },
+                object,
+                other,
+            }
+        }
+        EventMatcherFile::Trigger {
+            phase,
+            trigger,
+            object,
+        } => {
+            let trigger = validate_trigger_filter(trigger, triggers)?;
+            let object = validate_reaction_body_filter(object, rigid_bodies, true)?;
+            PhysicsEventMatcher::Trigger {
+                phase: match phase {
+                    TriggerPhaseFile::Entered => TriggerPhase::Entered,
+                    TriggerPhaseFile::Exited => TriggerPhase::Exited,
+                },
+                trigger,
+                object,
+            }
+        }
+    };
+
+    let flash = file
+        .flash
+        .map(|flash| {
+            if flash.target == "*" || flash.target.is_empty() {
+                bail!("material flash target must be a concrete physics entity id");
+            }
+            if !flash.duration.is_finite() || flash.duration <= 0.0 {
+                bail!("material flash duration must be finite and greater than zero");
+            }
+            let target = PhysicsEntityId::new(flash.target)?;
+            let target_is_explicit = match &event_matcher {
+                PhysicsEventMatcher::Collision { object, other, .. } => {
+                    object.as_ref() == Some(&target) || other.as_ref() == Some(&target)
+                }
+                PhysicsEventMatcher::Trigger { object, .. } => object.as_ref() == Some(&target),
+            };
+            if !target_is_explicit {
+                bail!(
+                    "material flash target '{}' must be a concrete object in its event matcher",
+                    target
+                );
+            }
+            let body = rigid_bodies
+                .iter()
+                .find(|body| body.id == target)
+                .context("material flash target is not a rendered physics body")?;
+            let authored_material = binding_material_index(&body.binding, spheres, triangles)?;
+            if is_emissive_material(materials, authored_material) {
+                bail!("material flash targets must use non-emissive authored materials");
+            }
+            let material_index =
+                material_names
+                    .get(&flash.material)
+                    .copied()
+                    .with_context(|| {
+                        format!(
+                            "material flash references unknown material '{}'",
+                            flash.material
+                        )
+                    })?;
+            if is_emissive_material(materials, material_index) {
+                bail!("material flash materials must be non-emissive");
+            }
+            Ok(MaterialFlashDeclaration {
+                target,
+                material_index,
+                duration_seconds: flash.duration,
+            })
+        })
+        .transpose()?;
+
+    Ok(EventReactionDeclaration {
+        event_matcher,
+        flash,
+        counter,
+    })
+}
+
+/// Converts omitted and `"*"` filters to wildcards and validates concrete bodies.
+fn validate_reaction_body_filter(
+    filter: Option<String>,
+    rigid_bodies: &[RigidBodyDeclaration],
+    trigger_participant: bool,
+) -> Result<Option<PhysicsEntityId>> {
+    let Some(filter) = filter else {
+        return Ok(None);
+    };
+    if filter == "*" {
+        return Ok(None);
+    }
+    let id = PhysicsEntityId::new(filter)?;
+    let body = rigid_bodies
+        .iter()
+        .find(|body| body.id == id)
+        .with_context(|| format!("event reaction references unknown physics body '{id}'"))?;
+    if trigger_participant && body.body == RigidBodyKind::Static {
+        bail!("trigger reaction object '{id}' must be dynamic or kinematic");
+    }
+    Ok(Some(id))
+}
+
+/// Converts an omitted or `"*"` trigger filter to a wildcard.
+fn validate_trigger_filter(
+    filter: Option<String>,
+    triggers: &[TriggerDeclaration],
+) -> Result<Option<PhysicsEntityId>> {
+    let Some(filter) = filter else {
+        return Ok(None);
+    };
+    if filter == "*" {
+        return Ok(None);
+    }
+    let id = PhysicsEntityId::new(filter)?;
+    if !triggers.iter().any(|trigger| trigger.id == id) {
+        bail!("event reaction references unknown trigger '{id}'");
+    }
+    Ok(Some(id))
+}
+
+/// Returns the single authored material shared by a rigid-body render binding.
+fn binding_material_index(
+    binding: &ObjectBinding,
+    spheres: &[Sphere],
+    triangles: &[Triangle],
+) -> Result<usize> {
+    match *binding {
+        ObjectBinding::Sphere { index } => spheres
+            .get(index)
+            .map(|sphere| sphere.material_index)
+            .context("material flash sphere binding is out of range"),
+        ObjectBinding::Triangles { start, count, .. } => {
+            let triangles = triangles
+                .get(start..start.saturating_add(count))
+                .context("material flash triangle binding is out of range")?;
+            let first = triangles
+                .first()
+                .context("material flash triangle binding is empty")?
+                .material_index;
+            if triangles
+                .iter()
+                .any(|triangle| triangle.material_index != first)
+            {
+                bail!("material flash binding must have one authored material");
+            }
+            Ok(first)
+        }
+    }
+}
+
+fn is_emissive_material(materials: &[Material], index: usize) -> bool {
+    matches!(materials.get(index), Some(Material::Emissive { .. }))
 }
 
 /// Expands an axis-aligned box into a stable 12-triangle face ordering.
@@ -1281,6 +1571,33 @@ mod tests {
     }
 
     #[test]
+    fn loads_event_reaction_demo_with_flashes_and_named_counters() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/014_physics_event_reactions.json");
+        let scene = load_scene(path).unwrap();
+
+        assert_eq!(scene.triggers.len(), 2);
+        assert_eq!(scene.event_reactions.len(), 6);
+        assert_eq!(scene.materials.len(), 12);
+        assert_eq!(
+            scene
+                .event_reactions
+                .iter()
+                .filter(|reaction| reaction.flash.is_some())
+                .count(),
+            3
+        );
+        assert_eq!(
+            scene
+                .event_reactions
+                .iter()
+                .filter_map(|reaction| reaction.counter.as_deref())
+                .collect::<Vec<_>>(),
+            vec!["collision_starts", "gate_entries", "orb_entries"]
+        );
+    }
+
+    #[test]
     fn parses_rigid_body_sphere_and_expands_box() {
         let scene = parse(
             r#"{
@@ -1348,6 +1665,122 @@ mod tests {
             scene.triggers[1].collider,
             ColliderShape::Sphere { radius: 1.25 }
         );
+    }
+
+    #[test]
+    fn parses_exact_and_wildcard_event_reactions() {
+        let scene = parse(
+            r#"{
+              "camera":{"position":[0,2,5],"look_at":[0,1,0],"fov_degrees":45},
+              "render":{"width":4,"height":4,"samples":1,"max_bounces":1},
+              "physics":{"enabled":false,"type":"rigid_body"},
+              "materials":[
+                {"name":"base","type":"diffuse","albedo":[0.5,0.5,0.5]},
+                {"name":"flash","type":"diffuse","albedo":[1,1,0]}
+              ],
+              "objects":[
+                {"id":"ball","type":"sphere","center":[0,2,0],"radius":0.5,"material":"base",
+                 "physics":{"body":"dynamic"}},
+                {"id":"floor","type":"box","center":[0,-0.1,0],"size":[4,0.2,4],"material":"base",
+                 "physics":{"body":"static"}}
+              ],
+              "triggers":[{"id":"zone","shape":"sphere","center":[0,1,0],"radius":1}],
+              "event_reactions":[
+                {
+                  "match":{"type":"collision","phase":"started","object":"ball","other":"floor"},
+                  "flash":{"target":"ball","material":"flash","duration":0.2},
+                  "counter":"floor_hits"
+                },
+                {
+                  "match":{"type":"trigger","phase":"entered","trigger":"zone","object":"*"},
+                  "counter":"zone_entries"
+                },
+                {
+                  "match":{"type":"collision","phase":"stayed","object":"*","other":"*"},
+                  "counter":"contact_ticks"
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(scene.event_reactions.len(), 3);
+        let first = &scene.event_reactions[0];
+        assert_eq!(first.counter.as_deref(), Some("floor_hits"));
+        assert_eq!(first.flash.as_ref().unwrap().target.as_str(), "ball");
+        assert_eq!(first.flash.as_ref().unwrap().material_index, 1);
+        assert!(matches!(
+            scene.event_reactions[1].event_matcher,
+            PhysicsEventMatcher::Trigger {
+                trigger: Some(_),
+                object: None,
+                ..
+            }
+        ));
+        assert!(matches!(
+            scene.event_reactions[2].event_matcher,
+            PhysicsEventMatcher::Collision {
+                phase: CollisionPhase::Stayed,
+                object: None,
+                other: None,
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_event_reaction_actions_and_targets() {
+        fn scene(reaction: &str, material: &str, body_material: &str) -> String {
+            format!(
+                r#"{{
+                  "camera":{{"position":[0,2,5],"look_at":[0,1,0],"fov_degrees":45}},
+                  "render":{{"width":1,"height":1,"samples":1,"max_bounces":1}},
+                  "physics":{{"type":"rigid_body"}},
+                  "materials":[
+                    {{"name":"base","type":"diffuse","albedo":[0.5,0.5,0.5]}},
+                    {material}
+                  ],
+                  "objects":[
+                    {{"id":"ball","type":"sphere","center":[0,2,0],"radius":0.5,
+                      "material":"{body_material}","physics":{{"body":"dynamic"}}}},
+                    {{"id":"floor","type":"box","center":[0,-0.1,0],"size":[4,0.2,4],
+                      "material":"base","physics":{{"body":"static"}}}}
+                  ],
+                  "triggers":[{{"id":"zone","shape":"sphere","center":[0,1,0],"radius":1}}],
+                  "event_reactions":[{reaction}]
+                }}"#
+            )
+        }
+        let diffuse = r#"{"name":"flash","type":"diffuse","albedo":[1,1,0]}"#;
+        let invalid_reactions = [
+            r#"{"match":{"type":"collision","phase":"started"}}"#,
+            r#"{"match":{"type":"collision","phase":"started","object":"*"},"flash":{"target":"ball","material":"flash","duration":0.2}}"#,
+            r#"{"match":{"type":"collision","phase":"started","object":"ball"},"flash":{"target":"*","material":"flash","duration":0.2}}"#,
+            r#"{"match":{"type":"collision","phase":"started","object":"missing"},"counter":"hits"}"#,
+            r#"{"match":{"type":"trigger","phase":"entered","trigger":"missing"},"counter":"hits"}"#,
+            r#"{"match":{"type":"collision","phase":"started"},"counter":""}"#,
+            r#"{"match":{"type":"collision","phase":"started","object":"ball"},"flash":{"target":"ball","material":"flash","duration":0}}"#,
+            r#"{"match":{"type":"collision","phase":"started"},"counter":"hits","unknown":true}"#,
+        ];
+        for reaction in invalid_reactions {
+            assert!(
+                parse(&scene(reaction, diffuse, "base")).is_err(),
+                "{reaction}"
+            );
+        }
+
+        let valid_flash = r#"{"match":{"type":"collision","phase":"started","object":"ball"},"flash":{"target":"ball","material":"flash","duration":0.2}}"#;
+        let emissive = r#"{"name":"flash","type":"emissive","color":[1,1,1],"strength":0}"#;
+        assert!(parse(&scene(valid_flash, emissive, "base")).is_err());
+        let flash_emissive_target = r#"{"match":{"type":"collision","phase":"started","object":"ball"},"flash":{"target":"ball","material":"base","duration":0.2}}"#;
+        assert!(parse(&scene(flash_emissive_target, emissive, "flash")).is_err());
+
+        let without_physics = r#"{
+          "camera":{"position":[0,0,3],"look_at":[0,0,0],"fov_degrees":45},
+          "render":{"width":1,"height":1,"samples":1,"max_bounces":1},
+          "materials":[],"objects":[],
+          "event_reactions":[{"match":{"type":"collision","phase":"started"},"counter":"hits"}]
+        }"#;
+        assert!(parse(without_physics).is_err());
     }
 
     #[test]

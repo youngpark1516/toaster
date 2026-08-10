@@ -1992,6 +1992,7 @@ dependencies = [
  "anyhow",
  "axum",
  "serde",
+ "serde_json",
  "tokio",
  "tokio-stream",
  "tower-http",

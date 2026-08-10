@@ -62,6 +62,26 @@ Neutral events are emitted as structured debug records from
 routes are unchanged; the event workflow does not add or depend on a new
 server endpoint.
 
+The reaction demo adds temporary event-driven material flashes and named
+counters:
+
+```sh
+cargo run --release -p toaster-cli -- stream-preview \
+  scenes/014_physics_event_reactions.json \
+  --host 127.0.0.1 --port 7878 --fps 12 --loop-duration 5
+```
+
+Inspect per-loop and evaluator-session totals through the existing status
+route:
+
+```sh
+curl --fail --silent http://127.0.0.1:7878/status | jq \
+  '{loop_counters, session_counters}'
+```
+
+Loop counters repeat after deterministic replay. Session counters keep growing
+across observed loop cycles but do not double-count a rewind within a cycle.
+
 Each loop resets and deterministically replays the physics world. Physical poses
 repeat while path-tracing noise may differ because render frame indices remain
 monotonic.

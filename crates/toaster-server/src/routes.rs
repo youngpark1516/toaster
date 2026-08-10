@@ -179,6 +179,8 @@ mod tests {
             max_bounces: 6,
             adaptive_sampling: true,
             sample_adjustment: "reducing: over frame budget".to_owned(),
+            loop_counters: [("hits".to_owned(), 2)].into(),
+            session_counters: [("hits".to_owned(), 7)].into(),
         };
         publisher.publish_frame(vec![1, 2, 3].into(), expected.clone());
 
@@ -186,6 +188,9 @@ mod tests {
         let Json(actual) = runtime.block_on(status(State(publisher)));
 
         assert_eq!(actual, Some(expected));
+        let json = serde_json::to_value(actual.unwrap()).unwrap();
+        assert_eq!(json["loop_counters"]["hits"], 2);
+        assert_eq!(json["session_counters"]["hits"], 7);
     }
 
     #[test]
@@ -208,6 +213,8 @@ mod tests {
             max_bounces: 2,
             adaptive_sampling: false,
             sample_adjustment: "complete".to_owned(),
+            loop_counters: Default::default(),
+            session_counters: Default::default(),
         };
         publisher.publish_frame(vec![9, 8, 7].into(), expected.clone());
 

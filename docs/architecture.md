@@ -60,11 +60,30 @@ fixed ticks crossed by that request, while evaluating the same tick twice emits
 no duplicate events. Event-only activity is separate from `SceneChanges` and
 therefore does not cause geometry, BVH, light, or GPU uploads.
 
+Scene-authored event reactions consume that neutral stream after physics
+transforms are applied. The MVP response layer can temporarily swap a concrete
+physics body's material index and increment named counters. It has no Rapier or
+renderer types: GPU and CPU paths see only an ordinary evaluated scene plus a
+neutral counter snapshot. Non-emissive material swaps invalidate the bound
+sphere or triangle data without changing material, light, primitive, or BVH
+counts, so WGSL and GPU buffer layouts remain unchanged.
+
+Loop counters are reconstructed from replayed events. Session counters retain
+telemetry across loops while a per-loop high-water tick prevents rewinds from
+double-counting already observed ticks. Session values therefore describe the
+request history of one evaluator and never affect rendered state. Counter
+snapshots travel through completed GPU frames to the existing preview `/status`
+response; image, video, and benchmark sinks may ignore them.
+
 Loop changes and backward seeks reset the simulation and its active-pair sets,
 then replay from tick zero. The returned event batch marks that reset so a
 consumer can clear its own event-driven state before applying replayed events;
 discarded contacts do not receive synthetic exits. Renderers are allowed to
 ignore event batches.
+
+The same reset clears active material flashes before replay. A flash near a
+loop boundary cannot leak into the next cycle; it reappears only if its matching
+event occurs again in that cycle.
 
 Enabled rigid-body groups have explicit ownership. Dynamic bodies are driven by
 Rapier and static bodies stay fixed, so neither kind may be an animation target.

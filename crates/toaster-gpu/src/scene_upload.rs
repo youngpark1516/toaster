@@ -654,6 +654,7 @@ mod tests {
             physics: None,
             rigid_bodies: Vec::new(),
             triggers: Vec::new(),
+            event_reactions: Vec::new(),
         };
         let gpu_scene = scene_to_gpu(&scene).unwrap();
 
@@ -807,5 +808,44 @@ mod tests {
             source.spheres.len() + source.triangles.len()
         );
         assert_eq!(packed.lights.len(), 53);
+    }
+
+    #[test]
+    fn reaction_material_index_swaps_preserve_gpu_counts_and_lights() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/014_physics_event_reactions.json");
+        let source = toaster_scene::load_scene(path).unwrap();
+        let before = scene_to_gpu(&source).unwrap();
+        let flash = source
+            .event_reactions
+            .iter()
+            .find_map(|reaction| {
+                reaction
+                    .flash
+                    .as_ref()
+                    .filter(|flash| flash.target.as_str() == "ball_red")
+            })
+            .unwrap();
+        let body = source
+            .rigid_bodies
+            .iter()
+            .find(|body| body.id == flash.target)
+            .unwrap();
+        let toaster_scene::ObjectBinding::Sphere { index } = body.binding else {
+            panic!("ball_red must remain an analytic sphere");
+        };
+        let mut evaluated = source.clone();
+        evaluated.spheres[index].material_index = flash.material_index;
+        let after = scene_to_gpu(&evaluated).unwrap();
+
+        assert_eq!(after.spheres.len(), before.spheres.len());
+        assert_eq!(after.triangles.len(), before.triangles.len());
+        assert_eq!(after.materials.len(), before.materials.len());
+        assert_eq!(after.lights.len(), before.lights.len());
+        assert_eq!(after.bvh_primitives.len(), before.bvh_primitives.len());
+        assert_ne!(
+            after.spheres[index].material_index,
+            before.spheres[index].material_index
+        );
     }
 }
