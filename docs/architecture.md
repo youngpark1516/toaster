@@ -106,7 +106,16 @@ declarations are still validated but ownership checks are skipped and no
 backend is constructed.
 
 Dynamic boxes are authored as first-class boxes and expanded into twelve normal
-triangles. A full mixed-BVH rebuild is uploaded whenever sphere or triangle
+triangles. Imported `mesh` objects can now bind one explicit renderer-neutral
+sphere or cuboid proxy to their entire contiguous triangle range. glTF node
+transforms remain baked into authored vertices; the proxy center becomes the
+rigid-body origin, while Rapier sees only the lowered simple collider. Static,
+dynamic, and exclusive-group kinematic mesh bodies therefore reuse the same
+transform, event, reaction, reset, and teleport paths as primitive bodies.
+Multi-material flashes are represented as a temporary range override, so a
+fresh immutable-scene clone restores every triangle's own authored material.
+
+A full mixed-BVH rebuild is uploaded whenever sphere or triangle
 geometry moves. Moving emissive geometry also rebuilds and uploads the light
 list; non-emissive motion reuses the prior light list. This prioritizes
 correctness; BVH refitting is a future optimization.
@@ -128,8 +137,9 @@ kinematic motion for spheres and cuboids. Possible later research backends inclu
 `PinnWaveBackend`, `PinnFluidBackend`, `NeuralSurrogateBackend`, and
 `DifferentiablePhysicsBackend` for PDE-like fields, inverse simulation, or
 learned models. No PINN schema or solver is part of this milestone. Joints,
-constraints, fluids, cloth, soft bodies, fracture, GPU physics, glTF rigid
-bodies, and interactive controls are also outside its scope.
+constraints, fluids, cloth, soft bodies, fracture, GPU physics, dynamic
+triangle-mesh colliders, convex decomposition, skeletal animation, and
+interactive controls are also outside its scope.
 
 ### Explicit host/shader layouts
 

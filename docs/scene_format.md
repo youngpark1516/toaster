@@ -184,7 +184,8 @@ triangles. The generated triangles keep the box material and group.
 
 ### Rigid-body object declaration
 
-Spheres and boxes may contain:
+Spheres, boxes, and imported `mesh` objects may contain rigid-body metadata.
+Primitive spheres and boxes use the inferred `collider` form below:
 
 ```json
 "physics": {
@@ -208,7 +209,7 @@ Spheres and boxes may contain:
 - Initial linear velocity is in meters per second and angular velocity in
   radians per second; all components must be finite.
 
-Triangles and glTF meshes reject physics metadata. All three body kinds support
+Explicit triangle objects reject physics metadata. All three body kinds support
 analytic sphere colliders and boxes support cuboids with half extents `size / 2`.
 Kinematic bodies require a nonempty group. With physics enabled, that group must
 be exclusive to one logical object and targeted by at least one animation track.
@@ -279,6 +280,48 @@ Use `"material": "matte"` to override all imported materials:
   "material": "matte"
 }
 ```
+
+An imported mesh can participate in rigid-body physics through one explicit
+sphere or box proxy. The render mesh and collider remain separate:
+
+```json
+{
+  "id": "visual_crate",
+  "type": "mesh",
+  "path": "../assets/models/physics_crate.gltf",
+  "group": "visual_crate",
+  "physics": {
+    "body": "dynamic",
+    "collider_proxy": {
+      "shape": "box",
+      "center": [-1.5, 3.0, -3.0],
+      "size": [1.2, 1.2, 1.2]
+    },
+    "mass": 2.0
+  }
+}
+```
+
+Sphere proxies use `"shape": "sphere"`, a finite world-space `center`, and a
+finite positive `radius`. Box proxies use a finite world-space `center` and
+finite positive full `size` components. These values describe geometry after
+glTF node transforms have been baked into imported vertices; bounds are never
+fitted automatically. A physics mesh requires an ID and exactly one proxy,
+rejects the primitive `collider` string, and moves every imported node and
+primitive as one rigid triangle range around the proxy center. There is no
+`"type": "gltf"` alias.
+
+Static mesh proxies create fixed colliders without per-frame visual updates.
+Dynamic proxies move and rotate the complete imported range. Kinematic mesh
+proxies follow the same exclusive-group and required-track rules as primitive
+kinematic bodies. Reset restores the imported authored pose and velocities;
+teleport spawn positions refer to the proxy/body center while retaining every
+vertex's authored offset.
+
+Material flashes cover the complete bound mesh range. During a flash every
+triangle uses the flash material; expiry, loop reset, rewind, reset, or teleport
+restores each triangle's individual imported material. All authored materials
+in a flashable mesh and the flash material must be non-emissive.
 
 The override name must exist. Imported texture indices and triangle indices are validated. A triangle using a base-color texture must provide `TEXCOORD_0`. The current importer supports the image formats handled explicitly in `toaster-assets` and rejects unsupported encoded pixel layouts with context.
 

@@ -111,7 +111,7 @@ struct EventReactionState {
     session_counts: BTreeMap<String, u64>,
     highest_tick_by_loop: HashMap<u64, u64>,
     active_flashes: HashMap<PhysicsEntityId, ActiveFlash>,
-    output_materials: HashMap<PhysicsEntityId, usize>,
+    output_flash_materials: HashMap<PhysicsEntityId, Option<usize>>,
 }
 
 impl EventReactionState {
@@ -123,15 +123,9 @@ impl EventReactionState {
                 state.session_counts.entry(counter.clone()).or_insert(0);
             }
             if let Some(flash) = &reaction.flash {
-                let body = source
-                    .rigid_bodies
-                    .iter()
-                    .find(|body| body.id == flash.target)
-                    .context("material flash target has no rigid-body declaration")?;
-                state.output_materials.insert(
-                    flash.target.clone(),
-                    binding_material_index(source, &body.binding)?,
-                );
+                state
+                    .output_flash_materials
+                    .insert(flash.target.clone(), None);
             }
         }
         Ok(state)
@@ -251,18 +245,19 @@ impl EventReactionState {
             .retain(|_, flash| scene_time < flash.expires_at_seconds);
 
         let mut changes = SceneChanges::default();
-        for (target, previous_material) in &mut self.output_materials {
+        for (target, previous_material) in &mut self.output_flash_materials {
             let body = source
                 .rigid_bodies
                 .iter()
                 .find(|body| body.id == *target)
                 .context("material flash target has no rigid-body declaration")?;
-            let authored_material = binding_material_index(source, &body.binding)?;
             let desired_material = self
                 .active_flashes
                 .get(target)
-                .map_or(authored_material, |flash| flash.material_index);
-            apply_binding_material(scene, &body.binding, desired_material)?;
+                .map(|flash| flash.material_index);
+            if let Some(material_index) = desired_material {
+                apply_binding_material(scene, &body.binding, material_index)?;
+            }
             if *previous_material != desired_material {
                 match body.binding {
                     ObjectBinding::Sphere { .. } => changes.spheres = true,
@@ -302,33 +297,6 @@ fn increment_counter(counters: &mut BTreeMap<String, u64>, name: &str) -> Result
         .checked_add(1)
         .context("event reaction counter overflowed")?;
     Ok(())
-}
-
-fn binding_material_index(scene: &Scene, binding: &ObjectBinding) -> Result<usize> {
-    match *binding {
-        ObjectBinding::Sphere { index } => scene
-            .spheres
-            .get(index)
-            .map(|sphere| sphere.material_index)
-            .context("material flash sphere binding is out of range"),
-        ObjectBinding::Triangles { start, count, .. } => {
-            let triangles = scene
-                .triangles
-                .get(start..start.saturating_add(count))
-                .context("material flash triangle binding is out of range")?;
-            let material = triangles
-                .first()
-                .context("material flash triangle binding is empty")?
-                .material_index;
-            if triangles
-                .iter()
-                .any(|triangle| triangle.material_index != material)
-            {
-                bail!("material flash binding does not have one authored material");
-            }
-            Ok(material)
-        }
-    }
 }
 
 fn apply_binding_material(
@@ -963,6 +931,75 @@ mod tests {
         assert!(changes.triangles);
         assert_eq!(evaluated.triangles[0].material_index, 1);
         assert_eq!(source.triangles[0].material_index, 0);
+    }
+
+    #[test]
+    fn reaction_flash_restores_each_authored_material_in_mesh_range() {
+        let mut source = reaction_scene();
+        source.materials.push(Material::Diffuse { albedo: Vec3::X });
+        let mut second = source.triangles[0].clone();
+        second.material_index = 2;
+        source.triangles.push(second);
+        source
+            .triangle_attributes
+            .push(TriangleAttributes::default());
+        source.rigid_bodies[1].binding = ObjectBinding::Triangles {
+            start: 0,
+            count: 2,
+            pivot: Vec3::new(0.0, -0.1, 0.0),
+        };
+        source.event_reactions.push(EventReactionDeclaration {
+            event_matcher: PhysicsEventMatcher::Collision {
+                phase: CollisionPhase::Started,
+                object: Some(PhysicsEntityId::new("ball").unwrap()),
+                other: Some(PhysicsEntityId::new("floor").unwrap()),
+            },
+            flash: Some(MaterialFlashDeclaration {
+                target: PhysicsEntityId::new("floor").unwrap(),
+                material_index: 1,
+                duration_seconds: 0.2,
+            }),
+            counter: None,
+            reset: None,
+            teleport: None,
+        });
+
+        let mut state = EventReactionState::new(&source).unwrap();
+        let mut flashed = source.clone();
+        state
+            .evaluate(
+                &source,
+                &mut flashed,
+                PhysicsEvaluationRequest {
+                    scene_time_seconds: 0.15,
+                    fixed_tick: 9,
+                    loop_cycle: 0,
+                },
+                &PhysicsEventBatch {
+                    reset: false,
+                    events: vec![collision_event(0, 6, 0.1)],
+                },
+            )
+            .unwrap();
+        assert_eq!(flashed.triangles[0].material_index, 1);
+        assert_eq!(flashed.triangles[1].material_index, 1);
+
+        let mut restored = source.clone();
+        let changes = state
+            .evaluate(
+                &source,
+                &mut restored,
+                PhysicsEvaluationRequest {
+                    scene_time_seconds: 0.31,
+                    fixed_tick: 19,
+                    loop_cycle: 0,
+                },
+                &PhysicsEventBatch::default(),
+            )
+            .unwrap();
+        assert!(changes.triangles);
+        assert_eq!(restored.triangles[0].material_index, 0);
+        assert_eq!(restored.triangles[1].material_index, 2);
     }
 
     #[test]
@@ -1712,6 +1749,92 @@ mod tests {
                         && evaluated.group == authored.group
                 )
         );
+    }
+
+    #[test]
+    fn gltf_proxy_ranges_move_rigidly_and_static_mesh_stays_authored() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/016_physics_gltf_proxies.json");
+        let source = toaster_scene::load_scene(path).unwrap();
+        let dynamic = source
+            .rigid_bodies
+            .iter()
+            .find(|body| body.id.as_str() == "visual_crate")
+            .unwrap();
+        let static_mesh = source
+            .rigid_bodies
+            .iter()
+            .find(|body| body.id.as_str() == "terrain_pedestal")
+            .unwrap();
+        let sphere_proxy = source
+            .rigid_bodies
+            .iter()
+            .find(|body| body.id.as_str() == "faceted_orb")
+            .unwrap();
+        let kinematic = source
+            .rigid_bodies
+            .iter()
+            .find(|body| body.id.as_str() == "mesh_pusher")
+            .unwrap();
+        let (dynamic_start, dynamic_count) = match dynamic.binding {
+            ObjectBinding::Triangles { start, count, .. } => (start, count),
+            ObjectBinding::Sphere { .. } => panic!("mesh must bind triangles"),
+        };
+        let (static_start, static_count) = match static_mesh.binding {
+            ObjectBinding::Triangles { start, count, .. } => (start, count),
+            ObjectBinding::Sphere { .. } => panic!("mesh must bind triangles"),
+        };
+        let sphere_proxy_start = match sphere_proxy.binding {
+            ObjectBinding::Triangles { start, .. } => start,
+            ObjectBinding::Sphere { .. } => panic!("mesh must bind triangles"),
+        };
+        let kinematic_start = match kinematic.binding {
+            ObjectBinding::Triangles { start, .. } => start,
+            ObjectBinding::Sphere { .. } => panic!("mesh must bind triangles"),
+        };
+        let authored_materials = source.triangles[dynamic_start..dynamic_start + dynamic_count]
+            .iter()
+            .map(|triangle| triangle.material_index)
+            .collect::<Vec<_>>();
+
+        let mut evaluator = PhysicsSceneEvaluator::new(source.clone()).unwrap();
+        let evaluated = evaluator.evaluate(request(0.75, 0)).unwrap();
+
+        assert!(evaluated.changes.triangles);
+        assert_eq!(evaluated.scene.triangles.len(), source.triangles.len());
+        assert_ne!(
+            evaluated.scene.triangles[dynamic_start].vertices,
+            source.triangles[dynamic_start].vertices
+        );
+        assert_ne!(
+            evaluated.scene.triangles[sphere_proxy_start].vertices,
+            source.triangles[sphere_proxy_start].vertices
+        );
+        assert_ne!(
+            evaluated.scene.triangles[kinematic_start].vertices,
+            source.triangles[kinematic_start].vertices
+        );
+        assert_eq!(
+            evaluated.scene.triangles[dynamic_start..dynamic_start + dynamic_count]
+                .iter()
+                .map(|triangle| triangle.material_index)
+                .collect::<Vec<_>>(),
+            authored_materials
+        );
+        assert!(
+            evaluated.scene.triangles[static_start..static_start + static_count]
+                .iter()
+                .zip(&source.triangles[static_start..static_start + static_count])
+                .all(|(evaluated, authored)| evaluated.vertices == authored.vertices)
+        );
+        assert!(evaluator
+            .source_scene()
+            .triangles
+            .iter()
+            .zip(&source.triangles)
+            .all(|(actual, authored)| actual.vertices == authored.vertices
+                && actual.material_index == authored.material_index
+                && actual.group == authored.group));
     }
 
     #[test]

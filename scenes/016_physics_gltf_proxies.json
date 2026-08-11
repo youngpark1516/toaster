@@ -1,0 +1,157 @@
+{
+  "camera": {
+    "position": [0.0, 4.2, 10.5],
+    "look_at": [0.0, 1.4, -3.2],
+    "up": [0.0, 1.0, 0.0],
+    "fov_degrees": 43.0
+  },
+  "render": {
+    "width": 640,
+    "height": 360,
+    "samples": 4,
+    "max_bounces": 8,
+    "background": "black"
+  },
+  "physics": {
+    "enabled": true,
+    "type": "rigid_body",
+    "gravity": [0.0, -9.81, 0.0],
+    "timestep": 0.016666666666666666,
+    "substeps": 2
+  },
+  "materials": [
+    { "name": "room_white", "type": "diffuse", "albedo": [0.72, 0.72, 0.68] },
+    { "name": "room_red", "type": "diffuse", "albedo": [0.58, 0.06, 0.05] },
+    { "name": "room_green", "type": "diffuse", "albedo": [0.06, 0.40, 0.12] },
+    { "name": "terrain", "type": "diffuse", "albedo": [0.28, 0.30, 0.34] },
+    { "name": "zone_blue", "type": "diffuse", "albedo": [0.04, 0.36, 0.92] },
+    { "name": "zone_red", "type": "diffuse", "albedo": [0.92, 0.08, 0.04] },
+    { "name": "impact_flash", "type": "diffuse", "albedo": [1.0, 0.94, 0.08] },
+    { "name": "light", "type": "emissive", "color": [1.0, 0.94, 0.84], "strength": 18.0 }
+  ],
+  "objects": [
+    {
+      "id": "terrain_pedestal",
+      "type": "mesh",
+      "path": "../assets/benchmarks/terrain_grid_8.gltf",
+      "material": "terrain",
+      "group": "terrain_pedestal",
+      "physics": {
+        "body": "static",
+        "collider_proxy": { "shape": "box", "center": [0.0, -0.18, 0.0], "size": [8.0, 0.36, 8.0] },
+        "friction": 0.82,
+        "restitution": 0.04
+      }
+    },
+    {
+      "id": "visual_crate",
+      "type": "mesh",
+      "path": "../assets/models/physics_crate.gltf",
+      "group": "visual_crate",
+      "physics": {
+        "body": "dynamic",
+        "collider_proxy": { "shape": "box", "center": [-1.5, 3.0, -3.0], "size": [1.2, 1.2, 1.2] },
+        "mass": 2.0,
+        "friction": 0.7,
+        "restitution": 0.15,
+        "initial_velocity": [1.1, 0.0, 0.0],
+        "initial_angular_velocity": [0.5, 1.0, 0.25]
+      }
+    },
+    {
+      "id": "faceted_orb",
+      "type": "mesh",
+      "path": "../assets/models/physics_orb.gltf",
+      "group": "faceted_orb",
+      "physics": {
+        "body": "dynamic",
+        "collider_proxy": { "shape": "sphere", "center": [1.2, 4.0, -3.2], "radius": 0.68 },
+        "mass": 1.0,
+        "friction": 0.35,
+        "restitution": 0.42,
+        "initial_angular_velocity": [0.5, 0.0, 1.5]
+      }
+    },
+    {
+      "id": "mesh_pusher",
+      "type": "mesh",
+      "path": "../assets/models/physics_pusher.gltf",
+      "group": "mesh_pusher_motion",
+      "physics": {
+        "body": "kinematic",
+        "collider_proxy": { "shape": "box", "center": [-2.4, 0.65, -4.6], "size": [1.4, 1.0, 1.4] },
+        "friction": 0.9,
+        "restitution": 0.08
+      }
+    },
+
+    { "id": "room_back", "type": "box", "center": [0.0, 3.0, -7.0], "size": [8.0, 6.0, 0.2], "material": "room_white", "physics": { "body": "static" } },
+    { "id": "room_left", "type": "box", "center": [-4.1, 3.0, -3.0], "size": [0.2, 6.0, 8.0], "material": "room_red", "physics": { "body": "static" } },
+    { "id": "room_right", "type": "box", "center": [4.1, 3.0, -3.0], "size": [0.2, 6.0, 8.0], "material": "room_green", "physics": { "body": "static" } },
+    { "type": "triangle", "vertices": [[-1.5, 5.9, -2.0], [1.5, 5.9, -4.3], [1.5, 5.9, -2.0]], "material": "light" },
+    { "type": "triangle", "vertices": [[-1.5, 5.9, -2.0], [-1.5, 5.9, -4.3], [1.5, 5.9, -4.3]], "material": "light" },
+
+    { "type": "box", "center": [-0.25, 0.75, -3.0], "size": [0.06, 1.5, 1.6], "material": "zone_blue" },
+    { "type": "box", "center": [0.85, 0.75, -3.0], "size": [0.06, 1.5, 1.6], "material": "zone_blue" },
+    { "type": "sphere", "center": [1.2, 2.55, -3.2], "radius": 0.12, "material": "zone_red" },
+    { "type": "sphere", "center": [2.5, 3.4, -4.6], "radius": 0.13, "material": "zone_blue" }
+  ],
+  "triggers": [
+    { "id": "goal_zone", "shape": "box", "center": [0.3, 0.75, -3.0], "size": [1.0, 1.5, 1.5] },
+    { "id": "reset_zone", "shape": "sphere", "center": [1.2, 2.55, -3.2], "radius": 0.55 }
+  ],
+  "spawn_points": [
+    {
+      "name": "crate_spawn",
+      "position": [2.5, 3.4, -4.6],
+      "rotation": { "axis": [0.0, 1.0, 0.0], "degrees": 30.0 }
+    }
+  ],
+  "event_reactions": [
+    {
+      "match": { "type": "collision", "phase": "started", "object": "visual_crate", "other": "terrain_pedestal" },
+      "flash": { "target": "visual_crate", "material": "impact_flash", "duration": 0.3 },
+      "counter": "crate_impacts"
+    },
+    {
+      "match": { "type": "trigger", "phase": "entered", "trigger": "goal_zone", "object": "visual_crate" },
+      "teleport": { "target": "visual_crate", "spawn": "crate_spawn", "velocity": "clear" },
+      "counter": "goal_teleports"
+    },
+    {
+      "match": { "type": "trigger", "phase": "entered", "trigger": "reset_zone", "object": "faceted_orb" },
+      "reset": { "target": "faceted_orb" },
+      "counter": "orb_resets"
+    },
+    {
+      "match": { "type": "collision", "phase": "started", "object": "*", "other": "*" },
+      "counter": "collision_starts"
+    }
+  ],
+  "animation": {
+    "tracks": [
+      {
+        "type": "translation",
+        "target": { "type": "group", "name": "mesh_pusher_motion" },
+        "interpolation": "linear",
+        "keyframes": [
+          { "time": 0.0, "value": [0.0, 0.0, 0.0] },
+          { "time": 2.5, "value": [4.2, 0.0, 0.0] },
+          { "time": 5.0, "value": [0.0, 0.0, 0.0] }
+        ]
+      },
+      {
+        "type": "rotation",
+        "target": { "type": "camera" },
+        "axis": [0.0, 1.0, 0.0],
+        "pivot": [0.0, 1.4, -3.2],
+        "interpolation": "linear",
+        "keyframes": [
+          { "time": 0.0, "degrees": 0.0 },
+          { "time": 2.5, "degrees": 3.0 },
+          { "time": 5.0, "degrees": 0.0 }
+        ]
+      }
+    ]
+  }
+}

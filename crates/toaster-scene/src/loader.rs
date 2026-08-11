@@ -244,7 +244,7 @@ enum ObjectFile {
     },
     /// Imported glTF/GLB triangle mesh.
     Mesh {
-        /// Optional stable identity reserved for future scene hooks.
+        /// Optional stable identity; required when physics is present.
         id: Option<String>,
         /// Absolute path or path relative to the scene file.
         path: PathBuf,
@@ -252,7 +252,7 @@ enum ObjectFile {
         material: Option<String>,
         /// Optional animation group assigned to all imported triangles.
         group: Option<String>,
-        /// Rejected in the rigid-body MVP.
+        /// Optional renderer-neutral rigid-body declaration using a proxy collider.
         physics: Option<RigidBodyFile>,
     },
 }
@@ -418,6 +418,8 @@ struct RigidBodyFile {
     body: RigidBodyKindFile,
     /// Optional explicit shape assertion.
     collider: Option<ColliderKindFile>,
+    /// Required simple proxy shape for imported mesh visuals.
+    collider_proxy: Option<ColliderProxyFile>,
     /// Optional dynamic mass.
     mass: Option<f32>,
     /// Coulomb friction coefficient.
@@ -430,6 +432,26 @@ struct RigidBodyFile {
     initial_velocity: Option<Vec3>,
     /// Optional initial angular velocity.
     initial_angular_velocity: Option<Vec3>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "shape", rename_all = "snake_case", deny_unknown_fields)]
+/// Simple collider geometry authored independently from an imported mesh.
+enum ColliderProxyFile {
+    /// Axis-aligned box proxy with full extents.
+    Box {
+        /// Absolute world-space proxy center.
+        center: Vec3,
+        /// Positive full extents.
+        size: Vec3,
+    },
+    /// Spherical proxy.
+    Sphere {
+        /// Absolute world-space proxy center.
+        center: Vec3,
+        /// Positive radius.
+        radius: f32,
+    },
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -700,12 +722,9 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
                 path,
                 material,
                 group,
-                physics,
+                physics: body,
             } => {
-                validate_object_id(id, false, &mut entity_ids)?;
-                if physics.is_some() {
-                    bail!("mesh objects do not support physics in the rigid-body MVP");
-                }
+                let id = validate_object_id(id, body.is_some(), &mut entity_ids)?;
                 let material_override = material
                     .as_ref()
                     .map(|material| {
@@ -715,6 +734,7 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
                     })
                     .transpose()?;
                 let group = validate_group(group)?;
+                let start = triangles.len();
                 let mesh_path = if path.is_absolute() {
                     path
                 } else {
@@ -812,6 +832,20 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
                         normals,
                         tex_coords,
                     });
+                }
+                if let Some(body) = body {
+                    ensure_physics_block(&physics)?;
+                    let count = triangles.len() - start;
+                    if count == 0 {
+                        bail!("physics mesh must import at least one triangle");
+                    }
+                    rigid_bodies.push(validate_mesh_rigid_body(
+                        body,
+                        id.expect("physics mesh id was required and validated"),
+                        start,
+                        count,
+                        group,
+                    )?);
                 }
             }
         }
@@ -942,6 +976,9 @@ fn validate_rigid_body(
     binding: ObjectBinding,
     group: Option<String>,
 ) -> Result<RigidBodyDeclaration> {
+    if file.collider_proxy.is_some() {
+        bail!("sphere and box objects do not accept physics collider_proxy");
+    }
     if file
         .collider
         .is_some_and(|collider| collider != expected_collider)
@@ -954,6 +991,66 @@ fn validate_rigid_body(
             }
         );
     }
+    finish_rigid_body(file, id, collider, authored_origin, binding, group)
+}
+
+/// Validates a mesh proxy and binds the complete imported triangle range to it.
+fn validate_mesh_rigid_body(
+    mut file: RigidBodyFile,
+    id: PhysicsEntityId,
+    start: usize,
+    count: usize,
+    group: Option<String>,
+) -> Result<RigidBodyDeclaration> {
+    if file.collider.is_some() {
+        bail!("mesh physics uses collider_proxy instead of the collider field");
+    }
+    let proxy = file
+        .collider_proxy
+        .take()
+        .context("mesh physics requires a collider_proxy")?;
+    let (collider, center) = match proxy {
+        ColliderProxyFile::Box { center, size } => {
+            if !center.is_finite() || !size.is_finite() || size.cmple(Vec3::ZERO).any() {
+                bail!("mesh box proxy center must be finite and size components must be positive");
+            }
+            (
+                ColliderShape::Cuboid {
+                    half_extents: size * 0.5,
+                },
+                center,
+            )
+        }
+        ColliderProxyFile::Sphere { center, radius } => {
+            if !center.is_finite() || !radius.is_finite() || radius <= 0.0 {
+                bail!("mesh sphere proxy radius must be positive and its center must be finite");
+            }
+            (ColliderShape::Sphere { radius }, center)
+        }
+    };
+    finish_rigid_body(
+        file,
+        id,
+        collider,
+        center,
+        ObjectBinding::Triangles {
+            start,
+            count,
+            pivot: center,
+        },
+        group,
+    )
+}
+
+/// Validates body properties shared by primitives and imported visual meshes.
+fn finish_rigid_body(
+    file: RigidBodyFile,
+    id: PhysicsEntityId,
+    collider: ColliderShape,
+    authored_origin: Vec3,
+    binding: ObjectBinding,
+    group: Option<String>,
+) -> Result<RigidBodyDeclaration> {
     if !file.friction.is_finite() || file.friction < 0.0 {
         bail!("physics friction must be finite and non-negative");
     }
@@ -1222,9 +1319,12 @@ fn validate_event_reaction(
                 .iter()
                 .find(|body| body.id == target)
                 .context("material flash target is not a rendered physics body")?;
-            let authored_material =
-                binding_material_index(&body.binding, context.spheres, context.triangles)?;
-            if is_emissive_material(context.materials, authored_material) {
+            let authored_materials =
+                binding_material_indices(&body.binding, context.spheres, context.triangles)?;
+            if authored_materials
+                .into_iter()
+                .any(|material| is_emissive_material(context.materials, material))
+            {
                 bail!("material flash targets must use non-emissive authored materials");
             }
             let material_index = context
@@ -1374,32 +1474,28 @@ fn validate_trigger_filter(
     Ok(Some(id))
 }
 
-/// Returns the single authored material shared by a rigid-body render binding.
-fn binding_material_index(
+/// Returns every authored material used by a rigid-body render binding.
+fn binding_material_indices(
     binding: &ObjectBinding,
     spheres: &[Sphere],
     triangles: &[Triangle],
-) -> Result<usize> {
+) -> Result<Vec<usize>> {
     match *binding {
         ObjectBinding::Sphere { index } => spheres
             .get(index)
-            .map(|sphere| sphere.material_index)
+            .map(|sphere| vec![sphere.material_index])
             .context("material flash sphere binding is out of range"),
         ObjectBinding::Triangles { start, count, .. } => {
             let triangles = triangles
                 .get(start..start.saturating_add(count))
                 .context("material flash triangle binding is out of range")?;
-            let first = triangles
-                .first()
-                .context("material flash triangle binding is empty")?
-                .material_index;
-            if triangles
-                .iter()
-                .any(|triangle| triangle.material_index != first)
-            {
-                bail!("material flash binding must have one authored material");
+            if triangles.is_empty() {
+                bail!("material flash triangle binding is empty");
             }
-            Ok(first)
+            Ok(triangles
+                .iter()
+                .map(|triangle| triangle.material_index)
+                .collect())
         }
     }
 }
@@ -2415,5 +2511,129 @@ mod tests {
         for object in invalid_bodies {
             assert!(parse(&scene_json(r#"{"type":"rigid_body"}"#, object)).is_err());
         }
+    }
+
+    #[test]
+    fn loads_mesh_bodies_with_box_and_sphere_proxies() {
+        let asset_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let scene = build_scene(
+            serde_json::from_str(
+                r#"{
+                    "camera":{"position":[0,0,8],"look_at":[0,1,-3],"fov_degrees":45},
+                    "render":{"width":1,"height":1,"samples":1,"max_bounces":1},
+                    "physics":{"type":"rigid_body"},
+                    "materials":[],
+                    "objects":[
+                      {"id":"crate","type":"mesh","path":"assets/models/physics_crate.gltf","group":"crate",
+                       "physics":{"body":"dynamic","collider_proxy":{"shape":"box","center":[-1.5,3,-3],"size":[1.2,1.2,1.2]}}},
+                      {"id":"orb","type":"mesh","path":"assets/models/physics_crate.gltf","group":"orb",
+                       "physics":{"body":"dynamic","collider_proxy":{"shape":"sphere","center":[-1.5,3,-3],"radius":0.7}}},
+                      {"id":"pedestal","type":"mesh","path":"assets/models/physics_crate.gltf","group":"pedestal",
+                       "physics":{"body":"static","collider_proxy":{"shape":"box","center":[-1.5,3,-3],"size":[1.2,1.2,1.2]}}},
+                      {"id":"pusher","type":"mesh","path":"assets/models/physics_crate.gltf","group":"pusher",
+                       "physics":{"body":"kinematic","collider_proxy":{"shape":"box","center":[-1.5,3,-3],"size":[1.2,1.2,1.2]}}}
+                    ],
+                    "animation":{"tracks":[{"type":"translation","target":{"type":"group","name":"pusher"},
+                      "interpolation":"linear","keyframes":[{"time":0,"value":[0,0,0]},{"time":1,"value":[1,0,0]}]}]}
+                }"#,
+            )
+            .unwrap(),
+            &asset_root,
+        )
+        .unwrap();
+
+        assert_eq!(scene.rigid_bodies.len(), 4);
+        assert_eq!(scene.triangles.len(), 48);
+        assert!(matches!(
+            scene.rigid_bodies[0].collider,
+            ColliderShape::Cuboid { half_extents } if half_extents == Vec3::splat(0.6)
+        ));
+        assert!(matches!(
+            scene.rigid_bodies[1].collider,
+            ColliderShape::Sphere { radius } if radius == 0.7
+        ));
+        assert!(matches!(
+            scene.rigid_bodies[0].binding,
+            ObjectBinding::Triangles { start: 0, count: 12, pivot }
+                if pivot == Vec3::new(-1.5, 3.0, -3.0)
+        ));
+        assert_eq!(
+            scene.rigid_bodies[0].initial_transform.rotation,
+            Quat::IDENTITY
+        );
+        assert_eq!(scene.triangles[0].vertices[0], Vec3::new(-2.1, 2.4, -3.6));
+        assert_ne!(
+            scene.triangles[0].material_index,
+            scene.triangles[6].material_index
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_mesh_proxy_contracts_and_gltf_alias() {
+        let asset_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let scene_json = |object: &str| {
+            format!(
+                r#"{{
+                    "camera":{{"position":[0,0,8],"look_at":[0,1,-3],"fov_degrees":45}},
+                    "render":{{"width":1,"height":1,"samples":1,"max_bounces":1}},
+                    "physics":{{"type":"rigid_body"}},
+                    "materials":[{{"name":"m","type":"diffuse","albedo":[1,1,1]}}],
+                    "objects":[{object}]
+                }}"#
+            )
+        };
+        for object in [
+            r#"{"id":"m","type":"mesh","path":"assets/models/physics_crate.gltf","physics":{"body":"dynamic"}}"#,
+            r#"{"id":"m","type":"mesh","path":"assets/models/physics_crate.gltf","physics":{"body":"dynamic","collider":"cuboid","collider_proxy":{"shape":"box","center":[0,0,0],"size":[1,1,1]}}}"#,
+            r#"{"id":"m","type":"mesh","path":"assets/models/physics_crate.gltf","physics":{"body":"dynamic","collider_proxy":{"shape":"box","center":[0,0,0],"size":[1,0,1]}}}"#,
+            r#"{"id":"m","type":"mesh","path":"assets/models/physics_crate.gltf","physics":{"body":"dynamic","collider_proxy":{"shape":"sphere","center":[0,0,0],"radius":0}}}"#,
+            r#"{"id":"m","type":"mesh","path":"assets/models/physics_crate.gltf","physics":{"body":"dynamic","collider_proxy":{"shape":"sphere","center":[0,0,0],"radius":1,"extra":true}}}"#,
+            r#"{"id":"s","type":"sphere","center":[0,0,0],"radius":1,"material":"m","physics":{"body":"dynamic","collider_proxy":{"shape":"sphere","center":[0,0,0],"radius":1}}}"#,
+            r#"{"id":"m","type":"gltf","path":"assets/models/physics_crate.gltf"}"#,
+        ] {
+            let result = serde_json::from_str(&scene_json(object))
+                .map_err(anyhow::Error::from)
+                .and_then(|file| build_scene(file, &asset_root));
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn loads_gltf_proxy_demo_with_stable_ranges_and_materials() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/016_physics_gltf_proxies.json");
+        let scene = load_scene(path).unwrap();
+        let crate_body = scene
+            .rigid_bodies
+            .iter()
+            .find(|body| body.id.as_str() == "visual_crate")
+            .unwrap();
+        let ObjectBinding::Triangles {
+            start,
+            count,
+            pivot,
+        } = crate_body.binding
+        else {
+            panic!("mesh crate must bind a triangle range");
+        };
+
+        assert_eq!(count, 12);
+        assert_eq!(pivot, Vec3::new(-1.5, 3.0, -3.0));
+        assert!(scene.triangles[start..start + count]
+            .iter()
+            .all(|triangle| triangle.group.as_deref() == Some("visual_crate")));
+        assert!(scene.triangles[start..start + count]
+            .windows(2)
+            .any(|pair| pair[0].material_index != pair[1].material_index));
+        assert!(scene.rigid_bodies.iter().any(
+            |body| body.id.as_str() == "terrain_pedestal" && body.body == RigidBodyKind::Static
+        ));
+        assert!(
+            scene
+                .rigid_bodies
+                .iter()
+                .any(|body| body.id.as_str() == "mesh_pusher"
+                    && body.body == RigidBodyKind::Kinematic)
+        );
     }
 }
