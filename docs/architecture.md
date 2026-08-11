@@ -22,7 +22,7 @@ The frame pipeline is:
 ```text
 immutable base scene
   -> allowed animation evaluation
-  -> backend-neutral physics evaluation + event batch
+  -> fixed-tick physics + neutral event/action feedback
   -> evaluated renderer-neutral scene
   -> GPU packing/BVH/upload
   -> render/output
@@ -61,8 +61,9 @@ no duplicate events. Event-only activity is separate from `SceneChanges` and
 therefore does not cause geometry, BVH, light, or GPU uploads.
 
 Scene-authored event reactions consume that neutral stream after physics
-transforms are applied. The MVP response layer can temporarily swap a concrete
-physics body's material index and increment named counters. It has no Rapier or
+ticks. The response layer can temporarily swap a concrete physics body's
+material index, increment named counters, and issue neutral dynamic-body state
+commands for authored reset or named-spawn teleport. It has no Rapier or
 renderer types: GPU and CPU paths see only an ordinary evaluated scene plus a
 neutral counter snapshot. Non-emissive material swaps invalidate the bound
 sphere or triangle data without changing material, light, primitive, or BVH
@@ -84,6 +85,15 @@ ignore event batches.
 The same reset clears active material flashes before replay. A flash near a
 loop boundary cannot leak into the next cycle; it reappears only if its matching
 event occurs again in that cycle.
+
+Scenes with motion actions are stepped one nominal tick at a time. Events from
+each tick are matched before the next tick advances, and resulting reset or
+teleport commands carry only stable IDs, neutral poses, and velocity policy
+through `PhysicsBackend`. Rapier privately resolves handles, changes the body
+state, clears forces/torques, and wakes it. No secondary event is synthesized
+during action application; the next tick detects any resulting contact or
+sensor transition. This ordering also makes incremental playback equivalent to
+reset-and-replay when one rendered frame crosses many fixed ticks.
 
 Enabled rigid-body groups have explicit ownership. Dynamic bodies are driven by
 Rapier and static bodies stay fixed, so neither kind may be an animation target.

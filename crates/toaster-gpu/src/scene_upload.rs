@@ -654,6 +654,7 @@ mod tests {
             physics: None,
             rigid_bodies: Vec::new(),
             triggers: Vec::new(),
+            spawn_points: Vec::new(),
             event_reactions: Vec::new(),
         };
         let gpu_scene = scene_to_gpu(&scene).unwrap();
@@ -846,6 +847,22 @@ mod tests {
         assert_ne!(
             after.spheres[index].material_index,
             before.spheres[index].material_index
+        );
+    }
+
+    #[test]
+    fn spawn_points_and_motion_actions_add_no_gpu_primitives() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/015_physics_reset_teleport.json");
+        let source = toaster_scene::load_scene(path).unwrap();
+        let packed = scene_to_gpu(&source).unwrap();
+
+        assert_eq!(source.spawn_points.len(), 1);
+        assert_eq!(packed.spheres.len(), source.spheres.len());
+        assert_eq!(packed.triangles.len(), source.triangles.len());
+        assert_eq!(
+            packed.bvh_primitives.len(),
+            source.spheres.len() + source.triangles.len()
         );
     }
 }

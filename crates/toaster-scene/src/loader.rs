@@ -8,13 +8,14 @@ use crate::{
     physics::{
         ColliderShape, CollisionPhase, EventReactionDeclaration, MaterialFlashDeclaration,
         ObjectBinding, PhysicsEntityId, PhysicsEventMatcher, PhysicsSettings, PhysicsType,
-        RigidBodyDeclaration, RigidBodyKind, TriggerDeclaration, TriggerPhase,
+        ResetBodyDeclaration, RigidBodyDeclaration, RigidBodyKind, SpawnPointDeclaration,
+        TeleportBodyDeclaration, TeleportVelocity, TriggerDeclaration, TriggerPhase,
     },
     scene::{Background, CameraSettings, RenderSettings, Scene},
     texture::Texture,
 };
 use anyhow::{bail, Context, Result};
-use glam::Vec3;
+use glam::{Quat, Vec3};
 use serde::Deserialize;
 use std::{
     collections::{HashMap, HashSet},
@@ -40,6 +41,9 @@ struct SceneFile {
     /// Optional invisible fixed trigger sensors.
     #[serde(default)]
     triggers: Vec<TriggerFile>,
+    /// Optional named absolute destinations for teleport actions.
+    #[serde(default)]
+    spawn_points: Vec<SpawnPointFile>,
     /// Optional renderer-neutral event response declarations.
     #[serde(default)]
     event_reactions: Vec<EventReactionFile>,
@@ -288,6 +292,64 @@ struct EventReactionFile {
     flash: Option<MaterialFlashFile>,
     /// Optional counter name incremented by each matching event.
     counter: Option<String>,
+    /// Optional authored-state reset action.
+    reset: Option<ResetBodyFile>,
+    /// Optional named-spawn teleport action.
+    teleport: Option<TeleportBodyFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Raw named teleport destination.
+struct SpawnPointFile {
+    /// Nonempty scene-local destination name.
+    name: String,
+    /// Absolute world-space rigid-body origin.
+    position: Vec3,
+    /// Optional absolute axis-angle orientation.
+    rotation: Option<SpawnRotationFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Raw absolute axis-angle orientation for a spawn point.
+struct SpawnRotationFile {
+    /// Finite nonzero world-space axis.
+    axis: Vec3,
+    /// Finite angle in degrees.
+    degrees: f32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Raw reset action.
+struct ResetBodyFile {
+    /// Concrete dynamic physics body ID.
+    target: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Raw teleport action.
+struct TeleportBodyFile {
+    /// Concrete dynamic physics body ID.
+    target: String,
+    /// Existing named spawn point.
+    spawn: String,
+    /// Clear or preserve both linear and angular velocity.
+    #[serde(default)]
+    velocity: TeleportVelocityFile,
+}
+
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+/// Serialized teleport velocity policy.
+enum TeleportVelocityFile {
+    /// Zero both velocities.
+    #[default]
+    Clear,
+    /// Retain both velocities.
+    Preserve,
 }
 
 #[derive(Deserialize)]
@@ -465,6 +527,9 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
     if !file.triggers.is_empty() {
         ensure_physics_block(&physics)?;
     }
+    if !file.spawn_points.is_empty() {
+        ensure_physics_block(&physics)?;
+    }
     if !file.event_reactions.is_empty() {
         ensure_physics_block(&physics)?;
     }
@@ -555,6 +620,7 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
                         id.expect("physics object id was required and validated"),
                         ColliderKindFile::Sphere,
                         ColliderShape::Sphere { radius },
+                        center,
                         ObjectBinding::Sphere {
                             index: sphere_index,
                         },
@@ -597,6 +663,7 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
                         ColliderShape::Cuboid {
                             half_extents: size * 0.5,
                         },
+                        center,
                         ObjectBinding::Triangles {
                             start,
                             count: 12,
@@ -756,20 +823,26 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
         .map(|trigger| validate_trigger(trigger, &mut entity_ids))
         .collect::<Result<Vec<_>>>()?;
 
+    let mut spawn_names = HashSet::new();
+    let spawn_points = file
+        .spawn_points
+        .into_iter()
+        .map(|spawn| validate_spawn_point(spawn, &mut spawn_names))
+        .collect::<Result<Vec<_>>>()?;
+
+    let reaction_context = EventReactionValidationContext {
+        rigid_bodies: &rigid_bodies,
+        triggers: &triggers,
+        material_names: &material_names,
+        materials: &materials,
+        spheres: &spheres,
+        triangles: &triangles,
+        spawn_points: &spawn_points,
+    };
     let event_reactions = file
         .event_reactions
         .into_iter()
-        .map(|reaction| {
-            validate_event_reaction(
-                reaction,
-                &rigid_bodies,
-                &triggers,
-                &material_names,
-                &materials,
-                &spheres,
-                &triangles,
-            )
-        })
+        .map(|reaction| validate_event_reaction(reaction, &reaction_context))
         .collect::<Result<Vec<_>>>()?;
 
     let (background, environment) = match file.render.background {
@@ -822,6 +895,7 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
         physics,
         rigid_bodies,
         triggers,
+        spawn_points,
         event_reactions,
     };
     validate_animation(&scene)?;
@@ -853,7 +927,7 @@ fn validate_physics_settings(file: PhysicsFile) -> Result<PhysicsSettings> {
 /// Prevents per-object declarations from silently doing nothing without a world block.
 fn ensure_physics_block(physics: &Option<PhysicsSettings>) -> Result<()> {
     if physics.is_none() {
-        bail!("object physics declarations require a top-level physics block");
+        bail!("physics declarations require a top-level physics block");
     }
     Ok(())
 }
@@ -864,6 +938,7 @@ fn validate_rigid_body(
     id: PhysicsEntityId,
     expected_collider: ColliderKindFile,
     collider: ColliderShape,
+    authored_origin: Vec3,
     binding: ObjectBinding,
     group: Option<String>,
 ) -> Result<RigidBodyDeclaration> {
@@ -940,6 +1015,10 @@ fn validate_rigid_body(
         restitution: file.restitution,
         initial_velocity,
         initial_angular_velocity,
+        initial_transform: crate::RigidTransform {
+            translation: authored_origin,
+            rotation: Quat::IDENTITY,
+        },
         binding,
         group,
     })
@@ -1000,18 +1079,72 @@ fn validate_trigger(
     })
 }
 
+/// Validates one named absolute teleport destination.
+fn validate_spawn_point(
+    file: SpawnPointFile,
+    names: &mut HashSet<String>,
+) -> Result<SpawnPointDeclaration> {
+    if file.name.is_empty() {
+        bail!("spawn point name must not be empty");
+    }
+    if !names.insert(file.name.clone()) {
+        bail!("duplicate spawn point name '{}'", file.name);
+    }
+    if !file.position.is_finite() {
+        bail!("spawn point '{}' position must be finite", file.name);
+    }
+    let rotation = match file.rotation {
+        Some(rotation) => {
+            if !rotation.axis.is_finite() || rotation.axis.length_squared() <= f32::EPSILON {
+                bail!(
+                    "spawn point '{}' rotation axis must be finite and nonzero",
+                    file.name
+                );
+            }
+            if !rotation.degrees.is_finite() {
+                bail!(
+                    "spawn point '{}' rotation degrees must be finite",
+                    file.name
+                );
+            }
+            Quat::from_axis_angle(rotation.axis.normalize(), rotation.degrees.to_radians())
+        }
+        None => Quat::IDENTITY,
+    };
+    Ok(SpawnPointDeclaration {
+        name: file.name,
+        transform: crate::RigidTransform {
+            translation: file.position,
+            rotation,
+        },
+    })
+}
+
+/// Read-only scene data needed to validate event response declarations.
+struct EventReactionValidationContext<'a> {
+    rigid_bodies: &'a [RigidBodyDeclaration],
+    triggers: &'a [TriggerDeclaration],
+    material_names: &'a HashMap<String, usize>,
+    materials: &'a [Material],
+    spheres: &'a [Sphere],
+    triangles: &'a [Triangle],
+    spawn_points: &'a [SpawnPointDeclaration],
+}
+
 /// Validates one backend-neutral event response after all IDs and bindings exist.
 fn validate_event_reaction(
     file: EventReactionFile,
-    rigid_bodies: &[RigidBodyDeclaration],
-    triggers: &[TriggerDeclaration],
-    material_names: &HashMap<String, usize>,
-    materials: &[Material],
-    spheres: &[Sphere],
-    triangles: &[Triangle],
+    context: &EventReactionValidationContext<'_>,
 ) -> Result<EventReactionDeclaration> {
-    if file.flash.is_none() && file.counter.is_none() {
-        bail!("event reaction must declare a flash or counter action");
+    if file.flash.is_none()
+        && file.counter.is_none()
+        && file.reset.is_none()
+        && file.teleport.is_none()
+    {
+        bail!("event reaction must declare a flash, counter, reset, or teleport action");
+    }
+    if file.reset.is_some() && file.teleport.is_some() {
+        bail!("event reaction cannot declare both reset and teleport actions");
     }
     let counter = file
         .counter
@@ -1029,8 +1162,8 @@ fn validate_event_reaction(
             object,
             other,
         } => {
-            let object = validate_reaction_body_filter(object, rigid_bodies, false)?;
-            let other = validate_reaction_body_filter(other, rigid_bodies, false)?;
+            let object = validate_reaction_body_filter(object, context.rigid_bodies, false)?;
+            let other = validate_reaction_body_filter(other, context.rigid_bodies, false)?;
             if object.is_some() && object == other {
                 bail!("collision reaction cannot match the same body twice");
             }
@@ -1049,8 +1182,8 @@ fn validate_event_reaction(
             trigger,
             object,
         } => {
-            let trigger = validate_trigger_filter(trigger, triggers)?;
-            let object = validate_reaction_body_filter(object, rigid_bodies, true)?;
+            let trigger = validate_trigger_filter(trigger, context.triggers)?;
+            let object = validate_reaction_body_filter(object, context.rigid_bodies, true)?;
             PhysicsEventMatcher::Trigger {
                 phase: match phase {
                     TriggerPhaseFile::Entered => TriggerPhase::Entered,
@@ -1084,25 +1217,27 @@ fn validate_event_reaction(
                     target
                 );
             }
-            let body = rigid_bodies
+            let body = context
+                .rigid_bodies
                 .iter()
                 .find(|body| body.id == target)
                 .context("material flash target is not a rendered physics body")?;
-            let authored_material = binding_material_index(&body.binding, spheres, triangles)?;
-            if is_emissive_material(materials, authored_material) {
+            let authored_material =
+                binding_material_index(&body.binding, context.spheres, context.triangles)?;
+            if is_emissive_material(context.materials, authored_material) {
                 bail!("material flash targets must use non-emissive authored materials");
             }
-            let material_index =
-                material_names
-                    .get(&flash.material)
-                    .copied()
-                    .with_context(|| {
-                        format!(
-                            "material flash references unknown material '{}'",
-                            flash.material
-                        )
-                    })?;
-            if is_emissive_material(materials, material_index) {
+            let material_index = context
+                .material_names
+                .get(&flash.material)
+                .copied()
+                .with_context(|| {
+                    format!(
+                        "material flash references unknown material '{}'",
+                        flash.material
+                    )
+                })?;
+            if is_emissive_material(context.materials, material_index) {
                 bail!("material flash materials must be non-emissive");
             }
             Ok(MaterialFlashDeclaration {
@@ -1113,11 +1248,89 @@ fn validate_event_reaction(
         })
         .transpose()?;
 
+    let reset = file
+        .reset
+        .map(|reset| -> Result<ResetBodyDeclaration> {
+            let target = validate_motion_action_target(
+                reset.target,
+                &event_matcher,
+                context.rigid_bodies,
+                "reset",
+            )?;
+            Ok(ResetBodyDeclaration { target })
+        })
+        .transpose()?;
+
+    let teleport = file
+        .teleport
+        .map(|teleport| -> Result<TeleportBodyDeclaration> {
+            let target = validate_motion_action_target(
+                teleport.target,
+                &event_matcher,
+                context.rigid_bodies,
+                "teleport",
+            )?;
+            let spawn_point_index = context
+                .spawn_points
+                .iter()
+                .position(|spawn| spawn.name == teleport.spawn)
+                .with_context(|| {
+                    format!(
+                        "teleport action references unknown spawn point '{}'",
+                        teleport.spawn
+                    )
+                })?;
+            Ok(TeleportBodyDeclaration {
+                target,
+                spawn_point_index,
+                velocity: match teleport.velocity {
+                    TeleportVelocityFile::Clear => TeleportVelocity::Clear,
+                    TeleportVelocityFile::Preserve => TeleportVelocity::Preserve,
+                },
+            })
+        })
+        .transpose()?;
+
     Ok(EventReactionDeclaration {
         event_matcher,
         flash,
         counter,
+        reset,
+        teleport,
     })
+}
+
+/// Validates that a motion action names a concrete matched dynamic body.
+fn validate_motion_action_target(
+    target: String,
+    event_matcher: &PhysicsEventMatcher,
+    rigid_bodies: &[RigidBodyDeclaration],
+    action_name: &str,
+) -> Result<PhysicsEntityId> {
+    if target == "*" || target.is_empty() {
+        bail!("{action_name} target must be a concrete physics entity id");
+    }
+    let target = PhysicsEntityId::new(target)?;
+    let target_is_explicit = match event_matcher {
+        PhysicsEventMatcher::Collision { object, other, .. } => {
+            object.as_ref() == Some(&target) || other.as_ref() == Some(&target)
+        }
+        PhysicsEventMatcher::Trigger { object, .. } => object.as_ref() == Some(&target),
+    };
+    if !target_is_explicit {
+        bail!(
+            "{action_name} target '{}' must be a concrete object in its event matcher",
+            target
+        );
+    }
+    let body = rigid_bodies
+        .iter()
+        .find(|body| body.id == target)
+        .with_context(|| format!("{action_name} target '{target}' is not a physics body"))?;
+    if body.body != RigidBodyKind::Dynamic {
+        bail!("{action_name} target '{target}' must be a dynamic body");
+    }
+    Ok(target)
 }
 
 /// Converts omitted and `"*"` filters to wildcards and validates concrete bodies.
@@ -1598,6 +1811,32 @@ mod tests {
     }
 
     #[test]
+    fn loads_reset_teleport_demo_with_named_spawn_point() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/015_physics_reset_teleport.json");
+        let scene = load_scene(path).unwrap();
+
+        assert_eq!(scene.spawn_points.len(), 1);
+        assert_eq!(scene.spawn_points[0].name, "goal_spawn");
+        assert_eq!(
+            scene
+                .event_reactions
+                .iter()
+                .filter(|reaction| reaction.reset.is_some())
+                .count(),
+            2
+        );
+        assert_eq!(
+            scene
+                .event_reactions
+                .iter()
+                .filter(|reaction| reaction.teleport.is_some())
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn parses_rigid_body_sphere_and_expands_box() {
         let scene = parse(
             r#"{
@@ -1725,6 +1964,135 @@ mod tests {
                 other: None,
             }
         ));
+    }
+
+    #[test]
+    fn parses_reset_teleport_actions_and_spawn_rotation() {
+        let scene = parse(
+            r#"{
+              "camera":{"position":[0,2,5],"look_at":[0,1,0],"fov_degrees":45},
+              "render":{"width":4,"height":4,"samples":1,"max_bounces":1},
+              "physics":{"enabled":false,"type":"rigid_body"},
+              "materials":[{"name":"m","type":"diffuse","albedo":[0.5,0.5,0.5]}],
+              "objects":[
+                {"id":"ball","type":"sphere","center":[0,2,0],"radius":0.5,"material":"m",
+                 "physics":{"body":"dynamic","initial_velocity":[1,0,0]}},
+                {"id":"floor","type":"box","center":[0,-0.1,0],"size":[4,0.2,4],"material":"m",
+                 "physics":{"body":"static"}}
+              ],
+              "triggers":[{"id":"zone","shape":"sphere","center":[0,1,0],"radius":1}],
+              "spawn_points":[
+                {"name":"goal","position":[2,3,4],"rotation":{"axis":[0,2,0],"degrees":90}},
+                {"name":"plain","position":[0,5,0]}
+              ],
+              "event_reactions":[
+                {"match":{"type":"trigger","phase":"entered","trigger":"zone","object":"ball"},
+                 "reset":{"target":"ball"},"counter":"resets"},
+                {"match":{"type":"collision","phase":"started","object":"ball","other":"floor"},
+                 "teleport":{"target":"ball","spawn":"goal","velocity":"preserve"}},
+                {"match":{"type":"collision","phase":"exited","object":"ball","other":"floor"},
+                 "teleport":{"target":"ball","spawn":"plain"}}
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(scene.spawn_points.len(), 2);
+        assert_eq!(scene.spawn_points[0].name, "goal");
+        assert!((scene.spawn_points[0].transform.rotation * Vec3::X).abs_diff_eq(-Vec3::Z, 1.0e-5));
+        assert_eq!(
+            scene.rigid_bodies[0].initial_transform.translation,
+            Vec3::new(0.0, 2.0, 0.0)
+        );
+        assert_eq!(
+            scene.rigid_bodies[0].initial_transform.rotation,
+            Quat::IDENTITY
+        );
+        assert!(scene.event_reactions[0].reset.is_some());
+        assert_eq!(
+            scene.event_reactions[1].teleport.as_ref().unwrap().velocity,
+            TeleportVelocity::Preserve
+        );
+        assert_eq!(
+            scene.event_reactions[2].teleport.as_ref().unwrap().velocity,
+            TeleportVelocity::Clear
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_motion_actions_and_spawn_points() {
+        fn scene(spawn_points: &str, reaction: &str) -> String {
+            format!(
+                r#"{{
+                  "camera":{{"position":[0,2,5],"look_at":[0,1,0],"fov_degrees":45}},
+                  "render":{{"width":1,"height":1,"samples":1,"max_bounces":1}},
+                  "physics":{{"type":"rigid_body"}},
+                  "materials":[{{"name":"m","type":"diffuse","albedo":[0.5,0.5,0.5]}}],
+                  "objects":[
+                    {{"id":"ball","type":"sphere","center":[0,2,0],"radius":0.5,"material":"m","physics":{{"body":"dynamic"}}}},
+                    {{"id":"floor","type":"box","center":[0,-0.1,0],"size":[4,0.2,4],"material":"m","physics":{{"body":"static"}}}}
+                  ],
+                  "triggers":[{{"id":"zone","shape":"sphere","center":[0,1,0],"radius":1}}],
+                  "spawn_points":[{spawn_points}],
+                  "event_reactions":[{reaction}]
+                }}"#
+            )
+        }
+        let spawn = r#"{"name":"goal","position":[0,3,0]}"#;
+        let invalid_reactions = [
+            r#"{"match":{"type":"trigger","phase":"entered","trigger":"zone","object":"*"},"reset":{"target":"ball"}}"#,
+            r#"{"match":{"type":"collision","phase":"started","object":"ball","other":"floor"},"reset":{"target":"missing"}}"#,
+            r#"{"match":{"type":"collision","phase":"started","object":"ball","other":"floor"},"reset":{"target":"floor"}}"#,
+            r#"{"match":{"type":"collision","phase":"started","object":"ball","other":"floor"},"teleport":{"target":"ball","spawn":"missing"}}"#,
+            r#"{"match":{"type":"collision","phase":"started","object":"ball","other":"floor"},"teleport":{"target":"ball","spawn":"goal","velocity":"invalid"}}"#,
+            r#"{"match":{"type":"collision","phase":"started","object":"ball","other":"floor"},"reset":{"target":"ball"},"teleport":{"target":"ball","spawn":"goal"}}"#,
+            r#"{"match":{"type":"collision","phase":"started","object":"ball","other":"floor"},"reset":{"target":"ball","unknown":true}}"#,
+        ];
+        for reaction in invalid_reactions {
+            assert!(parse(&scene(spawn, reaction)).is_err(), "{reaction}");
+        }
+
+        let reaction = r#"{"match":{"type":"collision","phase":"started","object":"ball","other":"floor"},"reset":{"target":"ball"}}"#;
+        for invalid_spawn in [
+            r#"{"name":"","position":[0,0,0]}"#,
+            r#"{"name":"goal","position":[0,1e400,0]}"#,
+            r#"{"name":"goal","position":[0,0,0],"rotation":{"axis":[0,0,0],"degrees":1}}"#,
+            r#"{"name":"goal","position":[0,0,0],"rotation":{"axis":[0,1,0],"degrees":1e400}}"#,
+            r#"{"name":"goal","position":[0,0,0],"unknown":true}"#,
+        ] {
+            assert!(
+                parse(&scene(invalid_spawn, reaction)).is_err(),
+                "{invalid_spawn}"
+            );
+        }
+        assert!(parse(&scene(
+            r#"{"name":"goal","position":[0,0,0]},{"name":"goal","position":[1,0,0]}"#,
+            reaction
+        ))
+        .is_err());
+
+        let kinematic_target = r#"{
+          "camera":{"position":[0,2,5],"look_at":[0,1,0],"fov_degrees":45},
+          "render":{"width":1,"height":1,"samples":1,"max_bounces":1},
+          "physics":{"enabled":false,"type":"rigid_body"},
+          "materials":[{"name":"m","type":"diffuse","albedo":[0.5,0.5,0.5]}],
+          "objects":[
+            {"id":"ball","type":"sphere","center":[0,2,0],"radius":0.5,"material":"m","physics":{"body":"dynamic"}},
+            {"id":"mover","type":"box","center":[0,0,0],"size":[1,1,1],"material":"m","group":"mover","physics":{"body":"kinematic"}}
+          ],
+          "event_reactions":[
+            {"match":{"type":"collision","phase":"started","object":"ball","other":"mover"},"reset":{"target":"mover"}}
+          ]
+        }"#;
+        assert!(parse(kinematic_target).is_err());
+
+        let without_physics = r#"{
+          "camera":{"position":[0,0,3],"look_at":[0,0,0],"fov_degrees":45},
+          "render":{"width":1,"height":1,"samples":1,"max_bounces":1},
+          "materials":[],"objects":[],
+          "spawn_points":[{"name":"goal","position":[0,0,0]}]
+        }"#;
+        assert!(parse(without_physics).is_err());
     }
 
     #[test]
