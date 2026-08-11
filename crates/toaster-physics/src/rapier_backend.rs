@@ -1,6 +1,9 @@
 //! Rapier implementation of renderer-neutral rigid-body evaluation.
 
-use crate::{EvaluatedPhysicsState, PhysicsBackend, PhysicsEvaluationRequest, PhysicsSceneUpdate};
+use crate::{
+    EvaluatedPhysicsState, PhysicsBackend, PhysicsBodyAction, PhysicsEvaluationRequest,
+    PhysicsSceneUpdate, PhysicsVelocityAction,
+};
 use anyhow::{bail, Result};
 use glam::{Quat, Vec3};
 use rapier3d::prelude::*;
@@ -73,6 +76,7 @@ struct RapierWorld {
     multibody_joints: MultibodyJointSet,
     ccd_solver: CCDSolver,
     handles: Vec<Option<RigidBodyHandle>>,
+    body_handles: HashMap<PhysicsEntityId, RigidBodyHandle>,
     collider_entities: HashMap<ColliderHandle, ColliderEntity>,
     collision_events: Receiver<CollisionEvent>,
     event_handler: ChannelEventCollector,
@@ -105,7 +109,7 @@ impl RapierRigidBodyBackend {
             .rigid_bodies
             .iter()
             .map(|declaration| {
-                let authored_origin = initial_translation(scene, &declaration.binding)?;
+                let authored_origin = declaration.initial_transform.translation;
                 let kinematic_motion = if declaration.body == RigidBodyKind::Kinematic {
                     let group = declaration
                         .group
@@ -121,10 +125,7 @@ impl RapierRigidBodyBackend {
                 };
                 let initial_transform = match &kinematic_motion {
                     Some(motion) => motion.evaluate(0.0)?,
-                    None => RigidTransform {
-                        translation: authored_origin,
-                        rotation: Quat::IDENTITY,
-                    },
+                    None => declaration.initial_transform,
                 };
                 Ok(BoundBody {
                     declaration: declaration.clone(),
@@ -387,12 +388,70 @@ impl PhysicsBackend for RapierRigidBodyBackend {
         events.sort_by(compare_physics_events);
         self.evaluated_state(PhysicsEventBatch { reset, events })
     }
+
+    fn apply_actions(&mut self, actions: &[PhysicsBodyAction]) -> Result<()> {
+        for action in actions {
+            let PhysicsBodyAction::SetState {
+                target,
+                transform,
+                velocity,
+            } = action;
+            if !transform.translation.is_finite()
+                || !transform.rotation.is_finite()
+                || transform.rotation.length_squared() <= f32::EPSILON
+            {
+                bail!("physics action transform must be finite with a nonzero rotation");
+            }
+            if let PhysicsVelocityAction::Set { linear, angular } = velocity {
+                if !linear.is_finite() || !angular.is_finite() {
+                    bail!("physics action velocities must be finite");
+                }
+            }
+            let handle = self
+                .world
+                .body_handles
+                .get(target)
+                .copied()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("physics action references unknown body '{target}'")
+                })?;
+            let declaration = self
+                .bound_bodies
+                .iter()
+                .find(|body| body.declaration.id == *target)
+                .ok_or_else(|| anyhow::anyhow!("physics action body declaration is missing"))?;
+            if declaration.declaration.body != RigidBodyKind::Dynamic {
+                bail!("physics actions require a dynamic body target");
+            }
+            let body = self
+                .world
+                .bodies
+                .get_mut(handle)
+                .ok_or_else(|| anyhow::anyhow!("physics action body handle is stale"))?;
+            body.set_position(rapier_pose(*transform), true);
+            if let PhysicsVelocityAction::Set { linear, angular } = velocity {
+                body.set_linvel(
+                    rapier3d::math::Vector::new(linear.x, linear.y, linear.z),
+                    true,
+                );
+                body.set_angvel(
+                    rapier3d::math::Vector::new(angular.x, angular.y, angular.z),
+                    true,
+                );
+            }
+            body.reset_forces(false);
+            body.reset_torques(false);
+            body.wake_up(true);
+        }
+        Ok(())
+    }
 }
 
 fn build_world(bound_bodies: &[BoundBody], triggers: &[TriggerDeclaration]) -> Result<RapierWorld> {
     let mut bodies = RigidBodySet::new();
     let mut colliders = ColliderSet::new();
     let mut handles = Vec::with_capacity(bound_bodies.len());
+    let mut body_handles = HashMap::with_capacity(bound_bodies.len());
     let mut collider_entities = HashMap::new();
     for bound in bound_bodies {
         let mut body_builder = match bound.declaration.body {
@@ -433,6 +492,7 @@ fn build_world(bound_bodies: &[BoundBody], triggers: &[TriggerDeclaration]) -> R
                 body: bound.declaration.body,
             },
         );
+        body_handles.insert(bound.declaration.id.clone(), handle);
         handles.push(Some(handle));
     }
 
@@ -477,6 +537,7 @@ fn build_world(bound_bodies: &[BoundBody], triggers: &[TriggerDeclaration]) -> R
         multibody_joints: MultibodyJointSet::new(),
         ccd_solver: CCDSolver::new(),
         handles,
+        body_handles,
         collider_entities,
         collision_events,
         event_handler,
@@ -540,17 +601,6 @@ fn rapier_pose(transform: RigidTransform) -> Pose {
     )
 }
 
-fn initial_translation(scene: &Scene, binding: &ObjectBinding) -> Result<Vec3> {
-    match *binding {
-        ObjectBinding::Sphere { index } => scene
-            .spheres
-            .get(index)
-            .map(|sphere| sphere.center)
-            .ok_or_else(|| anyhow::anyhow!("sphere binding is out of range")),
-        ObjectBinding::Triangles { pivot, .. } => Ok(pivot),
-    }
-}
-
 fn binding_is_emissive(scene: &Scene, binding: &ObjectBinding) -> bool {
     let material_indices: Box<dyn Iterator<Item = usize> + '_> = match *binding {
         ObjectBinding::Sphere { index } => Box::new(
@@ -575,6 +625,52 @@ fn binding_is_emissive(scene: &Scene, binding: &ObjectBinding) -> bool {
             Some(Material::Emissive { strength, .. }) if *strength > 0.0
         )
     })
+}
+
+#[cfg(test)]
+mod action_tests {
+    use super::*;
+    use crate::tests::base_scene;
+    use crate::{PhysicsBodyAction, PhysicsVelocityAction};
+
+    #[test]
+    fn body_action_clears_forces_torques_and_wakes_body() {
+        let scene = base_scene();
+        let mut backend = RapierRigidBodyBackend::new(&scene).unwrap();
+        let id = PhysicsEntityId::new("ball").unwrap();
+        let handle = backend.world.body_handles[&id];
+        {
+            let body = backend.world.bodies.get_mut(handle).unwrap();
+            body.add_force(rapier3d::math::Vector::X, false);
+            body.add_torque(rapier3d::math::Vector::Y, false);
+            body.sleep();
+            assert!(body.is_sleeping());
+        }
+
+        backend
+            .apply_actions(&[PhysicsBodyAction::SetState {
+                target: id,
+                transform: RigidTransform {
+                    translation: Vec3::new(1.0, 2.0, 3.0),
+                    rotation: Quat::from_rotation_y(0.25),
+                },
+                velocity: PhysicsVelocityAction::Set {
+                    linear: Vec3::X,
+                    angular: Vec3::Y,
+                },
+            }])
+            .unwrap();
+
+        let body = backend.world.bodies.get(handle).unwrap();
+        assert!(!body.is_sleeping());
+        assert_eq!(body.user_force(), rapier3d::math::Vector::ZERO);
+        assert_eq!(body.user_torque(), rapier3d::math::Vector::ZERO);
+        assert_eq!(body.linvel(), rapier3d::math::Vector::X);
+        assert_eq!(body.angvel(), rapier3d::math::Vector::Y);
+        assert!(body
+            .rotation()
+            .abs_diff_eq(rapier3d::math::Rotation::from_rotation_y(0.25), 1.0e-5));
+    }
 }
 
 #[cfg(test)]

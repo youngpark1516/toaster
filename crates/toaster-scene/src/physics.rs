@@ -4,6 +4,8 @@ use anyhow::{bail, Result};
 use glam::Vec3;
 use std::{collections::BTreeMap, fmt};
 
+use crate::transform::RigidTransform;
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// Stable renderer-neutral identity for a physics body or trigger.
 pub struct PhysicsEntityId(String);
@@ -225,6 +227,43 @@ pub struct MaterialFlashDeclaration {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+/// Restores one dynamic body to its authored initial state.
+pub struct ResetBodyDeclaration {
+    /// Concrete dynamic physics body to reset.
+    pub target: PhysicsEntityId,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Velocity behavior applied by a teleport action.
+pub enum TeleportVelocity {
+    /// Zero both linear and angular velocity.
+    #[default]
+    Clear,
+    /// Retain both linear and angular velocity.
+    Preserve,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+/// Moves one dynamic body to a named spawn point.
+pub struct TeleportBodyDeclaration {
+    /// Concrete dynamic physics body to move.
+    pub target: PhysicsEntityId,
+    /// Validated index into [`crate::Scene::spawn_points`].
+    pub spawn_point_index: usize,
+    /// Whether current velocity is cleared or preserved.
+    pub velocity: TeleportVelocity,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+/// Named absolute world-space destination for teleport actions.
+pub struct SpawnPointDeclaration {
+    /// Nonempty name referenced by teleport actions.
+    pub name: String,
+    /// Absolute body-origin pose.
+    pub transform: RigidTransform,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 /// Declarative renderer-neutral response to matching physics events.
 pub struct EventReactionDeclaration {
     /// Event selector evaluated against the ordered neutral event stream.
@@ -233,6 +272,10 @@ pub struct EventReactionDeclaration {
     pub flash: Option<MaterialFlashDeclaration>,
     /// Optional named counter incremented once per matching event.
     pub counter: Option<String>,
+    /// Optional authored-state reset action.
+    pub reset: Option<ResetBodyDeclaration>,
+    /// Optional named-spawn teleport action.
+    pub teleport: Option<TeleportBodyDeclaration>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -268,7 +311,7 @@ pub enum ObjectBinding {
 pub struct RigidBodyDeclaration {
     /// Stable user-authored event identity.
     pub id: PhysicsEntityId,
-    /// Static or dynamic ownership.
+    /// Static, dynamic, or kinematic ownership.
     pub body: RigidBodyKind,
     /// Collision geometry and dimensions.
     pub collider: ColliderShape,
@@ -282,6 +325,8 @@ pub struct RigidBodyDeclaration {
     pub initial_velocity: Vec3,
     /// Initial world-space angular velocity in radians per second.
     pub initial_angular_velocity: Vec3,
+    /// Authored initial absolute pose, currently identity-oriented for spheres and boxes.
+    pub initial_transform: RigidTransform,
     /// Flattened render geometry controlled by this body.
     pub binding: ObjectBinding,
     /// Optional user-facing animation group attached to the source object.

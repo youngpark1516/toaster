@@ -12,15 +12,16 @@ Toaster scenes are UTF-8 JSON files loaded by `toaster_scene::load_scene`. All v
   "materials": [],
   "objects": [],
   "triggers": [],
+  "spawn_points": [],
   "event_reactions": [],
   "animation": { "tracks": [] }
 }
 ```
 
 `camera`, `render`, `materials`, and `objects` are required. `physics` is
-optional; `triggers`, `event_reactions`, and animation tracks default to empty arrays. Unknown
+optional; `triggers`, `spawn_points`, `event_reactions`, and animation tracks default to empty arrays. Unknown
 fields are currently ignored by some general scene structures;
-physics-specific structures, trigger declarations, and event reactions reject
+physics-specific structures, trigger/spawn declarations, and event reactions reject
 them.
 
 ## Camera
@@ -378,7 +379,7 @@ Animation-only and disabled-physics evaluation return an empty batch.
 ### Event reactions
 
 The optional top-level `event_reactions` array matches neutral physics events
-and applies renderer-neutral material flashes or counter increments:
+and applies renderer-neutral material flashes, counter increments, or dynamic-body actions:
 
 ```json
 "event_reactions": [
@@ -408,7 +409,8 @@ and applies renderer-neutral material flashes or counter increments:
 ]
 ```
 
-Every rule requires `match` and at least one action. Collision phases are
+Every rule requires `match` and at least one of `flash`, `counter`, `reset`, or
+`teleport`. A rule cannot contain both reset and teleport. Collision phases are
 `started`, `stayed`, and `exited`; trigger phases are `entered` and `exited`.
 Omitted filters and `"*"` are wildcards. Collision participants are unordered:
 two wildcards match every pair, one concrete ID matches any pair containing it,
@@ -438,6 +440,76 @@ and replay on a wrap or rewind. Session counts continue across loop cycles and
 deduplicate replay at or below the highest fixed tick already observed for that
 cycle. Skipped cycles are not synthesized. With physics disabled, reactions
 remain validated, flashes do nothing, and declared counter names remain zero.
+
+### Reset and teleport actions
+
+Reset zones use ordinary trigger events and a concrete dynamic-body action:
+
+```json
+{
+  "match": {
+    "type": "trigger",
+    "phase": "entered",
+    "trigger": "reset_zone",
+    "object": "ball_0"
+  },
+  "reset": { "target": "ball_0" },
+  "counter": "ball_resets"
+}
+```
+
+Reset restores the stored authored initial pose and authored initial linear and
+angular velocities, clears forces, torques, sleeping state, and any active
+flash on the target. Current spheres and boxes have no authored object-rotation
+field, so their authored initial rotation is identity; reset stores and uses a
+neutral initial transform rather than hard-coding that limitation.
+
+Teleports use a named top-level destination:
+
+```json
+"spawn_points": [
+  {
+    "name": "goal_spawn",
+    "position": [2, 3, -1],
+    "rotation": { "axis": [0, 1, 0], "degrees": 90 }
+  }
+]
+```
+
+```json
+{
+  "match": {
+    "type": "trigger",
+    "phase": "entered",
+    "trigger": "goal_zone",
+    "object": "crate_0"
+  },
+  "teleport": {
+    "target": "crate_0",
+    "spawn": "goal_spawn",
+    "velocity": "clear"
+  },
+  "counter": "goal_teleports"
+}
+```
+
+Spawn names are nonempty and unique. Positions are absolute finite body origins.
+Rotation is optional, defaults to identity, and uses a finite nonzero axis plus
+finite degrees. `velocity` defaults to `clear`, which zeros both linear and
+angular velocity; `preserve` retains both. Teleport clears forces, torques,
+sleep, and the target's active flash.
+
+Reset and teleport targets must be concrete dynamic-body IDs explicitly named
+by the matcher, using the same authorization rule as flashes. Wildcards cannot
+authorize a motion target. Static and kinematic targets, inline destinations,
+and named reset poses are not supported. Multiple matching actions execute in
+event order and then declaration order, so the last action for a body wins.
+
+Actions run after a nominal tick's event collection and before the next tick.
+They synthesize no events in that tick; contacts and overlaps caused by the new
+pose are observed normally on the following tick. Rewind and loop reset replay
+all actions from tick zero. With physics disabled, spawn points and actions are
+validated but actions do nothing and counters stay at zero.
 
 Static progressive preview rejects every scene containing animation tracks and
 every scene with enabled physics, including static-only physics scenes. Normal

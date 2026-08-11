@@ -417,6 +417,7 @@ mod tests {
             physics: None,
             rigid_bodies: Vec::new(),
             triggers: Vec::new(),
+            spawn_points: Vec::new(),
             event_reactions: Vec::new(),
         };
         let bvh = SceneBvh::build(&scene);
@@ -518,6 +519,7 @@ mod tests {
             physics: None,
             rigid_bodies: Vec::new(),
             triggers: Vec::new(),
+            spawn_points: Vec::new(),
             event_reactions: Vec::new(),
         };
         let bvh = SceneBvh::build(&scene);

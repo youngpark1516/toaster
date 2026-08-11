@@ -24,6 +24,8 @@ previews.
   trigger zones with stable scene-authored identities.
 - Declarative event-driven material flashes and named per-loop/session counters
   exposed by live preview status.
+- Event-driven dynamic-body resets and named-spawn teleports with neutral
+  clear/preserve velocity policy.
 - Static progressive preview, adaptive sampling, MJPEG streaming, and raw-RGBA
   FFmpeg export without intermediate PNGs.
 - Deterministic benchmark reports with per-stage timing and image hashes.
@@ -62,7 +64,7 @@ cargo run --release -p toaster-cli -- gpu-render \
   --fps 24 --duration 5
 
 cargo run --release -p toaster-cli -- stream-preview \
-  scenes/014_physics_event_reactions.json \
+  scenes/015_physics_reset_teleport.json \
   --host 127.0.0.1 --port 7878 --fps 12 --loop-duration 5
 
 cargo run --release -p toaster-cli -- \

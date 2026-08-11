@@ -6,7 +6,8 @@ use crate::{
     material::Material,
     object::{Sphere, Triangle, TriangleAttributes},
     physics::{
-        EventReactionDeclaration, PhysicsSettings, RigidBodyDeclaration, TriggerDeclaration,
+        EventReactionDeclaration, PhysicsSettings, RigidBodyDeclaration, SpawnPointDeclaration,
+        TriggerDeclaration,
     },
     texture::Texture,
 };
@@ -39,6 +40,8 @@ pub struct Scene {
     pub rigid_bodies: Vec<RigidBodyDeclaration>,
     /// Invisible fixed sensors used by renderer-neutral trigger events.
     pub triggers: Vec<TriggerDeclaration>,
+    /// Named absolute destinations used by teleport reactions.
+    pub spawn_points: Vec<SpawnPointDeclaration>,
     /// Declarative material and counter responses to neutral physics events.
     pub event_reactions: Vec<EventReactionDeclaration>,
 }

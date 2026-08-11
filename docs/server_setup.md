@@ -82,6 +82,24 @@ curl --fail --silent http://127.0.0.1:7878/status | jq \
 Loop counters repeat after deterministic replay. Session counters keep growing
 across observed loop cycles but do not double-count a rewind within a cycle.
 
+The reset/teleport demo adds a fall reset zone, a collision hazard, and a named
+spawn-point teleport. Its action counters use the same `/status` fields:
+
+```sh
+cargo run --release -p toaster-cli -- stream-preview \
+  scenes/015_physics_reset_teleport.json \
+  --host 127.0.0.1 --port 7878 --fps 12 --loop-duration 5
+```
+
+```sh
+curl --fail --silent http://127.0.0.1:7878/status | jq \
+  '{loop_counters, session_counters}'
+```
+
+Actions are logged at debug level by `toaster_physics`. Reset and teleport
+produce no synthetic same-tick events; any new overlap appears on the following
+fixed tick.
+
 Each loop resets and deterministically replays the physics world. Physical poses
 repeat while path-tracing noise may differ because render frame indices remain
 monotonic.

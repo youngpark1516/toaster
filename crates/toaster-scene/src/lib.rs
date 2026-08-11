@@ -37,8 +37,9 @@ pub use object::{Sphere, Triangle, TriangleAttributes};
 pub use physics::{
     ColliderShape, CollisionPhase, EventReactionDeclaration, MaterialFlashDeclaration,
     NamedCounterSnapshot, ObjectBinding, PhysicsEntityId, PhysicsEvent, PhysicsEventBatch,
-    PhysicsEventKind, PhysicsEventMatcher, PhysicsSettings, PhysicsType, RigidBodyDeclaration,
-    RigidBodyKind, TriggerDeclaration, TriggerPhase,
+    PhysicsEventKind, PhysicsEventMatcher, PhysicsSettings, PhysicsType, ResetBodyDeclaration,
+    RigidBodyDeclaration, RigidBodyKind, SpawnPointDeclaration, TeleportBodyDeclaration,
+    TeleportVelocity, TriggerDeclaration, TriggerPhase,
 };
 pub use scene::{Background, CameraSettings, RenderSettings, Scene};
 pub use texture::Texture;

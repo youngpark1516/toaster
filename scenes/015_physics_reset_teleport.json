@@ -1,0 +1,170 @@
+{
+  "camera": {
+    "position": [0.0, 3.8, 10.5],
+    "look_at": [0.0, 1.3, -3.2],
+    "up": [0.0, 1.0, 0.0],
+    "fov_degrees": 44.0
+  },
+  "render": {
+    "width": 640,
+    "height": 360,
+    "samples": 4,
+    "max_bounces": 8,
+    "background": "black"
+  },
+  "physics": {
+    "enabled": true,
+    "type": "rigid_body",
+    "gravity": [0.0, -9.81, 0.0],
+    "timestep": 0.016666666666666666,
+    "substeps": 2
+  },
+  "materials": [
+    { "name": "white", "type": "diffuse", "albedo": [0.72, 0.72, 0.68] },
+    { "name": "red_wall", "type": "diffuse", "albedo": [0.62, 0.07, 0.05] },
+    { "name": "green_wall", "type": "diffuse", "albedo": [0.08, 0.42, 0.13] },
+    { "name": "reset_red", "type": "diffuse", "albedo": [0.90, 0.06, 0.04] },
+    { "name": "goal_blue", "type": "diffuse", "albedo": [0.05, 0.38, 0.92] },
+    { "name": "hazard_orange", "type": "diffuse", "albedo": [0.95, 0.28, 0.03] },
+    { "name": "crate_gold", "type": "metal", "albedo": [0.88, 0.62, 0.12], "roughness": 0.28 },
+    { "name": "sweeper", "type": "metal", "albedo": [0.15, 0.65, 0.82], "roughness": 0.22 },
+    { "name": "impact_flash", "type": "diffuse", "albedo": [1.0, 0.98, 0.12] },
+    { "name": "reset_marker", "type": "emissive", "color": [1.0, 0.08, 0.03], "strength": 2.5 },
+    { "name": "goal_marker", "type": "emissive", "color": [0.05, 0.85, 1.0], "strength": 2.5 },
+    { "name": "spawn_marker", "type": "emissive", "color": [0.15, 1.0, 0.25], "strength": 2.5 },
+    { "name": "light", "type": "emissive", "color": [1.0, 0.93, 0.82], "strength": 18.0 }
+  ],
+  "objects": [
+    {
+      "id": "floor_left", "type": "box", "center": [-3.65, -0.1, -3.0], "size": [0.7, 0.2, 8.0],
+      "material": "white", "group": "floor_left",
+      "physics": { "body": "static", "friction": 0.8, "restitution": 0.05 }
+    },
+    {
+      "id": "floor_main", "type": "box", "center": [1.1, -0.1, -3.0], "size": [5.8, 0.2, 8.0],
+      "material": "white", "group": "floor_main",
+      "physics": { "body": "static", "friction": 0.8, "restitution": 0.05 }
+    },
+    {
+      "id": "room_back", "type": "box", "center": [0.0, 3.0, -7.1], "size": [8.0, 6.0, 0.2],
+      "material": "white", "group": "room_back",
+      "physics": { "body": "static", "friction": 0.65, "restitution": 0.05 }
+    },
+    {
+      "id": "room_left", "type": "box", "center": [-4.1, 3.0, -3.0], "size": [0.2, 6.0, 8.0],
+      "material": "red_wall", "group": "room_left",
+      "physics": { "body": "static", "friction": 0.65, "restitution": 0.05 }
+    },
+    {
+      "id": "room_right", "type": "box", "center": [4.1, 3.0, -3.0], "size": [0.2, 6.0, 8.0],
+      "material": "green_wall", "group": "room_right",
+      "physics": { "body": "static", "friction": 0.65, "restitution": 0.05 }
+    },
+    { "type": "triangle", "vertices": [[-1.5, 5.9, -2.0], [1.5, 5.9, -4.2], [1.5, 5.9, -2.0]], "material": "light" },
+    { "type": "triangle", "vertices": [[-1.5, 5.9, -2.0], [-1.5, 5.9, -4.2], [1.5, 5.9, -4.2]], "material": "light" },
+
+    { "id": "reset_marker_left", "type": "box", "center": [-3.2, -0.75, -3.2], "size": [0.06, 1.3, 1.6], "material": "reset_marker" },
+    { "id": "reset_marker_right", "type": "box", "center": [-1.8, -0.75, -3.2], "size": [0.06, 1.3, 1.6], "material": "reset_marker" },
+    { "id": "reset_marker_bottom", "type": "box", "center": [-2.5, -1.38, -3.2], "size": [1.4, 0.06, 1.6], "material": "reset_marker" },
+    { "id": "goal_marker_left", "type": "box", "center": [-0.55, 0.7, -5.0], "size": [0.06, 1.4, 0.08], "material": "goal_marker" },
+    { "id": "goal_marker_right", "type": "box", "center": [0.55, 0.7, -5.0], "size": [0.06, 1.4, 0.08], "material": "goal_marker" },
+    { "id": "goal_marker_top", "type": "box", "center": [0.0, 1.38, -5.0], "size": [1.1, 0.06, 0.08], "material": "goal_marker" },
+    { "id": "spawn_marker_0", "type": "sphere", "center": [2.6, 3.4, -5.0], "radius": 0.12, "material": "spawn_marker" },
+    { "id": "spawn_marker_1", "type": "sphere", "center": [2.25, 3.4, -5.0], "radius": 0.06, "material": "spawn_marker" },
+    { "id": "spawn_marker_2", "type": "sphere", "center": [2.95, 3.4, -5.0], "radius": 0.06, "material": "spawn_marker" },
+
+    {
+      "id": "hazard", "type": "box", "center": [1.8, 0.45, -3.1], "size": [0.35, 0.9, 1.0],
+      "material": "hazard_orange", "group": "hazard",
+      "physics": { "body": "static", "friction": 0.8, "restitution": 0.25 }
+    },
+    {
+      "id": "sweeper", "type": "box", "center": [-1.8, 0.4, -1.8], "size": [1.0, 0.7, 0.8],
+      "material": "sweeper", "group": "sweeper_motion",
+      "physics": { "body": "kinematic", "friction": 0.9, "restitution": 0.1 }
+    },
+    {
+      "id": "fall_ball", "type": "sphere", "center": [-2.5, 3.3, -3.2], "radius": 0.36,
+      "material": "reset_red", "group": "fall_ball",
+      "physics": { "body": "dynamic", "mass": 1.0, "friction": 0.4, "restitution": 0.1 }
+    },
+    {
+      "id": "goal_crate", "type": "box", "center": [-1.7, 0.48, -5.0], "size": [0.7, 0.7, 0.7],
+      "material": "crate_gold", "group": "goal_crate",
+      "physics": { "body": "dynamic", "mass": 1.3, "friction": 0.0, "restitution": 0.12, "initial_velocity": [4.0, 0.0, 0.0], "initial_angular_velocity": [0.0, 0.5, 0.0] }
+    },
+    {
+      "id": "hazard_ball", "type": "sphere", "center": [-0.2, 0.42, -3.1], "radius": 0.34,
+      "material": "goal_blue", "group": "hazard_ball",
+      "physics": { "body": "dynamic", "mass": 0.9, "friction": 0.25, "restitution": 0.2, "initial_velocity": [3.0, 0.0, 0.0] }
+    },
+    {
+      "id": "flash_crate", "type": "box", "center": [1.0, 3.8, -2.0], "size": [0.75, 0.75, 0.75],
+      "material": "goal_blue", "group": "flash_crate",
+      "physics": { "body": "dynamic", "mass": 1.2, "friction": 0.6, "restitution": 0.25, "initial_angular_velocity": [0.5, 0.8, 0.3] }
+    }
+  ],
+  "triggers": [
+    { "id": "reset_zone", "shape": "box", "center": [-2.5, -0.85, -3.2], "size": [1.3, 1.0, 1.5] },
+    { "id": "goal_zone", "shape": "box", "center": [0.0, 0.65, -5.0], "size": [1.0, 1.3, 1.2] }
+  ],
+  "spawn_points": [
+    {
+      "name": "goal_spawn",
+      "position": [2.6, 3.4, -5.0],
+      "rotation": { "axis": [0.0, 1.0, 0.0], "degrees": 35.0 }
+    }
+  ],
+  "event_reactions": [
+    {
+      "match": { "type": "trigger", "phase": "entered", "trigger": "reset_zone", "object": "fall_ball" },
+      "reset": { "target": "fall_ball" },
+      "counter": "fall_resets"
+    },
+    {
+      "match": { "type": "trigger", "phase": "entered", "trigger": "goal_zone", "object": "goal_crate" },
+      "teleport": { "target": "goal_crate", "spawn": "goal_spawn", "velocity": "clear" },
+      "counter": "goal_teleports"
+    },
+    {
+      "match": { "type": "collision", "phase": "started", "object": "hazard_ball", "other": "hazard" },
+      "reset": { "target": "hazard_ball" },
+      "counter": "hazard_resets"
+    },
+    {
+      "match": { "type": "collision", "phase": "started", "object": "flash_crate", "other": "floor_main" },
+      "flash": { "target": "flash_crate", "material": "impact_flash", "duration": 0.35 },
+      "counter": "crate_impacts"
+    },
+    {
+      "match": { "type": "collision", "phase": "started", "object": "*", "other": "*" },
+      "counter": "collision_starts"
+    }
+  ],
+  "animation": {
+    "tracks": [
+      {
+        "type": "translation",
+        "target": { "type": "group", "name": "sweeper_motion" },
+        "interpolation": "linear",
+        "keyframes": [
+          { "time": 0.0, "value": [0.0, 0.0, 0.0] },
+          { "time": 2.5, "value": [3.6, 0.0, 0.0] },
+          { "time": 5.0, "value": [0.0, 0.0, 0.0] }
+        ]
+      },
+      {
+        "type": "rotation",
+        "target": { "type": "camera" },
+        "axis": [0.0, 1.0, 0.0],
+        "pivot": [0.0, 1.3, -3.2],
+        "interpolation": "linear",
+        "keyframes": [
+          { "time": 0.0, "degrees": 0.0 },
+          { "time": 2.5, "degrees": 3.5 },
+          { "time": 5.0, "degrees": 0.0 }
+        ]
+      }
+    ]
+  }
+}

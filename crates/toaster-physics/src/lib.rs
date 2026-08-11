@@ -3,14 +3,15 @@
 mod rapier_backend;
 
 use anyhow::{bail, Context, Result};
+use glam::Vec3;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     time::Instant,
 };
 use toaster_scene::{
     animation_changes, apply_rigid_transform, EvaluatedScene, EvaluationRequest,
     NamedCounterSnapshot, ObjectBinding, PhysicsEntityId, PhysicsEventBatch, RigidTransform, Scene,
-    SceneChanges, SceneEvaluationTimings, SceneEvaluator,
+    SceneChanges, SceneEvaluationTimings, SceneEvaluator, TeleportVelocity,
 };
 
 pub use rapier_backend::RapierRigidBodyBackend;
@@ -38,6 +39,34 @@ pub enum PhysicsSceneUpdate {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+/// Renderer-neutral velocity update applied with a body-state action.
+pub enum PhysicsVelocityAction {
+    /// Retain the backend's current linear and angular velocity.
+    Preserve,
+    /// Replace both velocities with explicit world-space values.
+    Set {
+        /// Linear velocity in metres per second.
+        linear: Vec3,
+        /// Angular velocity in radians per second.
+        angular: Vec3,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+/// Renderer-neutral command that replaces one dynamic body's state.
+pub enum PhysicsBodyAction {
+    /// Sets an absolute pose and velocity policy, clears forces, and wakes the body.
+    SetState {
+        /// Stable scene physics identity.
+        target: PhysicsEntityId,
+        /// Absolute world-space body pose.
+        transform: RigidTransform,
+        /// Explicit or preserving velocity behavior.
+        velocity: PhysicsVelocityAction,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq)]
 /// Backend result before it is composed into an evaluated render scene.
 pub struct EvaluatedPhysicsState {
@@ -56,6 +85,9 @@ pub trait PhysicsBackend {
 
     /// Evaluates the backend at one fixed tick and returns neutral scene updates.
     fn evaluate(&mut self, request: PhysicsEvaluationRequest) -> Result<EvaluatedPhysicsState>;
+
+    /// Applies renderer-neutral body-state changes between nominal fixed ticks.
+    fn apply_actions(&mut self, actions: &[PhysicsBodyAction]) -> Result<()>;
 }
 
 /// Composes built-in animation and an optional physics backend from an immutable scene.
@@ -105,13 +137,12 @@ impl EventReactionState {
         Ok(state)
     }
 
-    fn evaluate(
+    fn process_events(
         &mut self,
         source: &Scene,
-        scene: &mut Scene,
         request: PhysicsEvaluationRequest,
         events: &PhysicsEventBatch,
-    ) -> Result<SceneChanges> {
+    ) -> Result<Vec<PhysicsBodyAction>> {
         if events.reset {
             self.active_flashes.clear();
             self.loop_counts.values_mut().for_each(|count| *count = 0);
@@ -122,6 +153,8 @@ impl EventReactionState {
             .get(&request.loop_cycle)
             .copied()
             .unwrap_or(0);
+        let mut actions = Vec::new();
+        let mut acted_targets = HashSet::new();
         for event in &events.events {
             let new_session_tick = event.fixed_tick > previous_highest_tick;
             for reaction in &source.event_reactions {
@@ -144,14 +177,76 @@ impl EventReactionState {
                         },
                     );
                 }
+                if let Some(reset) = &reaction.reset {
+                    let body = source
+                        .rigid_bodies
+                        .iter()
+                        .find(|body| body.id == reset.target)
+                        .context("reset action target has no rigid-body declaration")?;
+                    actions.push(PhysicsBodyAction::SetState {
+                        target: reset.target.clone(),
+                        transform: body.initial_transform,
+                        velocity: PhysicsVelocityAction::Set {
+                            linear: body.initial_velocity,
+                            angular: body.initial_angular_velocity,
+                        },
+                    });
+                    acted_targets.insert(reset.target.clone());
+                    tracing::debug!(
+                        loop_cycle = event.loop_cycle,
+                        fixed_tick = event.fixed_tick,
+                        action = "reset",
+                        target = %reset.target,
+                        "physics event action"
+                    );
+                }
+                if let Some(teleport) = &reaction.teleport {
+                    let spawn = source
+                        .spawn_points
+                        .get(teleport.spawn_point_index)
+                        .context("teleport action spawn-point index is out of range")?;
+                    actions.push(PhysicsBodyAction::SetState {
+                        target: teleport.target.clone(),
+                        transform: spawn.transform,
+                        velocity: match teleport.velocity {
+                            TeleportVelocity::Clear => PhysicsVelocityAction::Set {
+                                linear: Vec3::ZERO,
+                                angular: Vec3::ZERO,
+                            },
+                            TeleportVelocity::Preserve => PhysicsVelocityAction::Preserve,
+                        },
+                    });
+                    acted_targets.insert(teleport.target.clone());
+                    tracing::debug!(
+                        loop_cycle = event.loop_cycle,
+                        fixed_tick = event.fixed_tick,
+                        action = "teleport",
+                        target = %teleport.target,
+                        spawn = %spawn.name,
+                        velocity = ?teleport.velocity,
+                        "physics event action"
+                    );
+                }
             }
+        }
+        for target in acted_targets {
+            self.active_flashes.remove(&target);
         }
         self.highest_tick_by_loop
             .entry(request.loop_cycle)
             .and_modify(|tick| *tick = (*tick).max(request.fixed_tick))
             .or_insert(request.fixed_tick);
 
-        let scene_time = f64::from(request.scene_time_seconds);
+        Ok(actions)
+    }
+
+    fn apply_materials(
+        &mut self,
+        source: &Scene,
+        scene: &mut Scene,
+        scene_time_seconds: f32,
+    ) -> Result<SceneChanges> {
+        let scene_time = f64::from(scene_time_seconds);
         self.active_flashes
             .retain(|_, flash| scene_time < flash.expires_at_seconds);
 
@@ -177,6 +272,18 @@ impl EventReactionState {
             }
         }
         Ok(changes)
+    }
+
+    #[cfg(test)]
+    fn evaluate(
+        &mut self,
+        source: &Scene,
+        scene: &mut Scene,
+        request: PhysicsEvaluationRequest,
+        events: &PhysicsEventBatch,
+    ) -> Result<SceneChanges> {
+        self.process_events(source, request, events)?;
+        self.apply_materials(source, scene, request.scene_time_seconds)
     }
 
     fn snapshot(&self) -> NamedCounterSnapshot {
@@ -330,6 +437,11 @@ impl SceneEvaluator for PhysicsSceneEvaluator {
         let mut physics_evaluation = Default::default();
         let mut geometry_update = Default::default();
         let mut physics_events = PhysicsEventBatch::default();
+        let has_motion_actions = self
+            .source
+            .event_reactions
+            .iter()
+            .any(|reaction| reaction.reset.is_some() || reaction.teleport.is_some());
         if let Some(backend) = &mut self.backend {
             let settings = self
                 .source
@@ -345,18 +457,93 @@ impl SceneEvaluator for PhysicsSceneEvaluator {
             if reset {
                 backend.reset()?;
             }
-            let mut state = backend.evaluate(backend_request)?;
-            state.physics_events.reset |= reset;
+            let mut accumulated_events = PhysicsEventBatch {
+                reset,
+                events: Vec::new(),
+            };
+            let mut accumulated_changes = SceneChanges::default();
+            let mut final_state;
+            if has_motion_actions {
+                let start_tick = if reset {
+                    0
+                } else {
+                    self.last_physics_request
+                        .filter(|previous| previous.loop_cycle == backend_request.loop_cycle)
+                        .map_or(0, |previous| previous.fixed_tick)
+                };
+                if start_tick < backend_request.fixed_tick {
+                    for fixed_tick in start_tick + 1..=backend_request.fixed_tick {
+                        let tick_request = PhysicsEvaluationRequest {
+                            scene_time_seconds: (fixed_tick as f64 * settings.timestep as f64)
+                                as f32,
+                            fixed_tick,
+                            loop_cycle: backend_request.loop_cycle,
+                        };
+                        let mut tick_state = backend.evaluate(tick_request)?;
+                        if fixed_tick == start_tick + 1 {
+                            tick_state.physics_events.reset |= reset;
+                        }
+                        let actions = self.reactions.process_events(
+                            &self.source,
+                            tick_request,
+                            &tick_state.physics_events,
+                        )?;
+                        backend.apply_actions(&actions)?;
+                        accumulated_events.reset |= tick_state.physics_events.reset;
+                        accumulated_events
+                            .events
+                            .extend(tick_state.physics_events.events);
+                        accumulated_changes = accumulated_changes.union(tick_state.changes);
+                    }
+                    // Re-reading the same tick returns the post-action transforms without
+                    // integrating or duplicating events.
+                    final_state = backend.evaluate(backend_request)?;
+                    if !final_state.physics_events.events.is_empty() {
+                        bail!("physics backend duplicated events while reading action state");
+                    }
+                } else {
+                    final_state = backend.evaluate(backend_request)?;
+                    final_state.physics_events.reset |= reset;
+                    let actions = self.reactions.process_events(
+                        &self.source,
+                        backend_request,
+                        &final_state.physics_events,
+                    )?;
+                    backend.apply_actions(&actions)?;
+                    accumulated_events.reset |= final_state.physics_events.reset;
+                    accumulated_events
+                        .events
+                        .append(&mut final_state.physics_events.events);
+                    accumulated_changes = accumulated_changes.union(final_state.changes);
+                    if !actions.is_empty() {
+                        final_state = backend.evaluate(backend_request)?;
+                        if !final_state.physics_events.events.is_empty() {
+                            bail!("physics backend duplicated events while reading action state");
+                        }
+                    }
+                }
+                final_state.changes = final_state.changes.union(accumulated_changes);
+                final_state.physics_events = accumulated_events;
+            } else {
+                final_state = backend.evaluate(backend_request)?;
+                final_state.physics_events.reset |= reset;
+                let actions = self.reactions.process_events(
+                    &self.source,
+                    backend_request,
+                    &final_state.physics_events,
+                )?;
+                debug_assert!(actions.is_empty());
+            }
             physics_evaluation = physics_start.elapsed();
             self.last_physics_request = Some(backend_request);
-            if state.physics_events.reset {
+            if final_state.physics_events.reset {
                 tracing::debug!(
                     loop_cycle = backend_request.loop_cycle,
                     fixed_tick = backend_request.fixed_tick,
                     "reset physics event timeline before replay"
                 );
             }
-            for event in &state.physics_events.events {
+            for event in &final_state.physics_events.events {
                 tracing::debug!(
                     loop_cycle = event.loop_cycle,
                     fixed_tick = event.fixed_tick,
@@ -366,22 +553,21 @@ impl SceneEvaluator for PhysicsSceneEvaluator {
                 );
             }
             let geometry_start = Instant::now();
-            for update in state.updates {
+            for update in final_state.updates {
                 match update {
                     PhysicsSceneUpdate::RigidTransform { binding, transform } => {
                         apply_rigid_transform(&self.source, &mut scene, &binding, transform)?;
                     }
                 }
             }
-            let reaction_changes = self.reactions.evaluate(
+            let reaction_changes = self.reactions.apply_materials(
                 &self.source,
                 &mut scene,
-                backend_request,
-                &state.physics_events,
+                backend_request.scene_time_seconds,
             )?;
             geometry_update = geometry_start.elapsed();
-            changes = changes.union(state.changes).union(reaction_changes);
-            physics_events = state.physics_events;
+            changes = changes.union(final_state.changes).union(reaction_changes);
+            physics_events = final_state.physics_events;
         }
         if !self.evaluated_once {
             changes = SceneChanges::all();
@@ -404,18 +590,19 @@ impl SceneEvaluator for PhysicsSceneEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glam::Vec3;
+    use glam::{Quat, Vec3};
     use std::{cell::RefCell, rc::Rc};
     use toaster_scene::{
         Animation, AnimationTarget, AnimationTrack, Background, CameraSettings, ColliderShape,
         CollisionPhase, EventReactionDeclaration, Interpolation, Material,
         MaterialFlashDeclaration, PhysicsEntityId, PhysicsEvent, PhysicsEventKind,
-        PhysicsEventMatcher, PhysicsSettings, PhysicsType, RenderSettings, RigidBodyDeclaration,
-        RigidBodyKind, Sphere, TranslationKeyframe, Triangle, TriangleAttributes,
-        TriggerDeclaration, TriggerPhase,
+        PhysicsEventMatcher, PhysicsSettings, PhysicsType, RenderSettings, ResetBodyDeclaration,
+        RigidBodyDeclaration, RigidBodyKind, SpawnPointDeclaration, Sphere,
+        TeleportBodyDeclaration, TeleportVelocity, TranslationKeyframe, Triangle,
+        TriangleAttributes, TriggerDeclaration, TriggerPhase,
     };
 
-    fn base_scene() -> Scene {
+    pub(crate) fn base_scene() -> Scene {
         let sphere_binding = ObjectBinding::Sphere { index: 0 };
         let floor_binding = ObjectBinding::Triangles {
             start: 0,
@@ -473,6 +660,10 @@ mod tests {
                     restitution: 0.0,
                     initial_velocity: Vec3::ZERO,
                     initial_angular_velocity: Vec3::ZERO,
+                    initial_transform: RigidTransform {
+                        translation: Vec3::new(0.0, 3.0, 0.0),
+                        rotation: glam::Quat::IDENTITY,
+                    },
                     binding: sphere_binding,
                     group: Some("ball".into()),
                 },
@@ -487,11 +678,16 @@ mod tests {
                     restitution: 0.0,
                     initial_velocity: Vec3::ZERO,
                     initial_angular_velocity: Vec3::ZERO,
+                    initial_transform: RigidTransform {
+                        translation: Vec3::new(0.0, -0.1, 0.0),
+                        rotation: glam::Quat::IDENTITY,
+                    },
                     binding: floor_binding,
                     group: Some("floor".into()),
                 },
             ],
             triggers: Vec::new(),
+            spawn_points: Vec::new(),
             event_reactions: Vec::new(),
         }
     }
@@ -506,6 +702,7 @@ mod tests {
     fn kinematic_scene() -> Scene {
         let mut scene = base_scene();
         scene.spheres[0].center = Vec3::new(0.0, 0.5, 0.0);
+        scene.rigid_bodies[0].initial_transform.translation = scene.spheres[0].center;
         scene.triangles[0].group = Some("platform".into());
         scene.rigid_bodies[1].id = PhysicsEntityId::new("platform").unwrap();
         scene.rigid_bodies[1].body = RigidBodyKind::Kinematic;
@@ -536,6 +733,7 @@ mod tests {
         let mut scene = base_scene();
         scene.physics.as_mut().unwrap().gravity = Vec3::ZERO;
         scene.spheres[0].center = Vec3::new(-2.0, 1.0, 0.0);
+        scene.rigid_bodies[0].initial_transform.translation = scene.spheres[0].center;
         scene.spheres[0].radius = 0.25;
         scene.rigid_bodies[0].collider = ColliderShape::Sphere { radius: 0.25 };
         scene.rigid_bodies[0].initial_velocity = Vec3::new(2.0, 0.0, 0.0);
@@ -564,7 +762,42 @@ mod tests {
                 duration_seconds: 0.2,
             }),
             counter: Some("hits".into()),
+            reset: None,
+            teleport: None,
         }];
+        scene
+    }
+
+    fn action_scene(reset: bool, velocity: TeleportVelocity) -> Scene {
+        let mut scene = trigger_scene();
+        scene.physics.as_mut().unwrap().timestep = 0.1;
+        scene.spheres[0].center = Vec3::new(-1.0, 1.0, 0.0);
+        scene.rigid_bodies[0].initial_transform.translation = scene.spheres[0].center;
+        scene.rigid_bodies[0].initial_velocity = Vec3::new(5.0, 0.0, 0.0);
+        scene.spawn_points.push(SpawnPointDeclaration {
+            name: "destination".into(),
+            transform: RigidTransform {
+                translation: Vec3::new(3.0, 2.0, 0.0),
+                rotation: Quat::from_rotation_y(0.5),
+            },
+        });
+        scene.event_reactions.push(EventReactionDeclaration {
+            event_matcher: PhysicsEventMatcher::Trigger {
+                phase: TriggerPhase::Entered,
+                trigger: Some(PhysicsEntityId::new("zone").unwrap()),
+                object: Some(PhysicsEntityId::new("ball").unwrap()),
+            },
+            flash: None,
+            counter: Some(if reset { "resets" } else { "teleports" }.into()),
+            reset: reset.then(|| ResetBodyDeclaration {
+                target: PhysicsEntityId::new("ball").unwrap(),
+            }),
+            teleport: (!reset).then(|| TeleportBodyDeclaration {
+                target: PhysicsEntityId::new("ball").unwrap(),
+                spawn_point_index: 0,
+                velocity,
+            }),
+        });
         scene
     }
 
@@ -705,6 +938,8 @@ mod tests {
                 duration_seconds: 0.2,
             }),
             counter: None,
+            reset: None,
+            teleport: None,
         });
         let mut state = EventReactionState::new(&source).unwrap();
         let mut evaluated = source.clone();
@@ -866,6 +1101,8 @@ mod tests {
                 },
                 flash: None,
                 counter: Some("starts".into()),
+                reset: None,
+                teleport: None,
             },
             EventReactionDeclaration {
                 event_matcher: PhysicsEventMatcher::Collision {
@@ -875,6 +1112,8 @@ mod tests {
                 },
                 flash: None,
                 counter: Some("stays".into()),
+                reset: None,
+                teleport: None,
             },
             EventReactionDeclaration {
                 event_matcher: PhysicsEventMatcher::Trigger {
@@ -884,6 +1123,8 @@ mod tests {
                 },
                 flash: None,
                 counter: Some("entries".into()),
+                reset: None,
+                teleport: None,
             },
         ];
         let mut state = EventReactionState::new(&source).unwrap();
@@ -944,6 +1185,20 @@ mod tests {
     }
 
     #[test]
+    fn disabled_physics_ignores_valid_actions_and_exposes_zero_counters() {
+        let mut source = action_scene(false, TeleportVelocity::Clear);
+        source.physics.as_mut().unwrap().enabled = false;
+        let authored = source.spheres[0].center;
+        let mut evaluator = PhysicsSceneEvaluator::new(source).unwrap();
+        let evaluated = evaluator.evaluate(request(1.0, 0)).unwrap();
+
+        assert_eq!(evaluated.scene.spheres[0].center, authored);
+        assert_eq!(evaluated.counters.loop_counts["teleports"], 0);
+        assert_eq!(evaluated.counters.session_counts["teleports"], 0);
+        assert!(evaluated.physics_events.events.is_empty());
+    }
+
+    #[test]
     fn event_reaction_demo_flashes_and_reports_loop_and_session_counters() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../scenes/014_physics_event_reactions.json");
@@ -1001,6 +1256,34 @@ mod tests {
         assert!(
             second_loop.counters.session_counts["collision_starts"]
                 > first_loop.counters.session_counts["collision_starts"]
+        );
+    }
+
+    #[test]
+    fn reset_teleport_demo_executes_actions_and_replays_loop_counts() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/015_physics_reset_teleport.json");
+        let source = toaster_scene::load_scene(path).unwrap();
+        let authored_counts = (source.spheres.len(), source.triangles.len());
+        let mut evaluator = PhysicsSceneEvaluator::new(source).unwrap();
+        let first = evaluator.evaluate(request(4.9, 0)).unwrap();
+
+        assert_eq!(
+            (first.scene.spheres.len(), first.scene.triangles.len()),
+            authored_counts
+        );
+        assert!(first.counters.loop_counts["fall_resets"] > 0);
+        assert!(first.counters.loop_counts["hazard_resets"] > 0);
+        assert!(first.counters.loop_counts["goal_teleports"] > 0);
+        let second = evaluator.evaluate(request(4.9, 1)).unwrap();
+        assert_eq!(second.counters.loop_counts, first.counters.loop_counts);
+        assert!(
+            second.counters.session_counts["fall_resets"]
+                > first.counters.session_counts["fall_resets"]
+        );
+        assert!(
+            second.counters.session_counts["goal_teleports"]
+                > first.counters.session_counts["goal_teleports"]
         );
     }
 
@@ -1113,6 +1396,7 @@ mod tests {
         let mut scene = base_scene();
         scene.physics.as_mut().unwrap().gravity = Vec3::ZERO;
         scene.spheres[0].center = Vec3::new(20.0, 20.0, 20.0);
+        scene.rigid_bodies[0].initial_transform.translation = scene.spheres[0].center;
         scene.triggers.push(TriggerDeclaration {
             id: PhysicsEntityId::new("floor_zone").unwrap(),
             center: Vec3::new(0.0, -0.1, 0.0),
@@ -1153,6 +1437,145 @@ mod tests {
         assert_eq!(
             evaluated.scene.triangles[0].group,
             source.triangles[0].group
+        );
+    }
+
+    #[test]
+    fn reset_action_restores_authored_pose_velocity_and_clears_flash() {
+        let mut scene = action_scene(true, TeleportVelocity::Clear);
+        scene.materials.push(Material::Diffuse { albedo: Vec3::X });
+        scene.event_reactions[0].flash = Some(MaterialFlashDeclaration {
+            target: PhysicsEntityId::new("ball").unwrap(),
+            material_index: 1,
+            duration_seconds: 1.0,
+        });
+        let authored = scene.rigid_bodies[0].initial_transform;
+        assert_eq!(authored.rotation, Quat::IDENTITY);
+        let authored_scene = scene.clone();
+        let mut evaluator = PhysicsSceneEvaluator::new(scene).unwrap();
+
+        let reset = evaluator.evaluate(request(0.2, 0)).unwrap();
+        assert!(reset.scene.spheres[0]
+            .center
+            .abs_diff_eq(authored.translation, 1.0e-5));
+        assert_eq!(reset.scene.spheres[0].material_index, 0);
+        assert_eq!(reset.counters.loop_counts["resets"], 1);
+        assert!(reset.physics_events.events.iter().any(|event| matches!(
+            event.kind,
+            PhysicsEventKind::Trigger {
+                phase: TriggerPhase::Entered,
+                ..
+            }
+        )));
+        assert!(!reset.physics_events.events.iter().any(|event| matches!(
+            event.kind,
+            PhysicsEventKind::Trigger {
+                phase: TriggerPhase::Exited,
+                ..
+            }
+        )));
+
+        let moved = evaluator.evaluate(request(0.3, 0)).unwrap();
+        assert!(moved.scene.spheres[0].center.x > authored.translation.x);
+        assert_eq!(
+            evaluator.source_scene().spheres[0].center,
+            authored_scene.spheres[0].center
+        );
+    }
+
+    #[test]
+    fn teleport_clear_applies_between_crossed_ticks_and_exits_on_next_tick() {
+        let scene = action_scene(false, TeleportVelocity::Clear);
+        let source = scene.clone();
+        let mut evaluator = PhysicsSceneEvaluator::new(scene).unwrap();
+
+        let teleported = evaluator.evaluate(request(0.4, 0)).unwrap();
+        assert!(teleported.scene.spheres[0]
+            .center
+            .abs_diff_eq(Vec3::new(3.0, 2.0, 0.0), 1.0e-4));
+        assert_eq!(teleported.counters.loop_counts["teleports"], 1);
+        let phases = teleported
+            .physics_events
+            .events
+            .iter()
+            .filter_map(|event| match event.kind {
+                PhysicsEventKind::Trigger { phase, .. } => Some((event.fixed_tick, phase)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(phases[0], (2, TriggerPhase::Entered));
+        assert!(phases.contains(&(3, TriggerPhase::Exited)));
+        assert_eq!(source.spheres[0].center, Vec3::new(-1.0, 1.0, 0.0));
+    }
+
+    #[test]
+    fn teleport_preserve_retains_linear_velocity() {
+        let mut clear =
+            PhysicsSceneEvaluator::new(action_scene(false, TeleportVelocity::Clear)).unwrap();
+        let mut preserve =
+            PhysicsSceneEvaluator::new(action_scene(false, TeleportVelocity::Preserve)).unwrap();
+
+        let cleared = clear.evaluate(request(0.3, 0)).unwrap();
+        let preserved = preserve.evaluate(request(0.3, 0)).unwrap();
+        assert!((cleared.scene.spheres[0].center.x - 3.0).abs() < 1.0e-4);
+        assert!(preserved.scene.spheres[0].center.x > cleared.scene.spheres[0].center.x + 0.1);
+    }
+
+    #[test]
+    fn later_reaction_declaration_wins_for_the_same_action_target() {
+        let mut scene = action_scene(false, TeleportVelocity::Clear);
+        scene.spawn_points.push(SpawnPointDeclaration {
+            name: "last_destination".into(),
+            transform: RigidTransform {
+                translation: Vec3::new(-3.0, 4.0, 1.0),
+                rotation: Quat::IDENTITY,
+            },
+        });
+        let mut later = scene.event_reactions[0].clone();
+        later.teleport.as_mut().unwrap().spawn_point_index = 1;
+        scene.event_reactions.push(later);
+        let mut evaluator = PhysicsSceneEvaluator::new(scene).unwrap();
+
+        let evaluated = evaluator.evaluate(request(0.2, 0)).unwrap();
+        assert!(evaluated.scene.spheres[0]
+            .center
+            .abs_diff_eq(Vec3::new(-3.0, 4.0, 1.0), 1.0e-5));
+        assert_eq!(evaluated.counters.loop_counts["teleports"], 2);
+    }
+
+    #[test]
+    fn action_replay_matches_incremental_and_deduplicates_session_counts() {
+        let scene = action_scene(false, TeleportVelocity::Clear);
+        let mut incremental = PhysicsSceneEvaluator::new(scene.clone()).unwrap();
+        incremental.evaluate(request(0.1, 0)).unwrap();
+        let forward = incremental.evaluate(request(0.3, 0)).unwrap();
+        incremental.evaluate(request(0.4, 0)).unwrap();
+        let replayed = incremental.evaluate(request(0.3, 0)).unwrap();
+        let mut fresh = PhysicsSceneEvaluator::new(scene).unwrap();
+        let expected = fresh.evaluate(request(0.3, 0)).unwrap();
+
+        assert_eq!(
+            forward.scene.spheres[0].center,
+            expected.scene.spheres[0].center
+        );
+        assert_eq!(
+            replayed.scene.spheres[0].center,
+            expected.scene.spheres[0].center
+        );
+        assert_eq!(forward.counters.loop_counts, expected.counters.loop_counts);
+        assert_eq!(
+            replayed.counters.session_counts,
+            forward.counters.session_counts
+        );
+
+        let next_loop = incremental.evaluate(request(0.3, 1)).unwrap();
+        assert_eq!(
+            next_loop.counters.loop_counts,
+            expected.counters.loop_counts
+        );
+        assert!(
+            next_loop.counters.session_counts["teleports"]
+                > forward.counters.session_counts["teleports"]
         );
     }
 
@@ -1422,6 +1845,10 @@ mod tests {
                 },
             })
         }
+
+        fn apply_actions(&mut self, _actions: &[PhysicsBodyAction]) -> Result<()> {
+            Ok(())
+        }
     }
 
     impl PhysicsBackend for FakeBackend {
@@ -1458,6 +1885,10 @@ mod tests {
                     }],
                 },
             })
+        }
+
+        fn apply_actions(&mut self, _actions: &[PhysicsBodyAction]) -> Result<()> {
+            Ok(())
         }
     }
 
