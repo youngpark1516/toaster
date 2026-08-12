@@ -963,6 +963,13 @@ mod tests {
             resolve_progressive_preview(true, None, None, None, None, &action_scene).unwrap_err();
         assert!(error.to_string().contains("physics-enabled"));
 
+        let proxy_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/016_physics_gltf_proxies.json");
+        let proxy_scene = toaster_scene::load_scene(proxy_path).unwrap();
+        let error =
+            resolve_progressive_preview(true, None, None, None, None, &proxy_scene).unwrap_err();
+        assert!(error.to_string().contains("physics-enabled"));
+
         physics_scene.animation.tracks.clear();
         physics_scene.physics.as_mut().unwrap().enabled = false;
         assert!(resolve_progressive_preview(true, None, None, None, None, &physics_scene).is_ok());

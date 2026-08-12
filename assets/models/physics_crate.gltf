@@ -1,0 +1,79 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "Toaster physics proxy fixture"
+  },
+  "scene": 0,
+  "scenes": [
+    { "nodes": [0] }
+  ],
+  "nodes": [
+    { "mesh": 0 }
+  ],
+  "meshes": [
+    {
+      "name": "MultiMaterialCrate",
+      "primitives": [
+        {
+          "attributes": { "POSITION": 0 },
+          "indices": 1,
+          "material": 0,
+          "mode": 4
+        },
+        {
+          "attributes": { "POSITION": 0 },
+          "indices": 2,
+          "material": 1,
+          "mode": 4
+        }
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "name": "CrateWood",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.58, 0.25, 0.07, 1.0]
+      }
+    },
+    {
+      "name": "CrateBands",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.12, 0.32, 0.62, 1.0]
+      }
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 8,
+      "type": "VEC3",
+      "min": [-2.1, 2.4, -3.6],
+      "max": [-0.9, 3.6, -2.4]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5123,
+      "count": 18,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5123,
+      "count": 18,
+      "type": "SCALAR"
+    }
+  ],
+  "bufferViews": [
+    { "buffer": 0, "byteOffset": 0, "byteLength": 96, "target": 34962 },
+    { "buffer": 0, "byteOffset": 96, "byteLength": 36, "target": 34963 },
+    { "buffer": 0, "byteOffset": 132, "byteLength": 36, "target": 34963 }
+  ],
+  "buffers": [
+    {
+      "byteLength": 168,
+      "uri": "data:application/octet-stream;base64,ZmYGwJqZGUBmZmbAZmZmv5qZGUBmZmbAZmZmv2ZmZkBmZmbAZmYGwGZmZkBmZmbAZmYGwJqZGUCamRnAZmZmv5qZGUCamRnAZmZmv2ZmZkCamRnAZmYGwGZmZkCamRnAAAACAAEAAAADAAIABAAFAAYABAAGAAcAAAAEAAcAAAAHAAMAAQACAAYAAQAGAAUAAwAHAAYAAwAGAAIAAAABAAUAAAAFAAQA"
+    }
+  ]
+}

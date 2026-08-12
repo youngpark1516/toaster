@@ -67,6 +67,11 @@ cargo run --release -p toaster-cli -- stream-preview \
   scenes/015_physics_reset_teleport.json \
   --host 127.0.0.1 --port 7878 --fps 12 --loop-duration 5
 
+# glTF visual meshes driven by simple sphere/cuboid collider proxies
+cargo run --release -p toaster-cli -- stream-preview \
+  scenes/016_physics_gltf_proxies.json \
+  --host 127.0.0.1 --port 7878 --fps 12 --loop-duration 5
+
 cargo run --release -p toaster-cli -- \
   --log-level debug --log-format json \
   gpu-render scenes/013_physics_events_triggers.json \

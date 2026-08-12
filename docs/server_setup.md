@@ -100,6 +100,20 @@ Actions are logged at debug level by `toaster_physics`. Reset and teleport
 produce no synthetic same-tick events; any new overlap appears on the following
 fixed tick.
 
+The glTF-proxy demo exercises dynamic box/sphere proxies, a static mesh proxy,
+an animation-driven kinematic mesh, whole-range multi-material flashes, and the
+existing reset/teleport actions:
+
+```sh
+cargo run --release -p toaster-cli -- stream-preview \
+  scenes/016_physics_gltf_proxies.json \
+  --host 127.0.0.1 --port 7878 --fps 12 --loop-duration 5
+```
+
+Its collider proxies are invisible and add no render geometry. Use `/status`
+to observe `crate_impacts`, `goal_teleports`, `orb_resets`, and aggregate
+collision counters.
+
 Each loop resets and deterministically replays the physics world. Physical poses
 repeat while path-tracing noise may differ because render frame indices remain
 monotonic.
@@ -117,6 +131,10 @@ cargo run --release -p toaster-cli -- gpu-render \
 cargo run --release -p toaster-cli -- gpu-render \
   scenes/012_physics_kinematic_platform.json \
   --video out/kinematic.mp4 --fps 24 --duration 5
+
+cargo run --release -p toaster-cli -- gpu-render \
+  scenes/016_physics_gltf_proxies.json \
+  --video out/gltf_proxies.mp4 --fps 24 --duration 5
 
 cargo run --release -p toaster-cli -- \
   --log-level debug --log-format json \

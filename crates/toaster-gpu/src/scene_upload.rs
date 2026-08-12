@@ -865,4 +865,53 @@ mod tests {
             source.spheres.len() + source.triangles.len()
         );
     }
+
+    #[test]
+    fn mesh_proxy_motion_preserves_gpu_counts_and_reuses_non_emissive_lights() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/016_physics_gltf_proxies.json");
+        let source = toaster_scene::load_scene(path).unwrap();
+        let before = scene_to_gpu(&source).unwrap();
+        let body = source
+            .rigid_bodies
+            .iter()
+            .find(|body| body.id.as_str() == "visual_crate")
+            .unwrap();
+        let toaster_scene::ObjectBinding::Triangles { start, .. } = body.binding else {
+            panic!("mesh proxy must bind triangles");
+        };
+        let mut evaluated = source.clone();
+        toaster_scene::apply_rigid_transform(
+            &source,
+            &mut evaluated,
+            &body.binding,
+            toaster_scene::RigidTransform {
+                translation: glam::Vec3::new(1.5, 2.0, -3.0),
+                rotation: glam::Quat::from_rotation_y(0.7),
+            },
+        )
+        .unwrap();
+        let (after, packing) = scene_to_gpu_frame_with_timings(
+            &evaluated,
+            Some((before.lights.as_slice(), before.params.total_light_area)),
+        )
+        .unwrap();
+
+        assert_eq!(after.spheres.len(), before.spheres.len());
+        assert_eq!(after.triangles.len(), before.triangles.len());
+        assert_eq!(
+            after.triangle_attributes.len(),
+            before.triangle_attributes.len()
+        );
+        assert_eq!(after.materials.len(), before.materials.len());
+        assert_eq!(after.bvh_primitives.len(), before.bvh_primitives.len());
+        assert_eq!(after.lights.len(), before.lights.len());
+        assert!(!packing.light_rebuilt);
+        assert_ne!(after.triangles[start].v0, before.triangles[start].v0);
+        assert!(after
+            .bvh_nodes
+            .iter()
+            .zip(&before.bvh_nodes)
+            .any(|(after, before)| after.min != before.min || after.max != before.max));
+    }
 }
