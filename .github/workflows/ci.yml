@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - development
+      - "feature/**"
+  pull_request:
+    branches:
+      - main
+      - development
+  merge_group:
+    types:
+      - checks_requested
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  branch-policy:
+    name: Branch policy
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BASE_BRANCH: ${{ github.base_ref }}
+      HEAD_BRANCH: ${{ github.head_ref }}
+      HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+      THIS_REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Validate pull request route
+        shell: bash
+        run: |
+          case "$BASE_BRANCH" in
+            main)
+              if [[ "$HEAD_BRANCH" != "development" || "$HEAD_REPOSITORY" != "$THIS_REPOSITORY" ]]; then
+                echo "Pull requests into main must come from this repository's development branch."
+                exit 1
+              fi
+              ;;
+            development)
+              if [[ ! "$HEAD_BRANCH" =~ ^feature/.+ ]]; then
+                echo "Pull requests into development must come from a feature/* branch."
+                exit 1
+              fi
+              ;;
+          esac
+
+  rust-validation:
+    name: Rust validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Check workspace
+        run: cargo check --workspace --locked
+
+      - name: Run tests
+        run: cargo test --workspace --locked
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Check documentation
+        run: ./scripts/check_docs.sh
