@@ -1,0 +1,278 @@
+{
+  "camera": {
+    "position": [-2.05, 2.20, 5.95],
+    "look_at": [0.55, 1.78, -3.95],
+    "up": [0.0, 1.0, 0.0],
+    "fov_degrees": 42.0
+  },
+  "render": {
+    "width": 960,
+    "height": 540,
+    "samples": 8,
+    "max_bounces": 8,
+    "background": {
+      "type": "environment",
+      "path": "../assets/environments/sunset_room_2k.hdr",
+      "intensity": 0.38,
+      "rotation_degrees": 92.0
+    }
+  },
+  "physics": {
+    "enabled": true,
+    "type": "rigid_body",
+    "gravity": [0.0, -9.81, 0.0],
+    "timestep": 0.016666666666666666,
+    "substeps": 2
+  },
+  "materials": [
+    { "name": "warm_plaster", "type": "diffuse", "albedo": [0.70, 0.54, 0.40] },
+    { "name": "ceiling_plaster", "type": "diffuse", "albedo": [0.78, 0.66, 0.52] },
+    { "name": "oak_floor", "type": "diffuse", "albedo": [0.42, 0.21, 0.085] },
+    { "name": "bed_linen", "type": "diffuse", "albedo": [0.56, 0.43, 0.30] },
+    { "name": "dark_walnut", "type": "diffuse", "albedo": [0.20, 0.065, 0.022] },
+    { "name": "coffee_brass", "type": "metal", "albedo": [0.62, 0.34, 0.10], "roughness": 0.32 },
+    { "name": "book_blue", "type": "diffuse", "albedo": [0.045, 0.14, 0.30] },
+    { "name": "ornament_blue", "type": "metal", "albedo": [0.08, 0.30, 0.62], "roughness": 0.24 },
+    { "name": "impact_warm", "type": "diffuse", "albedo": [0.95, 0.46, 0.16] },
+    { "name": "lampshade_glow", "type": "emissive", "color": [1.0, 0.65, 0.18], "strength": 0.65 },
+    { "name": "floor_lamp_light", "type": "emissive", "color": [1.0, 0.62, 0.18], "strength": 24.0 },
+    { "name": "table_lamp_light", "type": "emissive", "color": [1.0, 0.70, 0.24], "strength": 16.0 }
+  ],
+  "objects": [
+    {
+      "id": "sunset_room_visual",
+      "type": "mesh",
+      "path": "../assets/models/sunset_room_static.gltf",
+      "group": "sunset_room_visual"
+    },
+    {
+      "id": "lamp_shades",
+      "type": "mesh",
+      "path": "../assets/models/sunset_room_lamp_shades.gltf",
+      "material": "lampshade_glow",
+      "group": "lamp_shades"
+    },
+
+    {
+      "id": "room_floor",
+      "type": "box",
+      "center": [0.0, -0.10, -1.0],
+      "size": [10.0, 0.20, 10.0],
+      "material": "oak_floor",
+      "physics": { "body": "static", "friction": 0.82, "restitution": 0.03 }
+    },
+    {
+      "id": "room_ceiling",
+      "type": "box",
+      "center": [0.0, 4.90, -1.0],
+      "size": [10.0, 0.20, 10.0],
+      "material": "ceiling_plaster",
+      "physics": { "body": "static", "friction": 0.6, "restitution": 0.0 }
+    },
+    {
+      "id": "room_left_wall",
+      "type": "box",
+      "center": [-5.10, 2.40, -1.0],
+      "size": [0.20, 4.80, 10.0],
+      "material": "warm_plaster",
+      "physics": { "body": "static", "friction": 0.65, "restitution": 0.02 }
+    },
+    {
+      "id": "room_right_wall",
+      "type": "box",
+      "center": [5.10, 2.40, -1.0],
+      "size": [0.20, 4.80, 10.0],
+      "material": "warm_plaster",
+      "physics": { "body": "static", "friction": 0.65, "restitution": 0.02 }
+    },
+    {
+      "id": "window_wall_left",
+      "type": "box",
+      "center": [-2.40, 2.40, -6.10],
+      "size": [5.20, 4.80, 0.20],
+      "material": "warm_plaster",
+      "physics": { "body": "static", "friction": 0.65, "restitution": 0.02 }
+    },
+    {
+      "id": "window_wall_right",
+      "type": "box",
+      "center": [4.50, 2.40, -6.10],
+      "size": [1.00, 4.80, 0.20],
+      "material": "warm_plaster",
+      "physics": { "body": "static", "friction": 0.65, "restitution": 0.02 }
+    },
+    {
+      "id": "window_wall_bottom",
+      "type": "box",
+      "center": [2.10, 0.50, -6.10],
+      "size": [3.80, 1.00, 0.20],
+      "material": "warm_plaster",
+      "physics": { "body": "static", "friction": 0.65, "restitution": 0.02 }
+    },
+    {
+      "id": "window_wall_top",
+      "type": "box",
+      "center": [2.10, 4.40, -6.10],
+      "size": [3.80, 0.80, 0.20],
+      "material": "warm_plaster",
+      "physics": { "body": "static", "friction": 0.65, "restitution": 0.02 }
+    },
+
+    {
+      "id": "bed_mattress",
+      "type": "box",
+      "center": [-1.50, 0.78, -3.18],
+      "size": [2.78, 0.36, 3.55],
+      "material": "bed_linen",
+      "physics": { "body": "static", "friction": 0.86, "restitution": 0.02 }
+    },
+    {
+      "id": "foot_bench",
+      "type": "box",
+      "center": [-1.50, 0.59, -0.80],
+      "size": [2.20, 0.24, 0.70],
+      "material": "bed_linen",
+      "physics": { "body": "static", "friction": 0.65, "restitution": 0.03 }
+    },
+    {
+      "id": "side_tabletop",
+      "type": "box",
+      "center": [1.20, 1.30, -3.20],
+      "size": [1.70, 0.14, 1.30],
+      "material": "dark_walnut",
+      "physics": { "body": "static", "friction": 0.58, "restitution": 0.05 }
+    },
+    {
+      "id": "console",
+      "type": "box",
+      "center": [4.55, 0.78, -1.68],
+      "size": [0.70, 1.40, 2.00],
+      "material": "dark_walnut",
+      "physics": { "body": "static", "friction": 0.70, "restitution": 0.03 }
+    },
+
+    {
+      "id": "storage_cube",
+      "type": "box",
+      "center": [-1.50, 1.48, -3.00],
+      "size": [0.48, 0.48, 0.48],
+      "material": "bed_linen",
+      "group": "storage_cube",
+      "physics": {
+        "body": "dynamic",
+        "collider": "cuboid",
+        "mass": 0.65,
+        "friction": 0.82,
+        "restitution": 0.04,
+        "initial_angular_velocity": [0.04, 0.18, 0.03]
+      }
+    },
+    {
+      "id": "faceted_ornament",
+      "type": "sphere",
+      "center": [1.20, 1.66, -3.20],
+      "radius": 0.27,
+      "material": "ornament_blue",
+      "group": "faceted_ornament",
+      "physics": {
+        "body": "dynamic",
+        "collider": "sphere",
+        "mass": 0.35,
+        "friction": 0.35,
+        "restitution": 0.12,
+        "initial_angular_velocity": [0.10, 0.0, 0.22]
+      }
+    },
+    {
+      "id": "sliding_book",
+      "type": "box",
+      "center": [0.15, 1.44, -3.20],
+      "size": [0.70, 0.12, 0.75],
+      "material": "book_blue",
+      "group": "sliding_book_motion",
+      "physics": { "body": "kinematic", "friction": 0.75, "restitution": 0.02 }
+    },
+
+    {
+      "id": "floor_lamp_bulb",
+      "type": "sphere",
+      "center": [-3.72, 2.43, -3.25],
+      "radius": 0.11,
+      "material": "floor_lamp_light"
+    },
+    {
+      "id": "table_lamp_bulb",
+      "type": "sphere",
+      "center": [4.48, 1.69, -1.18],
+      "radius": 0.085,
+      "material": "table_lamp_light"
+    }
+  ],
+  "triggers": [
+    {
+      "id": "orb_settle_zone",
+      "shape": "box",
+      "center": [3.10, 0.62, -2.95],
+      "size": [1.35, 1.20, 1.50]
+    }
+  ],
+  "spawn_points": [],
+  "event_reactions": [
+    {
+      "match": { "type": "collision", "phase": "started", "object": "storage_cube", "other": "bed_mattress" },
+      "flash": { "target": "storage_cube", "material": "impact_warm", "duration": 0.14 },
+      "counter": "crate_landings"
+    },
+    {
+      "match": { "type": "collision", "phase": "started", "object": "sliding_book", "other": "faceted_ornament" },
+      "counter": "orb_nudges"
+    },
+    {
+      "match": { "type": "trigger", "phase": "entered", "trigger": "orb_settle_zone", "object": "faceted_ornament" },
+      "counter": "orb_settled"
+    }
+  ],
+  "animation": {
+    "tracks": [
+      {
+        "type": "translation",
+        "target": { "type": "group", "name": "sliding_book_motion" },
+        "interpolation": "linear",
+        "keyframes": [
+          { "time": 0.0, "value": [0.0, 0.0, 0.0] },
+          { "time": 3.4, "value": [0.0, 0.0, 0.0] },
+          { "time": 4.6, "value": [0.85, 0.0, 0.30] },
+          { "time": 6.8, "value": [0.85, 0.0, 0.30] },
+          { "time": 8.0, "value": [0.0, 0.0, 0.0] },
+          { "time": 10.0, "value": [0.0, 0.0, 0.0] }
+        ]
+      },
+      {
+        "type": "translation",
+        "target": { "type": "camera" },
+        "interpolation": "linear",
+        "keyframes": [
+          { "time": 0.0, "value": [0.0, 0.0, 0.0] },
+          { "time": 2.5, "value": [0.08, 0.03, -0.14] },
+          { "time": 5.25, "value": [0.26, 0.08, -0.38] },
+          { "time": 7.5, "value": [0.08, 0.03, -0.14] },
+          { "time": 10.0, "value": [0.0, 0.0, 0.0] }
+        ]
+      },
+      {
+        "type": "rotation",
+        "target": { "type": "camera" },
+        "axis": [0.0, 1.0, 0.0],
+        "pivot": [0.35, 1.65, -2.85],
+        "interpolation": "linear",
+        "keyframes": [
+          { "time": 0.0, "degrees": 0.0 },
+          { "time": 2.5, "degrees": -1.5 },
+          { "time": 5.25, "degrees": -4.0 },
+          { "time": 7.5, "degrees": -1.5 },
+          { "time": 10.0, "degrees": 0.0 }
+        ]
+      }
+    ]
+  }
+}
