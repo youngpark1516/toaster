@@ -14,7 +14,7 @@ struct RenderParams {
 
     background_kind: u32,
     light_count: u32,
-    total_light_area: f32,
+    total_light_weight: f32,
     _pad1: u32,
 
     environment_width: u32,
@@ -106,7 +106,7 @@ struct TriangleAttributes {
     _pad0: u32,
 };
 
-// Sampleable emissive primitive and cumulative area metadata.
+// Sampleable emissive primitive and emitted-power selection metadata.
 struct Light {
     kind: u32,
     material_index: u32,
@@ -118,8 +118,8 @@ struct Light {
     v2: vec4<f32>,
     center_radius: vec4<f32>,
 
-    // x = area, y = cumulative_area, z/w = unused
-    area_cumulative: vec4<f32>,
+    // x = area, y = weight, z = cumulative_weight, w = unused
+    area_weight_cumulative: vec4<f32>,
 };
 
 struct BvhNode {
@@ -386,15 +386,15 @@ const MAX_DISTANCE: f32 = 10000.0;
 const EPSILON: f32 = 1e-8;
 const PI: f32 = 3.14159265359;
 
-// Selects one emissive primitive in proportion to surface area.
+// Selects one emissive primitive in proportion to approximate emitted power.
 fn sample_light() -> Light {
-    let random_area_sample: f32 = random_f32() * params.total_light_area;
+    let random_weight_sample: f32 = random_f32() * params.total_light_weight;
     var selected: Light = lights[0];
 
     for (var i: u32 = 0; i < params.light_count; i++) {
         let light: Light = lights[i];
         selected = light;
-        if light.area_cumulative.y >= random_area_sample {
+        if light.area_weight_cumulative.z >= random_weight_sample {
             break;
         }
     }
@@ -404,7 +404,7 @@ fn sample_light() -> Light {
 
 // Estimates direct irradiance from one uniformly area-sampled emissive primitive.
 fn direct_light(hit: HitRecord, albedo: vec3<f32>) ->vec3<f32> {
-    if params.light_count == 0 || params.total_light_area <= 0.0 {
+    if params.light_count == 0 || params.total_light_weight <= 0.0 {
         return vec3f(0, 0, 0);
     }
 
@@ -461,9 +461,14 @@ fn direct_light(hit: HitRecord, albedo: vec3<f32>) ->vec3<f32> {
     }
 
     let diffuse_brdf: vec3<f32> = albedo / PI;
+    let light_area: f32 = light_record.area_weight_cumulative.x;
+    let light_weight: f32 = light_record.area_weight_cumulative.y;
+    let selected_light_pdf: f32 = light_weight / params.total_light_weight;
+    let surface_pdf_given_light: f32 = 1.0 / light_area;
+    let light_pdf_area: f32 = selected_light_pdf * surface_pdf_given_light;
 
     return diffuse_brdf * emissive_material.albedo.xyz * emissive_material.params.z
-        * surface_cosine * light_cosine * params.total_light_area / (distance_squared);
+        * surface_cosine * light_cosine / (distance_squared * light_pdf_area);
 }
 
 // Returns the two-technique power-heuristic MIS weight for the first PDF.

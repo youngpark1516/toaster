@@ -17,6 +17,7 @@ previews.
 ## Highlights
 
 - Diffuse, metal, dielectric, emissive, textured, and environment-lit rendering.
+- Power-weighted emissive geometry selection for lower-variance direct lighting.
 - Median-split BVH construction with flat CPU and GPU traversal.
 - Renderer-neutral rigid-body evaluation with CPU-side Rapier simulation for
   static, dynamic, and animation-driven kinematic spheres and boxes.

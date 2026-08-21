@@ -7,5 +7,7 @@ pub mod camera;
 pub mod color;
 /// CPU linear-color image storage and PNG output.
 pub mod image_buffer;
+/// Emitted-power approximations shared by CPU and GPU light samplers.
+pub mod light;
 /// Rays used by the CPU renderer and intersection routines.
 pub mod ray;

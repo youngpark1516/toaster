@@ -28,8 +28,8 @@ pub struct GpuRenderParams {
     pub background_kind: u32,
     /// Active emissive primitive count.
     pub light_count: u32,
-    /// Combined emissive primitive area.
-    pub total_light_area: f32,
+    /// Combined approximate emitted power of sampleable primitives.
+    pub total_light_weight: f32,
     /// Alignment padding.
     pub _pad0: u32,
 
@@ -162,8 +162,8 @@ pub struct GpuLight {
     /// Sphere center in xyz and radius in w.
     pub center_radius: [f32; 4],
 
-    /// Primitive area x, cumulative selection area y, unused z/w.
-    pub area_cumulative: [f32; 4],
+    /// Primitive area x, selection weight y, cumulative weight z, unused w.
+    pub area_weight_cumulative: [f32; 4],
 }
 
 #[repr(C)]

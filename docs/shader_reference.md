@@ -41,6 +41,9 @@ reads. Animation buffers are allocated for their maximum required size.
   rays to limit self-intersection.
 - Diffuse, metal, dielectric, and emissive materials share an iterative bounce
   loop. Direct emissive-primitive and environment sampling use MIS.
+- Emissive primitives carry area, approximate emitted-power weight, and a
+  cumulative-weight CDF. Direct-light PDFs combine power-weighted primitive
+  selection with uniform conditional surface sampling.
 - Environment evaluation, importance sampling, PDF lookup, intensity, and yaw
   rotation use the same latitude-longitude convention.
 - Output is read back and converted once before PNG, MJPEG, video, or benchmark

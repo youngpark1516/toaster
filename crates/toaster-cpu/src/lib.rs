@@ -4,7 +4,7 @@
 pub mod integrator;
 /// Sphere/triangle tests and BVH-accelerated scene intersection.
 pub mod intersect;
-/// Emissive-triangle collection and area sampling.
+/// Emissive-geometry collection and power-weighted sampling.
 pub mod light;
 
 pub use integrator::{ray_color, render};
