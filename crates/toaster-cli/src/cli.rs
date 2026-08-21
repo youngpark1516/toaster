@@ -121,6 +121,10 @@ pub enum Command {
         #[arg(long, requires = "fps", conflicts_with = "duration")]
         frames: Option<u32>,
 
+        /// Optional resolved render-setting overrides.
+        #[command(flatten)]
+        overrides: RenderOverrides,
+
         /// Optional display-setting overrides.
         #[command(flatten)]
         display_overrides: DisplayOverrides,
@@ -355,27 +359,47 @@ mod tests {
     }
 
     #[test]
-    fn exposure_override_is_available_on_gpu_and_stream_commands() {
-        for args in [
-            vec![
-                "toaster",
-                "gpu-render",
-                "scene.json",
-                "--out",
-                "image.png",
-                "--exposure-stops",
-                "-1.5",
-            ],
-            vec![
-                "toaster",
-                "stream-preview",
-                "scene.json",
-                "--exposure-stops",
-                "2",
-            ],
-        ] {
-            assert!(Cli::try_parse_from(args).is_ok());
-        }
+    fn gpu_render_accepts_render_and_display_overrides_together() {
+        let cli = Cli::try_parse_from([
+            "toaster",
+            "gpu-render",
+            "scene.json",
+            "--out",
+            "image.png",
+            "--width",
+            "640",
+            "--height",
+            "360",
+            "--samples",
+            "8",
+            "--max-bounces",
+            "4",
+            "--exposure-stops",
+            "-1.5",
+        ])
+        .unwrap();
+        let Command::GpuRender {
+            overrides,
+            display_overrides,
+            ..
+        } = cli.command
+        else {
+            panic!("expected gpu-render command");
+        };
+        assert_eq!(overrides.width, Some(640));
+        assert_eq!(overrides.height, Some(360));
+        assert_eq!(overrides.samples, Some(8));
+        assert_eq!(overrides.max_bounces, Some(4));
+        assert_eq!(display_overrides.exposure_stops, Some(-1.5));
+
+        assert!(Cli::try_parse_from([
+            "toaster",
+            "stream-preview",
+            "scene.json",
+            "--exposure-stops",
+            "2",
+        ])
+        .is_ok());
         assert!(Cli::try_parse_from([
             "toaster",
             "gpu-render",

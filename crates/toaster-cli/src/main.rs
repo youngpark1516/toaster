@@ -271,10 +271,12 @@ fn run(command: Command) -> anyhow::Result<()> {
             fps,
             duration,
             frames,
+            overrides,
             display_overrides,
         } => {
             let animation = resolve_animation(fps, duration, frames)?;
             let mut scene = toaster_scene::load_scene(&scene_path)?;
+            apply_overrides(&mut scene.render, overrides)?;
             apply_display_overrides(&mut scene.display, display_overrides);
             let mut evaluator = toaster_physics::PhysicsSceneEvaluator::new(scene)?;
             match animation.fps() {
