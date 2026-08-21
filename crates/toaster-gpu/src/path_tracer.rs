@@ -608,33 +608,34 @@ async fn render_gpu_with_sink(
             animation.evaluation_request(frame)
         };
         let time_seconds = request.time_seconds;
-        let (next_scene, changes, evaluation_timings, packing_timings, counters) =
-            if progressive.is_some() {
-                let cached_lights = Some((scene.lights.as_slice(), scene.params.total_light_area));
-                let (next_scene, packing_timings) =
-                    scene_to_gpu_frame_with_timings(&initial_scene, cached_lights)?;
-                (
-                    next_scene,
-                    SceneChanges::default(),
-                    SceneEvaluationTimings::default(),
-                    packing_timings,
-                    initial_counters.clone(),
-                )
-            } else {
-                let evaluated = evaluator.evaluate(request)?;
-                let changes = evaluated.changes;
-                let cached_lights = (!changes.emissive_geometry)
-                    .then_some((scene.lights.as_slice(), scene.params.total_light_area));
-                let (next_scene, packing_timings) =
-                    scene_to_gpu_frame_with_timings(&evaluated.scene, cached_lights)?;
-                (
-                    next_scene,
-                    changes,
-                    evaluated.timings,
-                    packing_timings,
-                    evaluated.counters,
-                )
-            };
+        let (next_scene, changes, evaluation_timings, packing_timings, counters) = if progressive
+            .is_some()
+        {
+            let cached_lights = Some((scene.lights.as_slice(), scene.params.total_light_weight));
+            let (next_scene, packing_timings) =
+                scene_to_gpu_frame_with_timings(&initial_scene, cached_lights)?;
+            (
+                next_scene,
+                SceneChanges::default(),
+                SceneEvaluationTimings::default(),
+                packing_timings,
+                initial_counters.clone(),
+            )
+        } else {
+            let evaluated = evaluator.evaluate(request)?;
+            let changes = evaluated.changes;
+            let cached_lights = (!changes.emissive_geometry)
+                .then_some((scene.lights.as_slice(), scene.params.total_light_weight));
+            let (next_scene, packing_timings) =
+                scene_to_gpu_frame_with_timings(&evaluated.scene, cached_lights)?;
+            (
+                next_scene,
+                changes,
+                evaluated.timings,
+                packing_timings,
+                evaluated.counters,
+            )
+        };
         ensure!(
             (
                 next_scene.spheres.len(),

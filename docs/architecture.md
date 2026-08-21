@@ -120,6 +120,14 @@ geometry moves. Moving emissive geometry also rebuilds and uploads the light
 list; non-emissive motion reuses the prior light list. This prioritizes
 correctness; BVH refitting is a future optimization.
 
+CPU and GPU direct-light samplers select emissive triangles and spheres using
+an approximate emitted-power weight: surface area multiplied by Rec.709
+luminance and emission strength. Surface points remain uniform on the selected
+primitive. The estimator includes both the discrete selection probability and
+the conditional inverse-area density, so changing the selection distribution
+does not bias the result. Environment-map importance sampling remains a
+separate, unchanged distribution.
+
 Triggers are invisible fixed Rapier sensors with neutral sphere or cuboid
 geometry. They detect dynamic and kinematic bodies without changing motion and
 never add render primitives, BVH nodes, or lights. Static bodies and other
