@@ -176,7 +176,10 @@ Toaster uses `wgpu` rather than CUDA to support multiple GPU vendors and native
 backends. This fits cluster experiments and future browser-facing work, at the
 cost of CUDA-specific tooling and vendor libraries.
 
-Every GPU output follows the same boundary: linear floating-point storage,
-readback, then one RGBA8 conversion. PNG, MJPEG, video, and benchmark paths
-therefore agree on pixel conversion. FFmpeg consumes raw RGBA frames over stdin,
+Every renderer output follows the same boundary: linear floating-point storage,
+then one CPU-side display conversion. Exposure scales radiance by
+`2^exposure_stops`; the ACES fitted curve compresses HDR highlights; standard
+linear-to-sRGB encoding produces display bytes. GPU output is converted after
+readback. CPU PNG, GPU PNG, MJPEG, video, and benchmark paths therefore agree on
+pixel conversion. FFmpeg consumes the resulting raw RGBA frames over stdin,
 avoiding temporary PNGs; this is not direct GPU-memory encoding.

@@ -14,3 +14,4 @@ image.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toaster-assets = { path = "../toaster-assets" }
+toaster-core = { path = "../toaster-core" }

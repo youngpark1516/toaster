@@ -86,6 +86,9 @@ pub enum Command {
         #[command(flatten)]
         /// Optional resolved render-setting overrides.
         overrides: RenderOverrides,
+        /// Optional display-setting overrides.
+        #[command(flatten)]
+        display_overrides: DisplayOverrides,
     },
     /// Renders one or more frames with the GPU path tracer.
     GpuRender {
@@ -117,6 +120,10 @@ pub enum Command {
         /// Exact animation frame count; conflicts with --duration.
         #[arg(long, requires = "fps", conflicts_with = "duration")]
         frames: Option<u32>,
+
+        /// Optional display-setting overrides.
+        #[command(flatten)]
+        display_overrides: DisplayOverrides,
     },
     /// Serves a live MJPEG preview rendered by the GPU.
     StreamPreview {
@@ -170,6 +177,10 @@ pub enum Command {
         #[command(flatten)]
         /// Optional resolved render-setting overrides.
         overrides: RenderOverrides,
+
+        /// Optional display-setting overrides.
+        #[command(flatten)]
+        display_overrides: DisplayOverrides,
 
         /// Adjust samples per frame to stay near the target FPS.
         #[arg(long)]
@@ -284,6 +295,25 @@ pub struct RenderOverrides {
     pub max_bounces: Option<u32>,
 }
 
+/// Optional display-setting replacements shared by output-producing commands.
+#[derive(Clone, Copy, Debug, Default, Args)]
+pub struct DisplayOverrides {
+    /// Override scene exposure compensation in stops.
+    #[arg(long, value_parser = parse_finite_f32, allow_hyphen_values = true)]
+    pub exposure_stops: Option<f32>,
+}
+
+/// Parses a finite `f32` display control.
+fn parse_finite_f32(value: &str) -> Result<f32, String> {
+    let parsed = value
+        .parse::<f32>()
+        .map_err(|_| format!("invalid floating-point value: {value}"))?;
+    if !parsed.is_finite() {
+        return Err("value must be finite".to_owned());
+    }
+    Ok(parsed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,16 +334,58 @@ mod tests {
             "600",
             "--max-bounces",
             "12",
+            "--exposure-stops",
+            "1.25",
         ])
         .unwrap();
 
-        let Command::CpuRender { overrides, .. } = cli.command else {
+        let Command::CpuRender {
+            overrides,
+            display_overrides,
+            ..
+        } = cli.command
+        else {
             panic!("expected cpu-render command");
         };
         assert_eq!(overrides.samples, Some(512));
         assert_eq!(overrides.width, Some(800));
         assert_eq!(overrides.height, Some(600));
         assert_eq!(overrides.max_bounces, Some(12));
+        assert_eq!(display_overrides.exposure_stops, Some(1.25));
+    }
+
+    #[test]
+    fn exposure_override_is_available_on_gpu_and_stream_commands() {
+        for args in [
+            vec![
+                "toaster",
+                "gpu-render",
+                "scene.json",
+                "--out",
+                "image.png",
+                "--exposure-stops",
+                "-1.5",
+            ],
+            vec![
+                "toaster",
+                "stream-preview",
+                "scene.json",
+                "--exposure-stops",
+                "2",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+        assert!(Cli::try_parse_from([
+            "toaster",
+            "gpu-render",
+            "scene.json",
+            "--out",
+            "image.png",
+            "--exposure-stops",
+            "NaN",
+        ])
+        .is_err());
     }
 
     #[test]

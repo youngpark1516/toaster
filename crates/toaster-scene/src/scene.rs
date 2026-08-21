@@ -12,6 +12,7 @@ use crate::{
     texture::Texture,
 };
 use glam::Vec3;
+pub use toaster_core::color::{DisplaySettings, ToneMapper};
 
 #[derive(Clone, Debug)]
 /// A fully loaded and validated scene consumed by both renderers.
@@ -20,6 +21,8 @@ pub struct Scene {
     pub camera: CameraSettings,
     /// Image-quality and background settings.
     pub render: RenderSettings,
+    /// Output transform applied after linear HDR rendering completes.
+    pub display: DisplaySettings,
     /// Materials referenced by primitive indices.
     pub materials: Vec<Material>,
     /// Sphere primitives.

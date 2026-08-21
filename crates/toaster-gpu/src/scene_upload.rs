@@ -639,6 +639,7 @@ mod tests {
                 max_bounces: 1,
                 background: Background::Black,
             },
+            display: Default::default(),
             materials: vec![Material::Diffuse { albedo: Vec3::ONE }],
             spheres: vec![toaster_scene::Sphere {
                 center: Vec3::ZERO,
