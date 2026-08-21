@@ -178,7 +178,9 @@ fn scene_to_gpu_inner(
             texture_pixels.extend(
                 texture
                     .rgba8
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|pixel| u32::from_le_bytes([pixel[0], pixel[1], pixel[2], pixel[3]])),
             );
         }
