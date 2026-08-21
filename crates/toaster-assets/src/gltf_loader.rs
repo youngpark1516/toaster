@@ -177,7 +177,7 @@ fn load_node(
                     tex_coord,
                 });
             }
-            for triangle in indices.chunks_exact(3) {
+            for triangle in indices.as_chunks::<3>().0 {
                 output.triangles.push(MeshTriangle {
                     indices: [
                         base_vertex + triangle[0],
@@ -209,12 +209,12 @@ fn image_to_rgba8(image: &gltf::image::Data) -> Result<MeshTexture> {
             }
         }
         Format::R8G8 => {
-            for pixel in image.pixels.chunks_exact(2) {
+            for pixel in image.pixels.as_chunks::<2>().0 {
                 rgba8.extend_from_slice(&[pixel[0], pixel[0], pixel[0], pixel[1]]);
             }
         }
         Format::R8G8B8 => {
-            for pixel in image.pixels.chunks_exact(3) {
+            for pixel in image.pixels.as_chunks::<3>().0 {
                 rgba8.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
             }
         }
