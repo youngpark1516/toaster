@@ -6,6 +6,8 @@
 *.exr
 *.hdr
 !assets/environments/studio_test.hdr
+!assets/environments/qwantani_sunset_puresky_2k_source.hdr
+!assets/environments/sunset_room_2k.hdr
 *.tmp
 *.swp
 *~
