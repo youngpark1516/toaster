@@ -41,6 +41,6 @@ pub use physics::{
     RigidBodyDeclaration, RigidBodyKind, SpawnPointDeclaration, TeleportBodyDeclaration,
     TeleportVelocity, TriggerDeclaration, TriggerPhase,
 };
-pub use scene::{Background, CameraSettings, RenderSettings, Scene};
+pub use scene::{Background, CameraSettings, DisplaySettings, RenderSettings, Scene, ToneMapper};
 pub use texture::Texture;
 pub use transform::{apply_rigid_transform, RigidTransform};

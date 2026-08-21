@@ -11,7 +11,7 @@ use crate::{
         ResetBodyDeclaration, RigidBodyDeclaration, RigidBodyKind, SpawnPointDeclaration,
         TeleportBodyDeclaration, TeleportVelocity, TriggerDeclaration, TriggerPhase,
     },
-    scene::{Background, CameraSettings, RenderSettings, Scene},
+    scene::{Background, CameraSettings, DisplaySettings, RenderSettings, Scene, ToneMapper},
     texture::Texture,
 };
 use anyhow::{bail, Context, Result};
@@ -29,6 +29,9 @@ struct SceneFile {
     camera: CameraFile,
     /// Render input.
     render: RenderFile,
+    /// Optional output transform, defaulting to zero-stop ACES.
+    #[serde(default)]
+    display: DisplayFile,
     /// Named material declarations.
     materials: Vec<MaterialFile>,
     /// Primitive and mesh declarations.
@@ -47,6 +50,27 @@ struct SceneFile {
     /// Optional renderer-neutral event response declarations.
     #[serde(default)]
     event_reactions: Vec<EventReactionFile>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Raw scene-authored display transform.
+struct DisplayFile {
+    /// Exposure compensation in stops.
+    #[serde(default)]
+    exposure_stops: f32,
+    /// Filmic curve used for HDR compression.
+    #[serde(default)]
+    tone_mapper: ToneMapperFile,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+/// Tone mapper names accepted by scene JSON.
+enum ToneMapperFile {
+    /// ACES fitted curve.
+    #[default]
+    Aces,
 }
 
 #[derive(Deserialize)]
@@ -905,6 +929,9 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
 
     let mut animation = file.animation;
     animation.normalize_rotation_axes()?;
+    if !file.display.exposure_stops.is_finite() {
+        bail!("display exposure_stops must be finite");
+    }
     let scene = Scene {
         camera: CameraSettings {
             position: file.camera.position,
@@ -918,6 +945,12 @@ fn build_scene(file: SceneFile, asset_root: &Path) -> Result<Scene> {
             samples: file.render.samples,
             max_bounces: file.render.max_bounces,
             background,
+        },
+        display: DisplaySettings {
+            exposure_stops: file.display.exposure_stops,
+            tone_mapper: match file.display.tone_mapper {
+                ToneMapperFile::Aces => ToneMapper::Aces,
+            },
         },
         materials,
         spheres,
@@ -1607,6 +1640,41 @@ mod tests {
         )
         .unwrap();
         assert_eq!(scene.camera.fov_degrees, 45.0);
+    }
+
+    #[test]
+    fn display_settings_are_optional_and_default_individual_fields() {
+        let base = r#"
+            "camera":{"position":[0,0,1],"look_at":[0,0,0],"fov_degrees":45},
+            "render":{"width":1,"height":1,"samples":1,"max_bounces":1},
+            "materials":[],"objects":[]
+        "#;
+        let defaulted = parse(&format!("{{{base}}}")).unwrap();
+        assert_eq!(defaulted.display, DisplaySettings::default());
+
+        let authored = parse(&format!(
+            "{{{base},\"display\":{{\"exposure_stops\":1.5,\"tone_mapper\":\"aces\"}}}}"
+        ))
+        .unwrap();
+        assert_eq!(authored.display.exposure_stops, 1.5);
+        assert_eq!(authored.display.tone_mapper, ToneMapper::Aces);
+
+        let exposure_only = parse(&format!(
+            "{{{base},\"display\":{{\"exposure_stops\":-2.0}}}}"
+        ))
+        .unwrap();
+        assert_eq!(exposure_only.display.tone_mapper, ToneMapper::Aces);
+    }
+
+    #[test]
+    fn rejects_invalid_display_settings() {
+        let scene = r#"{
+            "camera":{"position":[0,0,1],"look_at":[0,0,0],"fov_degrees":45},
+            "render":{"width":1,"height":1,"samples":1,"max_bounces":1},
+            "display":{"exposure_stops":1e400},
+            "materials":[],"objects":[]
+        }"#;
+        assert!(parse(scene).is_err());
     }
 
     #[test]

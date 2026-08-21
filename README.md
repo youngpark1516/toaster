@@ -28,6 +28,8 @@ previews.
   clear/preserve velocity policy.
 - Static progressive preview, adaptive sampling, MJPEG streaming, and raw-RGBA
   FFmpeg export without intermediate PNGs.
+- Linear-HDR rendering with scene-authored exposure, ACES fitted tone mapping,
+  and standard sRGB output shared by PNG, MP4, and MJPEG paths.
 - Deterministic benchmark reports with per-stage timing and image hashes.
 
 ## Architecture
@@ -38,11 +40,12 @@ flowchart LR
     Scene --> Evaluation[Animation + CPU physics evaluation]
     Evaluation --> CPU[CPU renderer]
     Evaluation --> GPU[wgpu renderer + BVH]
-    CPU --> PNG
-    GPU --> Readback[Readback + RGBA8]
-    Readback --> PNG
-    Readback --> Preview[MJPEG preview]
-    Readback --> FFmpeg[FFmpeg MP4]
+    CPU --> Display[Exposure + ACES + sRGB]
+    GPU --> Readback[Linear HDR readback]
+    Readback --> Display
+    Display --> PNG
+    Display --> Preview[MJPEG preview]
+    Display --> FFmpeg[FFmpeg MP4]
 ```
 
 The [architecture guide](docs/architecture.md) records the buffer-layout,
@@ -57,7 +60,8 @@ cargo run -p toaster-cli -- cpu-render \
   scenes/003_cornell_box.json --out out/cornell.png
 
 cargo run --release -p toaster-cli -- gpu-render \
-  scenes/010_environment_map.json --out out/environment.png
+  scenes/010_environment_map.json --out out/environment.png \
+  --exposure-stops 1.0
 
 cargo run --release -p toaster-cli -- gpu-render \
   scenes/011_physics_rigid_bodies.json --video out/physics.mp4 \
@@ -80,6 +84,11 @@ cargo run --release -p toaster-cli -- \
 
 See the [scene format](docs/scene_format.md) and
 [cluster/preview setup](docs/server_setup.md) for additional workflows.
+
+Toaster path traces and accumulates radiance in linear HDR. At output, it
+applies exposure in stops, an ACES fitted filmic curve, and the standard sRGB
+transfer function. `--exposure-stops <float>` overrides the scene exposure for
+`cpu-render`, `gpu-render` (including MP4), and `stream-preview`.
 
 ## BVH performance
 

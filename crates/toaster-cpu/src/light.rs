@@ -134,6 +134,7 @@ mod tests {
                 max_bounces: 1,
                 background: Background::Black,
             },
+            display: Default::default(),
             materials: vec![
                 Material::Emissive {
                     color: Vec3::new(1.0, 0.5, 0.25),

@@ -528,6 +528,7 @@ async fn render_gpu_with_sink(
     let initial_evaluated = evaluator.evaluate(animation.evaluation_request(0))?;
     let initial_counters = initial_evaluated.counters;
     let initial_scene = initial_evaluated.scene;
+    let display = initial_scene.display;
     let mut scene = scene_to_gpu(&initial_scene)?;
     let initial_counts = (
         scene.spheres.len(),
@@ -740,7 +741,8 @@ async fn render_gpu_with_sink(
         let readback = readback_start.elapsed();
 
         let conversion_start = Instant::now();
-        let image = pixels_to_rgba_image(&pixels, scene.params.width, scene.params.height)?;
+        let image =
+            pixels_to_rgba_image(&pixels, scene.params.width, scene.params.height, display)?;
         let conversion = conversion_start.elapsed();
         let render_time = frame_start.elapsed();
         let mut timings = GpuFrameTimings {
@@ -952,7 +954,13 @@ mod tests {
 
     #[test]
     fn frame_sink_accepts_encoded_completed_frame() {
-        let image = pixels_to_rgba_image(&[[0.25, 0.5, 0.75, 1.0]], 1, 1).unwrap();
+        let image = pixels_to_rgba_image(
+            &[[0.25, 0.5, 0.75, 1.0]],
+            1,
+            1,
+            toaster_core::color::DisplaySettings::default(),
+        )
+        .unwrap();
         let mut sink = RecordingSink::default();
         let counters = NamedCounterSnapshot {
             loop_counts: [("hits".to_owned(), 2)].into(),

@@ -5,7 +5,7 @@ mod cli;
 mod logging;
 
 use clap::Parser;
-use cli::{Cli, Command, RenderOverrides};
+use cli::{Cli, Command, DisplayOverrides, RenderOverrides};
 use std::process::ExitCode;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -240,9 +240,11 @@ fn run(command: Command) -> anyhow::Result<()> {
             scene_path,
             out,
             overrides,
+            display_overrides,
         } => {
             let mut scene = toaster_scene::load_scene(&scene_path)?;
             apply_overrides(&mut scene.render, overrides)?;
+            apply_display_overrides(&mut scene.display, display_overrides);
             tracing::info!(
                 scene = %scene_path.display(),
                 output = %out.display(),
@@ -255,7 +257,7 @@ fn run(command: Command) -> anyhow::Result<()> {
 
             let start = Instant::now();
             let image = toaster_cpu::render(&scene);
-            image.save_png(&out)?;
+            image.save_png_with_display(&out, scene.display)?;
             tracing::info!(
                 output = %out.display(),
                 duration_ms = start.elapsed().as_secs_f64() * 1000.0,
@@ -269,9 +271,11 @@ fn run(command: Command) -> anyhow::Result<()> {
             fps,
             duration,
             frames,
+            display_overrides,
         } => {
             let animation = resolve_animation(fps, duration, frames)?;
-            let scene = toaster_scene::load_scene(&scene_path)?;
+            let mut scene = toaster_scene::load_scene(&scene_path)?;
+            apply_display_overrides(&mut scene.display, display_overrides);
             let mut evaluator = toaster_physics::PhysicsSceneEvaluator::new(scene)?;
             match animation.fps() {
                 Some(fps) => tracing::info!(
@@ -315,6 +319,7 @@ fn run(command: Command) -> anyhow::Result<()> {
             duration,
             loop_duration,
             overrides,
+            display_overrides,
             progressive,
             batch_samples,
             target_samples,
@@ -333,6 +338,7 @@ fn run(command: Command) -> anyhow::Result<()> {
                 &scene,
             )?;
             apply_overrides(&mut scene.render, overrides)?;
+            apply_display_overrides(&mut scene.display, display_overrides);
             let (initial_samples, default_max_samples) = progressive.map_or(
                 (scene.render.samples, scene.render.samples),
                 |progressive| (progressive.batch_samples, progressive.target_samples),
@@ -754,6 +760,16 @@ fn apply_overrides(
     Ok(())
 }
 
+/// Applies command-line display overrides after scene-authored settings.
+fn apply_display_overrides(
+    settings: &mut toaster_scene::DisplaySettings,
+    overrides: DisplayOverrides,
+) {
+    if let Some(exposure_stops) = overrides.exposure_stops {
+        settings.exposure_stops = exposure_stops;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -785,6 +801,21 @@ mod tests {
         assert_eq!(settings.height, 450);
         assert_eq!(settings.samples, 32);
         assert_eq!(settings.max_bounces, 8);
+    }
+
+    #[test]
+    fn cli_exposure_takes_precedence_over_scene_setting() {
+        let mut settings = toaster_scene::DisplaySettings {
+            exposure_stops: -1.5,
+            ..Default::default()
+        };
+        apply_display_overrides(
+            &mut settings,
+            DisplayOverrides {
+                exposure_stops: Some(2.0),
+            },
+        );
+        assert_eq!(settings.exposure_stops, 2.0);
     }
 
     #[test]

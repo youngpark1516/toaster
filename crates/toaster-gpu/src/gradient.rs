@@ -78,7 +78,13 @@ pub async fn render_gradient(out_path: &Path) -> Result<()> {
     let pixels = readback_pixels(&context.device, &buffers.readback)?;
     tracing::debug!(pixels = pixels.len(), "read back gradient pixels");
 
-    save_pixels_to_png(&pixels, params.width, params.height, out_path)?;
+    save_pixels_to_png(
+        &pixels,
+        params.width,
+        params.height,
+        toaster_core::color::DisplaySettings::default(),
+        out_path,
+    )?;
     tracing::info!(path = %out_path.display(), "wrote gradient PNG");
 
     Ok(())

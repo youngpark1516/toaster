@@ -178,7 +178,9 @@ fn scene_to_gpu_inner(
             texture_pixels.extend(
                 texture
                     .rgba8
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|pixel| u32::from_le_bytes([pixel[0], pixel[1], pixel[2], pixel[3]])),
             );
         }
@@ -639,6 +641,7 @@ mod tests {
                 max_bounces: 1,
                 background: Background::Black,
             },
+            display: Default::default(),
             materials: vec![Material::Diffuse { albedo: Vec3::ONE }],
             spheres: vec![toaster_scene::Sphere {
                 center: Vec3::ZERO,

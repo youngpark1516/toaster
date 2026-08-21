@@ -401,6 +401,7 @@ mod tests {
                 max_bounces: 1,
                 background: Background::Sky,
             },
+            display: Default::default(),
             materials: vec![
                 Material::Diffuse { albedo: Vec3::ONE },
                 Material::Diffuse { albedo: Vec3::ONE },
@@ -494,6 +495,7 @@ mod tests {
                 max_bounces: 1,
                 background: Background::Sky,
             },
+            display: Default::default(),
             materials: vec![
                 Material::Diffuse { albedo: Vec3::ONE },
                 Material::Diffuse { albedo: Vec3::ONE },

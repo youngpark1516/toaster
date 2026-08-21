@@ -411,6 +411,7 @@ mod tests {
                 max_bounces: 4,
                 background: Background::Sky,
             },
+            display: Default::default(),
             materials: vec![Material::Diffuse { albedo }],
             spheres: vec![Sphere {
                 center: Vec3::new(0.0, 0.0, -2.0),
@@ -488,6 +489,7 @@ mod tests {
                 max_bounces: 1,
                 background: Background::Black,
             },
+            display: Default::default(),
             materials: vec![
                 Material::Diffuse { albedo: Vec3::ONE },
                 Material::Emissive {

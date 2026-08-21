@@ -1,7 +1,9 @@
 # Shader contracts
 
 `toaster-gpu` compiles a diagnostic gradient shader and the WGSL path tracer.
-Rust performs the shared tonemapping and RGBA8 conversion after readback.
+Rust performs the shared exposure, ACES fitted tone mapping, linear-to-sRGB,
+and RGBA8 conversion after readback. Display settings never alter shader-side
+path tracing or linear-HDR accumulation.
 
 ## Bindings
 
