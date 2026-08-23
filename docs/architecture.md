@@ -120,6 +120,14 @@ geometry moves. Moving emissive geometry also rebuilds and uploads the light
 list; non-emissive motion reuses the prior light list. This prioritizes
 correctness; BVH refitting is a future optimization.
 
+CPU and GPU direct-light samplers select emissive triangles and spheres using
+an approximate emitted-power weight: surface area multiplied by Rec.709
+luminance and emission strength. Surface points remain uniform on the selected
+primitive. The estimator includes both the discrete selection probability and
+the conditional inverse-area density, so changing the selection distribution
+does not bias the result. Environment-map importance sampling remains a
+separate, unchanged distribution.
+
 Triggers are invisible fixed Rapier sensors with neutral sphere or cuboid
 geometry. They detect dynamic and kinematic bodies without changing motion and
 never add render primitives, BVH nodes, or lights. Static bodies and other
@@ -176,7 +184,10 @@ Toaster uses `wgpu` rather than CUDA to support multiple GPU vendors and native
 backends. This fits cluster experiments and future browser-facing work, at the
 cost of CUDA-specific tooling and vendor libraries.
 
-Every GPU output follows the same boundary: linear floating-point storage,
-readback, then one RGBA8 conversion. PNG, MJPEG, video, and benchmark paths
-therefore agree on pixel conversion. FFmpeg consumes raw RGBA frames over stdin,
+Every renderer output follows the same boundary: linear floating-point storage,
+then one CPU-side display conversion. Exposure scales radiance by
+`2^exposure_stops`; the ACES fitted curve compresses HDR highlights; standard
+linear-to-sRGB encoding produces display bytes. GPU output is converted after
+readback. CPU PNG, GPU PNG, MJPEG, video, and benchmark paths therefore agree on
+pixel conversion. FFmpeg consumes the resulting raw RGBA frames over stdin,
 avoiding temporary PNGs; this is not direct GPU-memory encoding.

@@ -1,7 +1,9 @@
 # Shader contracts
 
 `toaster-gpu` compiles a diagnostic gradient shader and the WGSL path tracer.
-Rust performs the shared tonemapping and RGBA8 conversion after readback.
+Rust performs the shared exposure, ACES fitted tone mapping, linear-to-sRGB,
+and RGBA8 conversion after readback. Display settings never alter shader-side
+path tracing or linear-HDR accumulation.
 
 ## Bindings
 
@@ -39,6 +41,9 @@ reads. Animation buffers are allocated for their maximum required size.
   rays to limit self-intersection.
 - Diffuse, metal, dielectric, and emissive materials share an iterative bounce
   loop. Direct emissive-primitive and environment sampling use MIS.
+- Emissive primitives carry area, approximate emitted-power weight, and a
+  cumulative-weight CDF. Direct-light PDFs combine power-weighted primitive
+  selection with uniform conditional surface sampling.
 - Environment evaluation, importance sampling, PDF lookup, intensity, and yaw
   rotation use the same latitude-longitude convention.
 - Output is read back and converted once before PNG, MJPEG, video, or benchmark

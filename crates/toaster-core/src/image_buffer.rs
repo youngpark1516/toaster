@@ -1,6 +1,6 @@
 //! Dense linear-RGB image storage used by the CPU reference renderer.
 
-use crate::color::linear_to_rgb8;
+use crate::color::{linear_hdr_to_rgb8, DisplaySettings};
 use anyhow::{Context, Result};
 use glam::Vec3;
 use image::{Rgb, RgbImage};
@@ -57,6 +57,15 @@ impl ImageBuffer {
     /// Missing parent directories are created. Errors include directory creation
     /// and image-encoding failures.
     pub fn save_png(&self, path: impl AsRef<Path>) -> Result<()> {
+        self.save_png_with_display(path, DisplaySettings::default())
+    }
+
+    /// Converts the image with `display` and saves it as a PNG-compatible image.
+    pub fn save_png_with_display(
+        &self,
+        path: impl AsRef<Path>,
+        display: DisplaySettings,
+    ) -> Result<()> {
         let path = path.as_ref();
         if let Some(parent) = path
             .parent()
@@ -70,7 +79,7 @@ impl ImageBuffer {
         let mut image = RgbImage::new(self.width, self.height);
         for y in 0..self.height {
             for x in 0..self.width {
-                image.put_pixel(x, y, Rgb(linear_to_rgb8(self.pixel(x, y))));
+                image.put_pixel(x, y, Rgb(linear_hdr_to_rgb8(self.pixel(x, y), display)));
             }
         }
         image

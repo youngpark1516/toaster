@@ -5,6 +5,7 @@ use glam::Vec3;
 use std::path::Path;
 use std::time::{Duration, Instant};
 use toaster_bvh::{Aabb, FlatBvh, PrimitiveInfo, PrimitiveRef};
+use toaster_core::light::emissive_light_weight;
 use toaster_scene::{Background, Material, Scene, Triangle};
 
 use crate::gpu_types::{
@@ -178,7 +179,9 @@ fn scene_to_gpu_inner(
             texture_pixels.extend(
                 texture
                     .rgba8
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|pixel| u32::from_le_bytes([pixel[0], pixel[1], pixel[2], pixel[3]])),
             );
         }
@@ -190,14 +193,14 @@ fn scene_to_gpu_inner(
         .copied()
         .map(|material| material_to_gpu(material, &texture_metadata))
         .collect::<Result<Vec<_>>>()?;
-    let (lights, total_light_area, light_rebuilt, light_rebuild) = match cached_lights {
-        Some((lights, total_light_area)) => {
-            (lights.to_vec(), total_light_area, false, Duration::ZERO)
+    let (lights, total_light_weight, light_rebuilt, light_rebuild) = match cached_lights {
+        Some((lights, total_light_weight)) => {
+            (lights.to_vec(), total_light_weight, false, Duration::ZERO)
         }
         None => {
             let light_start = Instant::now();
-            let (lights, total_light_area) = lights_to_gpu(scene)?;
-            (lights, total_light_area, true, light_start.elapsed())
+            let (lights, total_light_weight) = lights_to_gpu(scene)?;
+            (lights, total_light_weight, true, light_start.elapsed())
         }
     };
     let light_count = u32::try_from(lights.len()).context("too many lights for GPU")?;
@@ -257,7 +260,7 @@ fn scene_to_gpu_inner(
                 Background::Environment => 2,
             },
             light_count,
-            total_light_area,
+            total_light_weight,
             _pad0: 0,
             environment_width,
             environment_height,
@@ -405,24 +408,26 @@ fn vec4(value: Vec3) -> [f32; 4] {
     [value.x, value.y, value.z, 0.0]
 }
 
-/// Collects emissive primitives and their cumulative area distribution.
+/// Collects emissive primitives and their cumulative emitted-power distribution.
 fn lights_to_gpu(scene: &Scene) -> Result<(Vec<GpuLight>, f32)> {
-    let mut cumulative_area = 0.0;
+    let mut cumulative_weight = 0.0;
     let mut lights = Vec::new();
 
     for triangle in &scene.triangles {
-        if !is_emissive(scene.materials[triangle.material_index]) {
+        let Material::Emissive { color, strength } = scene.materials[triangle.material_index]
+        else {
             continue;
-        }
+        };
 
         let edge1 = triangle.vertices[1] - triangle.vertices[0];
         let edge2 = triangle.vertices[2] - triangle.vertices[0];
         let area = 0.5 * edge1.cross(edge2).length();
-        if area <= 0.0 {
+        let weight = emissive_light_weight(area, color, strength);
+        if weight <= 0.0 {
             continue;
         }
 
-        cumulative_area += area;
+        cumulative_weight += weight;
         lights.push(GpuLight {
             kind: 0,
             material_index: u32::try_from(triangle.material_index)
@@ -432,21 +437,22 @@ fn lights_to_gpu(scene: &Scene) -> Result<(Vec<GpuLight>, f32)> {
             v1: vec4(triangle.vertices[1]),
             v2: vec4(triangle.vertices[2]),
             center_radius: [0.0; 4],
-            area_cumulative: [area, cumulative_area, 0.0, 0.0],
+            area_weight_cumulative: [area, weight, cumulative_weight, 0.0],
         });
     }
 
     for sphere in &scene.spheres {
-        if !is_emissive(scene.materials[sphere.material_index]) {
+        let Material::Emissive { color, strength } = scene.materials[sphere.material_index] else {
             continue;
-        }
+        };
 
         let area = 4.0 * std::f32::consts::PI * sphere.radius * sphere.radius;
-        if area <= 0.0 {
+        let weight = emissive_light_weight(area, color, strength);
+        if weight <= 0.0 {
             continue;
         }
 
-        cumulative_area += area;
+        cumulative_weight += weight;
         lights.push(GpuLight {
             kind: 1,
             material_index: u32::try_from(sphere.material_index)
@@ -461,21 +467,46 @@ fn lights_to_gpu(scene: &Scene) -> Result<(Vec<GpuLight>, f32)> {
                 sphere.center.z,
                 sphere.radius,
             ],
-            area_cumulative: [area, cumulative_area, 0.0, 0.0],
+            area_weight_cumulative: [area, weight, cumulative_weight, 0.0],
         });
     }
 
-    Ok((lights, cumulative_area))
-}
-
-/// Returns whether a material emits a positive amount of light.
-fn is_emissive(material: Material) -> bool {
-    matches!(material, Material::Emissive { strength, .. } if strength > 0.0)
+    Ok((lights, cumulative_weight))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packs_power_weighted_light_cdf_and_selection_pdfs() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scenes/017_power_weighted_lights.json");
+        let scene = load_scene_gpu(path).unwrap();
+
+        assert_eq!(scene.lights.len(), 2);
+        let dim = scene.lights[0].area_weight_cumulative;
+        let bright = scene.lights[1].area_weight_cumulative;
+        assert!((dim[0] - 8.0).abs() < 1.0e-6);
+        assert!((dim[1] - 0.8).abs() < 1.0e-6);
+        assert!((dim[2] - dim[1]).abs() < 1.0e-6);
+        assert!((bright[0] - 4.0 * std::f32::consts::PI * 0.2 * 0.2).abs() < 1.0e-6);
+        assert!((bright[1] - bright[0] * 20.0).abs() < 1.0e-5);
+        assert!((bright[2] - scene.params.total_light_weight).abs() < 1.0e-5);
+
+        let dim_selection_pdf = dim[1] / scene.params.total_light_weight;
+        let bright_selection_pdf = bright[1] / scene.params.total_light_weight;
+        assert!((dim_selection_pdf + bright_selection_pdf - 1.0).abs() < 1.0e-6);
+        assert!(bright_selection_pdf > 0.9);
+        assert!(bright_selection_pdf > dim_selection_pdf * 10.0);
+        assert!(
+            (dim_selection_pdf / dim[0] - 0.1 / scene.params.total_light_weight).abs() < 1.0e-6
+        );
+        assert!(
+            (bright_selection_pdf / bright[0] - 20.0 / scene.params.total_light_weight).abs()
+                < 1.0e-6
+        );
+    }
 
     #[test]
     fn loads_materials_scene_into_gpu_layout() {
@@ -514,7 +545,7 @@ mod tests {
         assert_eq!(scene.triangles.len(), source_scene.triangles.len());
         assert_eq!(scene.lights.len(), 1);
         assert_eq!(scene.params.light_count, 1);
-        assert!(scene.params.total_light_area > 0.0);
+        assert!(scene.params.total_light_weight > 0.0);
         assert_eq!(scene.lights[0].kind, 1);
         assert_eq!(scene.lights[0].material_index, 4);
     }
@@ -533,7 +564,7 @@ mod tests {
         assert_eq!(scene.triangles[10].material_index, 3);
         assert_eq!(scene.lights.len(), 2);
         assert_eq!(scene.params.light_count, 2);
-        assert!(scene.params.total_light_area > 0.0);
+        assert!(scene.params.total_light_weight > 0.0);
         assert!(scene.lights.iter().all(|light| light.kind == 0));
         assert!(!scene.bvh_nodes.is_empty());
         assert_eq!(scene.params.bvh_node_count, scene.bvh_nodes.len() as u32);
@@ -584,7 +615,7 @@ mod tests {
         assert_eq!(scene.materials[5].kind, 3);
         assert_eq!(scene.lights.len(), 2);
         assert_eq!(scene.params.light_count, 2);
-        assert!(scene.params.total_light_area > 0.0);
+        assert!(scene.params.total_light_weight > 0.0);
         assert!(scene.lights.iter().all(|light| light.kind == 0));
         assert!(!scene.bvh_nodes.is_empty());
         assert_eq!(scene.params.bvh_node_count, scene.bvh_nodes.len() as u32);
@@ -639,6 +670,7 @@ mod tests {
                 max_bounces: 1,
                 background: Background::Black,
             },
+            display: Default::default(),
             materials: vec![Material::Diffuse { albedo: Vec3::ONE }],
             spheres: vec![toaster_scene::Sphere {
                 center: Vec3::ZERO,
@@ -661,7 +693,7 @@ mod tests {
 
         assert!(gpu_scene.lights.is_empty());
         assert_eq!(gpu_scene.params.light_count, 0);
-        assert_eq!(gpu_scene.params.total_light_area, 0.0);
+        assert_eq!(gpu_scene.params.total_light_weight, 0.0);
     }
 
     #[test]
@@ -783,7 +815,7 @@ mod tests {
         .unwrap();
         let (after, packing) = scene_to_gpu_frame_with_timings(
             &evaluated,
-            Some((before.lights.as_slice(), before.params.total_light_area)),
+            Some((before.lights.as_slice(), before.params.total_light_weight)),
         )
         .unwrap();
 
@@ -893,7 +925,7 @@ mod tests {
         .unwrap();
         let (after, packing) = scene_to_gpu_frame_with_timings(
             &evaluated,
-            Some((before.lights.as_slice(), before.params.total_light_area)),
+            Some((before.lights.as_slice(), before.params.total_light_weight)),
         )
         .unwrap();
 

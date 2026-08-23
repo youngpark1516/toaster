@@ -8,6 +8,7 @@ Toaster scenes are UTF-8 JSON files loaded by `toaster_scene::load_scene`. All v
 {
   "camera": { "position": [0, 1, 4], "look_at": [0, 0, 0], "fov_degrees": 45 },
   "render": { "width": 640, "height": 360, "samples": 16, "max_bounces": 8 },
+  "display": { "exposure_stops": 0.0, "tone_mapper": "aces" },
   "physics": { "enabled": true, "type": "rigid_body" },
   "materials": [],
   "objects": [],
@@ -18,7 +19,7 @@ Toaster scenes are UTF-8 JSON files loaded by `toaster_scene::load_scene`. All v
 }
 ```
 
-`camera`, `render`, `materials`, and `objects` are required. `physics` is
+`camera`, `render`, `materials`, and `objects` are required. `display` and `physics` are
 optional; `triggers`, `spawn_points`, `event_reactions`, and animation tracks default to empty arrays. Unknown
 fields are currently ignored by some general scene structures;
 physics-specific structures, trigger/spawn declarations, and event reactions reject
@@ -46,6 +47,30 @@ them.
 | `background` | string/object | `"sky"` | forms below |
 
 `samples_per_pixel` is accepted as a legacy alias for `samples`. CLI render overrides are applied after loading and do not modify the scene file.
+
+## Display settings
+
+The optional top-level display block controls only the final conversion from
+linear HDR radiance to display-referred sRGB:
+
+```json
+"display": {
+  "exposure_stops": 0.0,
+  "tone_mapper": "aces"
+}
+```
+
+| Field | Type | Default | Rules |
+| --- | --- | --- | --- |
+| `exposure_stops` | number | `0.0` | finite; one stop doubles linear radiance |
+| `tone_mapper` | string | `"aces"` | currently `"aces"` |
+
+Scenes without `display` retain the zero-stop ACES defaults. The output pipeline
+applies exposure first, then ACES fitted tone mapping, clamps to `[0,1]`, and
+finally applies the standard linear-to-sRGB transfer function. The same
+conversion feeds CPU and GPU PNGs, MP4 frames, and MJPEG previews.
+`--exposure-stops <float>` overrides the authored exposure for `cpu-render`,
+`gpu-render`, and `stream-preview` without changing the scene file.
 
 ### Backgrounds
 

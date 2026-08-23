@@ -1,0 +1,25 @@
+{
+  "camera": {
+    "position": [0.0, 2.5, 7.0],
+    "look_at": [0.0, 1.5, 0.0],
+    "up": [0.0, 1.0, 0.0],
+    "fov_degrees": 45.0
+  },
+  "render": {
+    "width": 640,
+    "height": 360,
+    "samples": 16,
+    "max_bounces": 6,
+    "background": "black"
+  },
+  "materials": [
+    { "name": "ground", "type": "diffuse", "albedo": [0.65, 0.65, 0.65] },
+    { "name": "large_dim", "type": "emissive", "color": [1.0, 1.0, 1.0], "strength": 0.1 },
+    { "name": "small_bright", "type": "emissive", "color": [1.0, 1.0, 1.0], "strength": 20.0 }
+  ],
+  "objects": [
+    { "type": "sphere", "center": [0.0, -1000.0, 0.0], "radius": 1000.0, "material": "ground" },
+    { "type": "triangle", "vertices": [[-2.0, 4.0, 1.0], [-2.0, 4.0, -3.0], [2.0, 4.0, 1.0]], "material": "large_dim" },
+    { "type": "sphere", "center": [1.0, 2.5, -1.0], "radius": 0.2, "material": "small_bright" }
+  ]
+}
