@@ -5,6 +5,39 @@ portable `wgpu` compute renderer. It supports animated and physically simulated
 JSON scenes, glTF meshes, environment lighting, PNG/MP4 output, and live browser
 previews.
 
+Latest release: v0.1.0 — V1 Showcase
+
+![Sunset Room showcase](docs/images/sunset_room_hero.png)
+
+## Showcase
+
+[Sunset Room](scenes/018_showcase_sunset_room.json) is the v0.1.0 showcase. It
+demonstrates:
+
+- HDR environment lighting and glTF room assets.
+- Animated camera and object motion.
+- Rapier-backed dynamic and kinematic physics.
+- Collision and trigger events, counters, and material reaction flashes.
+- Live MJPEG browser preview and direct MP4 export.
+
+Reproduce the final showcase video:
+
+```sh
+cargo run --release -p toaster-cli -- \
+  --log-level debug --log-format json \
+  gpu-render scenes/018_showcase_sunset_room.json \
+  --video out/final/sunset_room_1280x720_24fps_10s_64spp.mp4 \
+  --fps 24 --duration 10 \
+  --width 1280 --height 720 \
+  --samples 64 --max-bounces 8 \
+  --exposure-stops 0
+```
+
+Rendered the 10-second Sunset Room showcase at 1280×720, 24 fps, 64 samples per
+pixel, and 8 bounces on an NVIDIA RTX 2080 Ti through Vulkan. The 240-frame MP4
+export completed in 21 min 23 sec wall time, with a median GPU frame time of
+about 5.37 sec.
+
 ## Ownership
 
 - **Chanyoung Park:** renderer architecture and integration across scenes, GPU
