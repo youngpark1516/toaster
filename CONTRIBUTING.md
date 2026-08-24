@@ -2,6 +2,27 @@
 
 Create a focused branch and keep changes reviewable. Add tests when behavior is introduced. Do not commit credentials, hostnames, SSH paths, cluster configuration, generated Rustdoc, or large generated renders.
 
+## Branch workflow
+
+Feature branches use the `feature/*` naming convention and target
+`development`. Release pull requests target `main` from `development`.
+
+After a release or hotfix updates `main`, sync that released state back into
+`development` before starting more feature work:
+
+```sh
+git checkout development
+git fetch origin
+git pull --ff-only origin development
+git merge --ff-only origin/main
+git push origin development
+```
+
+If either `--ff-only` command fails, the branches have diverged. Stop and
+inspect the branch histories before attempting a manual merge; do not force the
+sync. If branch protection requires a pull request, use the same-repository
+`main` branch as the source and `development` as the target.
+
 ## Required validation
 
 Run the complete local checks before requesting review:
