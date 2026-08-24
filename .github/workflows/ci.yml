@@ -49,8 +49,9 @@ jobs:
               fi
               ;;
             development)
-              if [[ ! "$HEAD_BRANCH" =~ ^feature/.+ ]]; then
-                echo "Pull requests into development must come from a feature/* branch."
+              if [[ ! "$HEAD_BRANCH" =~ ^feature/.+ ]] && \
+                 [[ "$HEAD_BRANCH" != "main" || "$HEAD_REPOSITORY" != "$THIS_REPOSITORY" ]]; then
+                echo "Pull requests into development must come from a feature/* branch or this repository's main branch."
                 exit 1
               fi
               ;;
